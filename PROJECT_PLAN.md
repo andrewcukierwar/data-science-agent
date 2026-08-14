@@ -1,5 +1,13 @@
 # Data Science AI Agent — Project Plan
 
+## Plan Status
+
+**Revision:** 2026-08-14 — Phase 0 completion / Phase 1 sequencing update.
+
+The core product thesis and five-agent architecture remain unchanged. This revision aligns the roadmap with the implemented repository, adds the missing Phase 0 execution/sandbox work, and makes the Phase 1 runtime/orchestration boundaries explicit.
+
+---
+
 ## 1. Project Summary
 
 ### Working concept
@@ -652,7 +660,8 @@ Define:
 - new customer
 - gross revenue
 - net revenue
-- contribution profit
+- gross contribution (`net revenue - COGS`)
+- **reporting contribution profit (`net revenue - COGS - marketing spend`)**
 - 30-day LTV
 - 60-day LTV
 - 90-day LTV
@@ -660,6 +669,8 @@ Define:
 - refunded-order treatment
 - canceled-order treatment
 - reporting timezone
+
+For the canonical profitability scenario, **reporting contribution profit** is the primary profitability metric. Marketing spend therefore must be included when decomposing the Q1-to-Q2 profitability change. This removes ambiguity between order-level contribution and company-level profitability.
 
 The agent should rely on explicit business definitions rather than infer semantics from column names.
 
@@ -735,13 +746,19 @@ The application should enforce key workflow stages rather than relying only on p
 START RUN
    |
    v
-Create isolated workspace
+Create isolated workspace + ledger
    |
    v
-Lead receives objective
+AnalysisRunner receives objective
    |
    v
-MANDATORY DATA AUDIT
+MANDATORY DATA AUDITOR PREFLIGHT
+   |
+   v
+Persist AuditResult
+   |
+   v
+Lead receives objective + audit
    |
    v
 Lead creates investigation plan
@@ -775,6 +792,10 @@ Remediation  Final report
     |
     +-------> Critic
 ```
+
+### Workflow enforcement
+
+The application-level `AnalysisRunner` must enforce the required lifecycle. Mandatory audit and Critic validation are **not** optional prompt conventions. The runner should own run status, budget enforcement, remediation-loop limits, failure handling, and final completion state.
 
 ### Validation loop
 
@@ -1050,7 +1071,7 @@ Do not hard-code the system around a single specific model.
 Use configuration such as:
 
 ```text
-OPENAI_MODEL=<model-name>
+OPENAI_DEFAULT_MODEL=<model-name>
 ```
 
 This enables future comparisons across models without changing the architecture.
@@ -1069,21 +1090,45 @@ Multi-model comparisons are an evaluation enhancement, not a prerequisite.
 
 Build deterministic infrastructure before agent intelligence.
 
+### Current status
+
+The original six foundation tasks have been implemented: repository scaffolding, typed schemas, workspace lifecycle, DuckDB execution, persistent Analysis Ledger, and deterministic synthetic ecommerce generation.
+
+Phase 0 is **not complete until the remaining execution and integration work below is finished**.
+
 ### Build
 
-- Repository skeleton
-- `pyproject.toml`
-- uv environment
-- Pydantic schemas
-- Workspace manager
-- Analysis Ledger
-- DuckDB execution tool
-- Python execution tool
-- Artifact manager
-- Execution logging
-- Unit tests
-- Docker environment
-- First synthetic ecommerce dataset
+- [x] Repository skeleton
+- [x] `pyproject.toml` / uv environment
+- [x] Pydantic schemas
+- [x] Workspace manager
+- [x] Analysis Ledger
+- [x] DuckDB execution tool
+- [x] First synthetic ecommerce dataset
+- [ ] Artifact manager with provenance
+- [ ] Docker-backed Python execution tool
+- [ ] Sandbox executor / Docker runtime
+- [ ] Bounded SQL result materialization and budget accounting
+- [ ] End-to-end deterministic Phase 0 integration test
+- [ ] CI for pytest + Ruff
+
+### Remaining Phase 0 tasks
+
+#### Task 7 — Artifact management
+
+Implement safe registration of workspace artifacts, enforce approved paths, persist relative references through `AnalysisLedger`, and add checksum/file-size provenance where useful.
+
+#### Task 8 — Docker-backed Python execution
+
+Implement `src/sandbox/executor.py` and `src/tools/python.py` so generated Python runs in a constrained Docker container with read-only inputs/docs, writable working/outputs, no network access, non-root execution, resource/time limits, typed results, and ledger events.
+
+#### Task 9 — Execution hardening and integration acceptance
+
+Cap DuckDB output materialization, expose truncation metadata, increment SQL/Python budget counters, and add a deterministic integration test covering the full foundation path.
+
+#### Task 10 — CI and phase transition
+
+Add GitHub Actions for deterministic checks. Once the Phase 0 acceptance test passes, update repo status documents to Phase 1. Live LLM tests must remain outside normal CI.
 
 ### Done when
 
@@ -1091,14 +1136,16 @@ The code can:
 
 ```text
 create workspace
--> inspect data
+-> inspect/query data
 -> execute SQL
--> execute Python
--> save artifact
--> record events/results in ledger
+-> execute sandboxed Python
+-> save/register artifact
+-> persist provenance + tool events + budgets in ledger
 ```
 
-without any LLM agents involved.
+without any LLM/API calls.
+
+The entire flow must be covered by a deterministic integration test, with pytest and Ruff passing.
 
 ---
 
@@ -1106,26 +1153,36 @@ without any LLM agents involved.
 
 ### Goal
 
-One canonical scenario works extremely well locally.
+One canonical scenario works extremely well locally through the full five-agent system.
 
-### Implementation order
+### Updated implementation order
 
-1. Analyst
-2. Data Auditor
-3. Statistician
-4. Critic
-5. Lead
+1. Canonical profitability scenario + ground truth
+2. Shared Agents SDK runtime and deterministic tool adapters
+3. Analyst Agent
+4. Data Auditor Agent
+5. Statistician Agent
+6. Critic / Validator Agent
+7. Lead Data Scientist Agent
+8. Application-level `AnalysisRunner` orchestration
+9. Canonical end-to-end acceptance run
 
-Do not connect all five agents before each specialist can be tested independently.
+Do not connect the entire workflow before each specialist is independently testable. The shared runtime/tool layer should be implemented once and reused by all agents.
 
-### Canonical scenario
+### Task 1 — Canonical profitability scenario
 
-> **Why did profitability decline in Q2?**
+Create a deterministic scenario-injection layer on top of the clean baseline for:
 
-Engineer the synthetic dataset so the answer requires:
+> **Why did profitability decline in Q2, and what should the company do about it?**
+
+The canonical scenario should have a known primary story: **Meta acquisition efficiency deteriorates primarily because conversion declines, while acquired-customer LTV remains approximately stable**. Include at least one plausible but false alternative hypothesis that the agents should reject.
+
+Scenario ground truth must be represented in typed metadata and used only by tests/evaluators, never exposed to agent prompts.
+
+The scenario should require:
 
 - data-quality validation;
-- contribution-profit decomposition;
+- reporting-contribution-profit decomposition;
 - channel analysis;
 - CAC;
 - conversion;
@@ -1133,16 +1190,70 @@ Engineer the synthetic dataset so the answer requires:
 - statistical validation;
 - a defensible recommendation.
 
+### Task 2 — Agent runtime and tool adapters
+
+Create a typed per-run context containing the workspace, ledger, execution services, artifact manager, and model/run configuration. Expose the deterministic tools through OpenAI Agents SDK function tools while enforcing each agent's permission boundaries and `RunBudget`. Tool outputs sent back to models must be concise and structured.
+
+### Task 3 — Analyst Agent
+
+Implement the Analyst first. It returns `SpecialistResult`, cannot delegate, uses approved SQL/Python/artifact tools, and must attach evidence references to material quantitative findings. Replace the placeholder `skills/business_analytics.md` with concise procedural guidance.
+
+### Task 4 — Data Auditor Agent
+
+Implement typed preflight auditing over schemas, dates, missingness, duplicates, likely keys/relationships, temporal gaps, anomalies, and business definitions. Persist `AuditResult` into the ledger.
+
+### Task 5 — Statistician Agent
+
+Implement the statistical specialist for hypothesis tests, confidence intervals, effect sizes, assumptions, practical significance, and causal-claim restraint. Replace the placeholder statistical skill document with real guidance.
+
+### Task 6 — Critic / Validator Agent
+
+Implement independent validation of candidate findings and recommendations. It should reproduce material evidence as needed, detect definition/denominator/join errors, flag unsupported causal claims, and return typed `ValidationResult` / `ValidationIssue` structures.
+
+### Task 7 — Lead Data Scientist Agent
+
+Implement the manager/orchestrator agent. The Lead owns the objective and final answer, maintains explicit plans/hypotheses/open questions, invokes specialists as tools, and **must not** receive raw SQL or Python tools.
+
+### Task 8 — `AnalysisRunner` orchestration
+
+Enforce the application workflow in ordinary code rather than relying solely on agent prompts:
+
+1. Create/open workspace and ledger.
+2. Mark run `RUNNING`.
+3. Run mandatory Data Auditor preflight.
+4. Persist the audit.
+5. Invoke Lead with objective, context, and audit.
+6. Allow bounded specialist delegation.
+7. Persist plans, hypotheses, findings, evidence, artifacts, and usage.
+8. Run mandatory Critic validation.
+9. Route `REVISE` issues back through Lead for bounded remediation.
+10. Re-run Critic up to `max_critic_loops`.
+11. Persist final report and mark `COMPLETED`, or expose unresolved validation issues after the limit.
+12. Mark unrecoverable runs `FAILED`.
+
+Capture model identity, SDK usage/token metadata, elapsed time, and relevant run configuration in persistent state.
+
+### Task 9 — Canonical end-to-end acceptance
+
+Run the entire system from only raw scenario data, `business_definitions.md`, and the canonical user question. No human steering and no ground-truth leakage into prompts are permitted.
+
 ### Done when
 
-From only raw data, documentation, and the question, the system autonomously generates:
+The canonical run autonomously generates and persists:
 
-- validated report;
-- charts;
-- SQL;
-- Python;
-- Analysis Ledger;
-- execution trace.
+- completed Data Audit;
+- investigation plan;
+- hypothesis history;
+- SQL evidence;
+- Python evidence;
+- relevant charts;
+- findings with evidence provenance;
+- Statistician output where appropriate;
+- Critic validation;
+- final report;
+- complete Analysis Ledger;
+- tool/agent execution trace;
+- model usage, cost/latency metadata where available.
 
 No manual steering should be required during the run.
 
@@ -1549,7 +1660,7 @@ Create `.env.example` containing only placeholder names such as:
 
 ```text
 OPENAI_API_KEY=
-OPENAI_MODEL=
+OPENAI_DEFAULT_MODEL=
 ```
 
 Do not put a real API key in the repository.
@@ -1598,7 +1709,31 @@ Objective:
 
 > Build a deterministic synthetic ecommerce dataset generator according to `PROJECT_PLAN.md`, initially without scenario injection. Include configurable seed and dataset size.
 
-Only after this foundation works should agent implementation begin.
+## Task 7 — Artifact management
+
+Objective:
+
+> Implement safe artifact registration, provenance, path validation, and ledger persistence for analysis outputs.
+
+## Task 8 — Docker-backed Python execution
+
+Objective:
+
+> Implement constrained Docker-backed execution for agent-generated Python, including read-only inputs/docs, writable working/outputs, no network, time/resource limits, typed results, and tool-event persistence.
+
+## Task 9 — Execution hardening + integration test
+
+Objective:
+
+> Bound SQL result materialization and add a deterministic integration test for workspace → SQL → Python → artifact → ledger.
+
+## Task 10 — CI + phase transition
+
+Objective:
+
+> Add deterministic GitHub Actions checks and, only after the Phase 0 acceptance criteria pass, update repository status to Phase 1.
+
+Only after Tasks 7–10 and the Phase 0 integration acceptance test pass should agent implementation begin.
 
 ---
 
@@ -1612,19 +1747,23 @@ It should be:
 
 Acceptance criteria:
 
-- [ ] Repository created.
-- [ ] Python environment reproducible.
-- [ ] Tests run successfully.
-- [ ] Ruff passes.
-- [ ] Workspace lifecycle works.
-- [ ] Synthetic dataset can be generated from a fixed seed.
-- [ ] DuckDB can query the generated Parquet files.
-- [ ] Python execution can analyze approved workspace data.
-- [ ] Artifacts can be saved.
-- [ ] Analysis Ledger persists structured events.
-- [ ] No API keys are committed.
+- [x] Repository created.
+- [x] Python environment and lockfile established.
+- [x] Workspace lifecycle implemented and tested.
+- [x] Synthetic dataset can be generated from a fixed seed.
+- [x] DuckDB can query approved workspace data and persist tool events.
+- [x] Analysis Ledger persists typed structured state.
+- [x] No API keys or `.env` secrets are committed.
+- [ ] Artifact manager is implemented and tested.
+- [ ] Python execution can analyze approved workspace data inside the Docker sandbox.
+- [ ] Docker sandbox prevents input mutation, host filesystem escape, and network access.
+- [ ] DuckDB result materialization is bounded and SQL/Python usage updates budgets.
+- [ ] Deterministic Phase 0 integration test covers SQL → Python → artifact → ledger.
+- [ ] Full pytest suite passes.
+- [ ] Ruff check and format check pass.
+- [ ] GitHub Actions CI passes on `main`.
 
-Once this milestone is complete, start the Analyst agent.
+Once this milestone is complete, mark Phase 0 complete and begin **Phase 1 Task 1: the canonical profitability scenario**, followed by the shared agent runtime/tool-adapter layer. Do not jump directly to the Analyst.
 
 ---
 
@@ -1696,25 +1835,19 @@ A beautiful interface around a weak agent is not the goal.
 
 # 29. Immediate Next Actions
 
-Recommended sequence:
+Current recommended sequence:
 
-1. Create a GitHub repository named `data-science-agent`.
-2. Clone it locally.
-3. Open the repository in VS Code.
-4. Install/configure Codex for your preferred workflow.
-5. Add this `PROJECT_PLAN.md`.
-6. Create a concise `AGENTS.md`.
-7. Initialize the project with `uv`.
-8. Add `.gitignore` and `.env.example`.
-9. Make the first clean commit.
-10. Ask Codex to implement **Phase 0 / Task 1 only**.
-11. Review the diff manually.
-12. Run tests/lint.
-13. Commit.
-14. Move to Task 2.
+1. Complete **Phase 0 Task 7 — Artifact management**.
+2. Complete **Phase 0 Task 8 — Docker-backed Python execution**.
+3. Complete **Phase 0 Task 9 — Execution hardening + integration acceptance test**.
+4. Complete **Phase 0 Task 10 — CI + phase transition**.
+5. Confirm pytest, Ruff, Docker-backed acceptance, and GitHub Actions all pass.
+6. Update `AGENTS.md` current phase to **Phase 1: Multi-Agent MVP**.
+7. Begin **Phase 1 Task 1 — Canonical profitability scenario**.
+8. Implement **Phase 1 Task 2 — Agents SDK runtime/tool adapters**.
+9. Implement specialists independently in this order: Analyst → Data Auditor → Statistician → Critic.
+10. Implement the Lead only after the specialist contracts and tools are stable.
+11. Implement `AnalysisRunner` to enforce mandatory audit/critic workflow and bounded remediation.
+12. Run the canonical end-to-end acceptance scenario with no human steering.
 
-Do not create AWS infrastructure yet.
-Do not build Streamlit yet.
-Do not build all five agents yet.
-
-The immediate objective is a clean, understandable foundation that makes the interesting agent work easy to add later.
+Do not build Streamlit or AWS infrastructure during Phase 1. The priority is proving the autonomous analytical system works and is reproducible.
