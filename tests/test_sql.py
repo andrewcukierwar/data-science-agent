@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from orchestration.ledger import AnalysisLedger
 from tools.sql import DuckDBExecutionService
 from tools.workspace import WorkspaceManager
 
@@ -98,3 +99,17 @@ def test_query_ids_cannot_escape_query_artifact_directory(tmp_path: Path) -> Non
         service.execute("SELECT 1", query_id="../escape")
 
     assert not (workspace.working / "escape.sql").exists()
+
+
+def test_sql_events_persist_through_analysis_ledger(tmp_path: Path) -> None:
+    workspace = _workspace_with_csv(tmp_path)
+    ledger = AnalysisLedger(workspace, objective="Validate SQL event persistence.")
+    service = DuckDBExecutionService(workspace, ledger)
+
+    result = service.execute("SELECT 1 AS value", query_id="Q004")
+    reloaded = AnalysisLedger(ledger.state_path)
+
+    assert result.success is True
+    assert len(reloaded.tool_events) == 1
+    assert reloaded.tool_events[0].id == "tool-Q004"
+    assert reloaded.tool_events[0].artifact_refs == ["working/queries/Q004.sql"]

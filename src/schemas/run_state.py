@@ -2,9 +2,10 @@
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import PurePosixPath
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from schemas.audit import AuditResult
 from schemas.findings import Finding
@@ -33,6 +34,50 @@ class Hypothesis(BaseModel):
     evidence_refs: list[NonEmptyString] = Field(default_factory=list)
     rationale: NonEmptyString | None = None
     parent_id: NonEmptyString | None = None
+
+
+class ArtifactKind(StrEnum):
+    """Kinds of persisted analysis artifacts."""
+
+    QUERY = "query"
+    SCRIPT = "script"
+    CHART = "chart"
+    REPORT = "report"
+    OTHER = "other"
+
+
+class Artifact(BaseModel):
+    """A relative workspace path retained as reproducible run evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: NonEmptyString
+    path: NonEmptyString
+    kind: ArtifactKind = ArtifactKind.OTHER
+    media_type: NonEmptyString | None = None
+    description: NonEmptyString | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator("path")
+    @classmethod
+    def path_must_be_relative(cls, value: str) -> str:
+        normalized = value.replace("\\", "/")
+        path = PurePosixPath(normalized)
+        if (
+            not path.parts
+            or path.is_absolute()
+            or ".." in path.parts
+            or normalized.startswith("./")
+            or (len(normalized) > 1 and normalized[1] == ":")
+        ):
+            raise ValueError("artifact path must be relative to the workspace root")
+        return normalized
+
+    @model_validator(mode="after")
+    def created_at_is_timezone_aware(self) -> "Artifact":
+        if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
+            raise ValueError("created_at must include timezone information")
+        return self
 
 
 class ToolEventStatus(StrEnum):
@@ -113,7 +158,7 @@ class AnalysisRunState(BaseModel):
     rejected_hypotheses: list[NonEmptyString] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
     open_questions: list[NonEmptyString] = Field(default_factory=list)
-    artifacts: list[NonEmptyString] = Field(default_factory=list)
+    artifacts: list[Artifact] = Field(default_factory=list)
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
     validation_results: list[ValidationResult] = Field(default_factory=list)
     tool_events: list[ToolEvent] = Field(default_factory=list)
@@ -130,5 +175,6 @@ class AnalysisRunState(BaseModel):
         return self
 
 
-# The project plan uses AnalysisLedger for this same persisted run document.
+# Backward-compatible name for the typed state document; the persistent store
+# is implemented as orchestration.ledger.AnalysisLedger.
 AnalysisLedger = AnalysisRunState

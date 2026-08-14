@@ -13,6 +13,8 @@ from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.run_state import (
     AnalysisLedger,
     AnalysisRunState,
+    Artifact,
+    ArtifactKind,
     Hypothesis,
     HypothesisStatus,
     RunBudget,
@@ -30,6 +32,8 @@ from schemas.validation import (
 __all__ = [
     "AnalysisLedger",
     "AnalysisRunState",
+    "Artifact",
+    "ArtifactKind",
     "AuditResult",
     "AuditStatus",
     "ConfidenceLevel",
