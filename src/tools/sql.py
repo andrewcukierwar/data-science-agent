@@ -4,7 +4,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import duckdb
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,6 +14,12 @@ from schemas.run_state import ToolEvent, ToolEventStatus
 from tools.workspace import Workspace
 
 _QUERY_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+_DEFAULT_MAX_ROWS = 10_000
+_MAX_ALLOWED_ROWS = 100_000
+_TRUNCATION_GUIDANCE = (
+    "The result was truncated at max_rows. Aggregate or filter the query "
+    "before retrieving more rows."
+)
 
 
 class QueryExecutionResult(BaseModel):
@@ -27,7 +33,17 @@ class QueryExecutionResult(BaseModel):
     columns: list[str] = Field(default_factory=list)
     rows: list[list[Any]] = Field(default_factory=list)
     row_count: int = Field(default=0, ge=0)
+    max_rows: int = Field(default=_DEFAULT_MAX_ROWS, ge=1)
+    truncated: bool = False
+    truncation_message: str | None = None
     error: str | None = None
+
+
+class SQLExecutionLedger(ToolEventLedger, Protocol):
+    """Ledger boundary required by the SQL execution service."""
+
+    def increment_budget(self, **usage: int) -> object:
+        """Increment observable run usage."""
 
 
 class DuckDBExecutionService:
@@ -36,10 +52,13 @@ class DuckDBExecutionService:
     def __init__(
         self,
         workspace: Workspace,
-        ledger: ToolEventLedger | None = None,
+        ledger: SQLExecutionLedger | None = None,
+        *,
+        max_rows: int = _DEFAULT_MAX_ROWS,
     ) -> None:
         self.workspace = workspace
         self.ledger = ledger
+        self.max_rows = self._validate_max_rows(max_rows)
         self._validate_workspace_layout()
 
     def execute(
@@ -62,12 +81,14 @@ class DuckDBExecutionService:
 
         started_at = datetime.now(UTC)
         try:
-            columns, rows = self._execute_sql(sql)
+            columns, rows, truncated = self._execute_sql(sql)
+            truncation_message = _TRUNCATION_GUIDANCE if truncated else None
         except Exception as exc:
             result = QueryExecutionResult(
                 query_id=query_id,
                 query_path=query_path,
                 success=False,
+                max_rows=self.max_rows,
                 error=f"{type(exc).__name__}: {exc}",
             )
             event = self._build_event(
@@ -78,6 +99,19 @@ class DuckDBExecutionService:
                 error=result.error,
             )
         else:
+            event = self._build_event(
+                query_id=query_id,
+                status=ToolEventStatus.SUCCEEDED,
+                started_at=started_at,
+                query_path=query_path,
+                output={
+                    "columns": columns,
+                    "row_count": len(rows),
+                    "max_rows": self.max_rows,
+                    "truncated": truncated,
+                    "truncation_message": truncation_message,
+                },
+            )
             result = QueryExecutionResult(
                 query_id=query_id,
                 query_path=query_path,
@@ -85,19 +119,18 @@ class DuckDBExecutionService:
                 columns=columns,
                 rows=rows,
                 row_count=len(rows),
-            )
-            event = self._build_event(
-                query_id=query_id,
-                status=ToolEventStatus.SUCCEEDED,
-                started_at=started_at,
-                query_path=query_path,
-                output={"columns": columns, "row_count": len(rows)},
+                max_rows=self.max_rows,
+                truncated=truncated,
+                truncation_message=truncation_message,
             )
 
         self._emit_event(event)
         return result
 
-    def _execute_sql(self, sql: str) -> tuple[list[str], list[list[Any]]]:
+    def _execute_sql(
+        self,
+        sql: str,
+    ) -> tuple[list[str], list[list[Any]], bool]:
         connection = duckdb.connect(database=":memory:")
         try:
             inputs = self.workspace.inputs.resolve()
@@ -106,8 +139,9 @@ class DuckDBExecutionService:
             connection.execute("SET enable_external_access = false")
             cursor = connection.execute(sql)
             columns = [description[0] for description in cursor.description or ()]
-            rows = [list(row) for row in cursor.fetchall()]
-            return columns, rows
+            rows = [list(row) for row in cursor.fetchmany(self.max_rows + 1)]
+            truncated = len(rows) > self.max_rows
+            return columns, rows[: self.max_rows], truncated
         finally:
             connection.close()
 
@@ -130,6 +164,7 @@ class DuckDBExecutionService:
             arguments={
                 "query_id": query_id,
                 "query_path": self._artifact_ref(query_path),
+                "max_rows": self.max_rows,
             },
             output=output,
             error=error,
@@ -139,6 +174,7 @@ class DuckDBExecutionService:
     def _emit_event(self, event: ToolEvent) -> None:
         if self.ledger is not None:
             self.ledger.append_tool_event(event)
+            self.ledger.increment_budget(sql_executions=1)
 
     def _validate_workspace_layout(self) -> None:
         root_path = self.workspace.root
@@ -174,3 +210,15 @@ class DuckDBExecutionService:
     @staticmethod
     def _sql_literal(value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
+
+    @staticmethod
+    def _validate_max_rows(max_rows: int) -> int:
+        if (
+            not isinstance(max_rows, int)
+            or isinstance(max_rows, bool)
+            or not 1 <= max_rows <= _MAX_ALLOWED_ROWS
+        ):
+            raise ValueError(
+                f"max_rows must be an integer between 1 and {_MAX_ALLOWED_ROWS}"
+            )
+        return max_rows
