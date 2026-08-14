@@ -188,6 +188,24 @@ class AnalysisLedger(ToolEventLedger):
         self.save()
         return artifact
 
+    def get_artifact(self, artifact_id: str) -> Artifact | None:
+        """Return an artifact by identifier, or ``None`` when absent."""
+
+        return next(
+            (artifact for artifact in self.artifacts if artifact.id == artifact_id),
+            None,
+        )
+
+    def update_artifact(self, artifact: Artifact) -> Artifact:
+        """Replace an existing artifact record and persist its provenance."""
+
+        for index, current in enumerate(self.artifacts):
+            if current.id == artifact.id:
+                self._state.artifacts[index] = artifact
+                self.save()
+                return artifact
+        raise KeyError(f"unknown artifact: {artifact.id}")
+
     def append_tool_event(self, event: ToolEvent) -> None:
         """Append a structured tool event with a unique identifier."""
 

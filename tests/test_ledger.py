@@ -51,6 +51,8 @@ def test_ledger_persists_typed_work_products_and_reloads(tmp_path: Path) -> None
             id="A001",
             path="working/queries/Q001.sql",
             kind=ArtifactKind.QUERY,
+            sha256="0" * 64,
+            size_bytes=0,
             created_at=created_at,
         )
     )
