@@ -1,7 +1,7 @@
 [project]
 name = "data-science-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "A foundation for evidence-backed, multi-agent business analytics."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -24,3 +24,16 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.3",
 ]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
