@@ -5,6 +5,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from schemas.findings import Finding
+
 NonEmptyString = Annotated[str, Field(min_length=1)]
 
 
@@ -34,6 +36,18 @@ class ValidationIssue(BaseModel):
     category: NonEmptyString | None = None
     evidence_refs: list[NonEmptyString] = Field(default_factory=list)
     recommendation: NonEmptyString | None = None
+
+
+class CriticCandidate(BaseModel):
+    """Candidate analysis and evidence supplied to the Critic."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    objective: NonEmptyString
+    findings: list[Finding] = Field(default_factory=list)
+    recommendations: list[NonEmptyString] = Field(default_factory=list)
+    artifacts: list[NonEmptyString] = Field(default_factory=list)
+    evidence_refs: list[NonEmptyString] = Field(default_factory=list)
 
 
 class ValidationResult(BaseModel):

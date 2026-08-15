@@ -23,6 +23,7 @@ from schemas.run_state import (
     ToolEventStatus,
 )
 from schemas.validation import (
+    CriticCandidate,
     ValidationIssue,
     ValidationResult,
     ValidationSeverity,
@@ -37,6 +38,7 @@ __all__ = [
     "AuditResult",
     "AuditStatus",
     "ConfidenceLevel",
+    "CriticCandidate",
     "DataAuditResult",
     "DataQualityIssue",
     "DateRange",

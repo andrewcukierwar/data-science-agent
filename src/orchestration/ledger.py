@@ -122,6 +122,12 @@ class AnalysisLedger(ToolEventLedger):
         return self._state.validation_issues
 
     @property
+    def validation_results(self) -> list[ValidationResult]:
+        """Recorded typed Critic validation results."""
+
+        return self._state.validation_results
+
+    @property
     def budget(self) -> RunBudget:
         """Current run budget and usage counters."""
 
@@ -276,6 +282,7 @@ class AnalysisLedger(ToolEventLedger):
     record_finding = add_finding
     record_artifact = add_artifact
     record_validation_issue = add_validation_issue
+    record_validation_result = add_validation_result
     add_audit = record_audit
     update_audit = record_audit
 
