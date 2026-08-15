@@ -57,12 +57,13 @@ def test_build_command_uses_only_constrained_workspace_mounts(
         in command
     )
     assert (
-        f"type=bind,src={workspace.working.resolve()},dst=/workspace/working,rw"
-        in command
+        f"type=bind,src={workspace.working.resolve()},dst=/workspace/working" in command
     )
     assert (
-        f"type=bind,src={workspace.outputs.resolve()},dst=/workspace/outputs,rw"
-        in command
+        f"type=bind,src={workspace.outputs.resolve()},dst=/workspace/outputs" in command
+    )
+    assert not any(
+        mount.endswith(",rw") for mount in command if mount.startswith("type=bind,")
     )
     assert command[-3:] == [
         "python",
