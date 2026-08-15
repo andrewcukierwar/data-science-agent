@@ -16,8 +16,9 @@ CANONICAL_PROFITABILITY_SCENARIO = ScenarioDefinition(
         InjectedCondition(
             id="meta-q2-conversion-decline",
             description=(
-                "Meta Q2 converted sessions and newly acquired Meta customers "
-                "are reduced by approximately 18%."
+                "Meta Q2 conversion declines by approximately 18%; a deterministic "
+                "subset of would-be Meta-acquired customers is absent, together "
+                "with its associated orders and sessions."
             ),
             affected_tables=("customers", "sessions", "orders"),
             relative_change=-0.18,

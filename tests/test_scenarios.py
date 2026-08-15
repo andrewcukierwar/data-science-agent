@@ -105,10 +105,39 @@ def test_injection_is_reproducible_and_does_not_mutate_clean_baseline() -> None:
     pd.testing.assert_frame_equal(first.orders, second.orders)
     pd.testing.assert_frame_equal(first.sessions, second.sessions)
     pd.testing.assert_frame_equal(first.marketing_spend, second.marketing_spend)
-    pd.testing.assert_frame_equal(first.orders, baseline.orders)
     assert first.business_definitions == second.business_definitions
     pd.testing.assert_frame_equal(baseline.customers, baseline_snapshot)
     assert baseline.business_definitions != first.business_definitions
+
+
+def test_canonical_scenario_removes_customers_and_associated_rows() -> None:
+    baseline = SyntheticEcommerceGenerator(_dataset_config()).generate()
+    scenario = generate_canonical_profitability_scenario(_dataset_config()).dataset
+
+    baseline_q2_meta_ids = _meta_q2_customer_ids(baseline)
+    scenario_q2_meta_ids = _meta_q2_customer_ids(scenario)
+    removed_ids = baseline_q2_meta_ids - scenario_q2_meta_ids
+
+    assert len(removed_ids) / len(baseline_q2_meta_ids) == pytest.approx(0.18, abs=0.01)
+    assert removed_ids.isdisjoint(set(scenario.customers["customer_id"]))
+    assert not removed_ids.intersection(set(scenario.orders["customer_id"]))
+    assert not removed_ids.intersection(set(scenario.sessions["customer_id"]))
+    q2_meta_session_mask = _q2_mask(
+        baseline.sessions["session_date"]
+    ) & baseline.sessions["channel"].eq("Meta")
+    q2_meta_session_customer_ids = set(
+        baseline.sessions.loc[q2_meta_session_mask, "customer_id"]
+    )
+    assert removed_ids <= q2_meta_session_customer_ids
+
+    surviving_ids = baseline_q2_meta_ids - removed_ids
+    baseline_survivors = baseline.customers.set_index("customer_id").loc[
+        sorted(surviving_ids), "acquisition_channel"
+    ]
+    scenario_survivors = scenario.customers.set_index("customer_id").loc[
+        sorted(surviving_ids), "acquisition_channel"
+    ]
+    pd.testing.assert_series_equal(baseline_survivors, scenario_survivors)
 
 
 def test_canonical_ground_truth_is_observable_across_tables() -> None:

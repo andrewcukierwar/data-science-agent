@@ -105,34 +105,84 @@ class CanonicalProfitabilityScenarioInjector:
             q2_customer_mask
             & customers["acquisition_channel"].eq(self.config.meta_channel)
         ].sort_values("customer_id")
+        q2_session_mask = self._date_mask(
+            sessions["session_date"],
+            self.config.q2_start,
+            self.config.q2_end,
+        ) & sessions["channel"].eq(self.config.meta_channel)
+        baseline_q2_session_count = int(q2_session_mask.sum())
+        baseline_q2_converted_count = int(
+            sessions.loc[q2_session_mask, "converted"].astype(bool).sum()
+        )
+        self._validate_scenario_window(
+            q2_meta_customers,
+            q2_session_mask,
+            sessions,
+            self._date_mask(
+                marketing_spend["date"],
+                self.config.q2_start,
+                self.config.q2_end,
+            )
+            & marketing_spend["channel"].eq(self.config.meta_channel),
+        )
+        converted_q2_customer_ids = set(
+            sessions.loc[
+                q2_session_mask & sessions["converted"].astype(bool), "customer_id"
+            ]
+        )
+        q2_session_customer_ids = set(sessions.loc[q2_session_mask, "customer_id"])
+        removal_candidates = pd.concat(
+            [
+                q2_meta_customers.loc[
+                    q2_meta_customers["customer_id"].isin(converted_q2_customer_ids),
+                    "customer_id",
+                ],
+                q2_meta_customers.loc[
+                    q2_meta_customers["customer_id"].isin(q2_session_customer_ids)
+                    & ~q2_meta_customers["customer_id"].isin(converted_q2_customer_ids),
+                    "customer_id",
+                ],
+                q2_meta_customers.loc[
+                    ~q2_meta_customers["customer_id"].isin(q2_session_customer_ids),
+                    "customer_id",
+                ],
+            ],
+            ignore_index=True,
+        )
         removed_customer_ids = self._select_removed_ids(
-            q2_meta_customers["customer_id"],
+            removal_candidates,
             self.config.meta_q2_customer_multiplier,
         )
-        customers.loc[
-            customers["customer_id"].isin(removed_customer_ids),
-            "acquisition_channel",
-        ] = self.config.fallback_channel
+        removed_mask = customers["customer_id"].isin(removed_customer_ids)
+        customers = customers.loc[~removed_mask].reset_index(drop=True)
+        orders = orders.loc[
+            ~orders["customer_id"].isin(removed_customer_ids)
+        ].reset_index(drop=True)
+        sessions = sessions.loc[
+            ~sessions["customer_id"].isin(removed_customer_ids)
+        ].reset_index(drop=True)
 
         q2_session_mask = self._date_mask(
             sessions["session_date"],
             self.config.q2_start,
             self.config.q2_end,
         ) & sessions["channel"].eq(self.config.meta_channel)
-        self._reduce_conversions(sessions, q2_session_mask)
+        target_conversion_rate = (
+            baseline_q2_converted_count / baseline_q2_session_count
+        ) * self.config.meta_q2_conversion_multiplier
+        self._set_conversion_rate(
+            sessions,
+            q2_session_mask,
+            target_rate=target_conversion_rate,
+        )
 
         q2_spend_mask = self._date_mask(
             marketing_spend["date"],
             self.config.q2_start,
             self.config.q2_end,
         ) & marketing_spend["channel"].eq(self.config.meta_channel)
-        self._validate_scenario_window(
-            q2_meta_customers,
-            q2_session_mask,
-            sessions,
-            q2_spend_mask,
-        )
         self._increase_spend(marketing_spend, q2_spend_mask)
+        self._validate_referential_integrity(customers, orders, sessions)
 
         return SyntheticEcommerceDataset(
             customers=customers,
@@ -160,8 +210,6 @@ class CanonicalProfitabilityScenarioInjector:
             customer_channels & session_channels & spend_channels
         ):
             raise ValueError("baseline must contain Meta in all channel tables")
-        if self.config.fallback_channel not in customer_channels:
-            raise ValueError("baseline must contain the configured fallback channel")
 
     @staticmethod
     def _validate_scenario_window(
@@ -204,29 +252,51 @@ class CanonicalProfitabilityScenarioInjector:
         )
         if remove_count <= 0:
             return set()
-        positions = np.floor(
-            np.arange(remove_count) * len(customer_ids) / remove_count
-        ).astype(int)
-        return set(customer_ids.iloc[positions])
+        return set(customer_ids.iloc[:remove_count])
 
-    def _reduce_conversions(
-        self,
+    @staticmethod
+    def _validate_referential_integrity(
+        customers: pd.DataFrame,
+        orders: pd.DataFrame,
+        sessions: pd.DataFrame,
+    ) -> None:
+        customer_ids = set(customers["customer_id"])
+        if not set(orders["customer_id"]).issubset(customer_ids):
+            raise ValueError("scenario orders reference an absent customer")
+        if not set(sessions["customer_id"]).issubset(customer_ids):
+            raise ValueError("scenario sessions reference an absent customer")
+
+    @staticmethod
+    def _set_conversion_rate(
         sessions: pd.DataFrame,
         q2_meta_mask: pd.Series,
+        *,
+        target_rate: float,
     ) -> None:
+        session_indices = sessions.index[q2_meta_mask]
+        target_count = round(len(session_indices) * target_rate)
         converted_indices = sessions.index[
             q2_meta_mask & sessions["converted"].astype(bool)
         ]
-        keep_count = round(
-            len(converted_indices) * self.config.meta_q2_conversion_multiplier
-        )
-        drop_count = len(converted_indices) - keep_count
-        if drop_count <= 0:
-            return
-        positions = np.floor(
-            np.arange(drop_count) * len(converted_indices) / drop_count
-        ).astype(int)
-        sessions.loc[converted_indices[positions], "converted"] = False
+        if target_count < len(converted_indices):
+            drop_count = len(converted_indices) - target_count
+            positions = np.floor(
+                np.arange(drop_count) * len(converted_indices) / drop_count
+            ).astype(int)
+            sessions.loc[converted_indices[positions], "converted"] = False
+        elif target_count > len(converted_indices):
+            unconverted_indices = sessions.index[
+                q2_meta_mask & ~sessions["converted"].astype(bool)
+            ]
+            add_count = min(
+                target_count - len(converted_indices), len(unconverted_indices)
+            )
+            if add_count <= 0:
+                return
+            positions = np.floor(
+                np.arange(add_count) * len(unconverted_indices) / add_count
+            ).astype(int)
+            sessions.loc[unconverted_indices[positions], "converted"] = True
 
     def _increase_spend(
         self,
