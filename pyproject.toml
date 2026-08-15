@@ -26,7 +26,10 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra -m 'not live'"
+markers = [
+    "live: requires OPENAI_API_KEY and an explicitly opted-in live integration run",
+]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
 

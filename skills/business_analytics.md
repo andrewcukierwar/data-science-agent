@@ -1,3 +1,29 @@
 # Business Analytics
 
-Placeholder for the business-analytics skill instructions.
+Use this procedure for evidence-backed KPI investigation:
+
+1. Read `docs/business_definitions.md` before computing a metric. State the
+   numerator, denominator, population, time window, cohort rule, and treatment
+   of refunds or cancellations.
+2. Decompose the target KPI into its major components before explaining change.
+   Compare periods with consistent definitions, denominators, and reporting
+   windows.
+3. Segment the result by relevant channel, customer, product, region, device,
+   and funnel stage. Use acquisition cohorts when timing affects outcomes.
+4. For acquisition, calculate CAC as channel spend divided by newly acquired
+   customers. Calculate LTV over an explicit post-acquisition window and keep
+   the LTV cohort, channel, and denominator aligned with CAC.
+5. Analyze funnels from sessions through conversion and orders. Reconcile
+   funnel counts to customer and order tables before interpreting rates.
+6. Use SQL for bounded aggregation and joins. Use Python for reproducible
+   calculations, statistical checks, and charts. Save useful outputs under
+   approved working/ or outputs/ paths and retain their evidence references.
+7. Treat a period difference as an observation, not a causal explanation.
+   Report association, limitations, and what follow-up test or data would be
+   needed before making a causal claim.
+8. When a result reveals a material unanswered sub-question, add it to
+   `follow_up_questions` instead of silently assuming an explanation.
+
+Every material quantitative `Finding` must include `evidence_refs` pointing to
+an executed query/script path, tool event, or registered artifact. Never invent
+an evidence reference or report a number that cannot be reproduced.
