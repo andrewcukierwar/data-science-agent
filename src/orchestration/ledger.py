@@ -10,6 +10,7 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
+from schemas.audit import AuditResult
 from schemas.findings import Finding
 from schemas.run_state import (
     AnalysisRunState,
@@ -126,6 +127,12 @@ class AnalysisLedger(ToolEventLedger):
 
         return self._state.run_budget
 
+    @property
+    def audit(self) -> AuditResult | None:
+        """The persisted preflight audit, when one has been recorded."""
+
+        return self._state.audit
+
     def save(self) -> None:
         """Atomically persist the current typed state to JSON."""
 
@@ -237,6 +244,13 @@ class AnalysisLedger(ToolEventLedger):
         self.save()
         return result
 
+    def record_audit(self, audit: AuditResult) -> AuditResult:
+        """Persist the current Data Auditor result for this run."""
+
+        self._state.audit = audit
+        self.save()
+        return audit
+
     def update_budget(self, budget: RunBudget) -> RunBudget:
         """Replace the typed budget and persist it."""
 
@@ -262,6 +276,8 @@ class AnalysisLedger(ToolEventLedger):
     record_finding = add_finding
     record_artifact = add_artifact
     record_validation_issue = add_validation_issue
+    add_audit = record_audit
+    update_audit = record_audit
 
     def _load_from_disk(self) -> AnalysisRunState:
         try:
