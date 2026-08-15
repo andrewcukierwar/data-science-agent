@@ -27,3 +27,8 @@ Use this procedure for evidence-backed KPI investigation:
 Every material quantitative `Finding` must include `evidence_refs` pointing to
 an executed query/script path, tool event, or registered artifact. Never invent
 an evidence reference or report a number that cannot be reproduced.
+
+For comparable period changes, use a stable metric identifier and set
+value_unit to relative_change_fraction; report the relative change as a decimal
+fraction (0.10 means +10%, -0.25 means -25%). Keep absolute values in their
+documented business units instead of mixing percentages and decimals.

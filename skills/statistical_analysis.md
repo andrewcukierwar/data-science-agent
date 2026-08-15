@@ -21,3 +21,8 @@ Use this procedure for evidence-backed inferential analysis:
    claim causality without randomization or a defensible causal design.
 8. Use Python for reproducible calculations, save scripts and useful outputs in
    approved workspace directories, and cite executed evidence in findings.
+
+For comparable period changes, use a stable metric identifier and set
+value_unit to relative_change_fraction; report the relative change as a decimal
+fraction (0.10 means +10%, -0.25 means -25%). Keep absolute values in their
+documented business units instead of mixing percentages and decimals.

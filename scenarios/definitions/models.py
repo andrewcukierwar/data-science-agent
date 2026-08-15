@@ -26,6 +26,7 @@ class GroundTruthMetric(BaseModel):
     id: NonEmptyString
     description: NonEmptyString
     comparison: NonEmptyString
+    value_unit: NonEmptyString = "relative_change_fraction"
     expected_relative_change: float
     tolerance: float = Field(ge=0)
 

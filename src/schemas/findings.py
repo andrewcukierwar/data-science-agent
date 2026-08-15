@@ -25,6 +25,7 @@ class Finding(BaseModel):
     statement: NonEmptyString
     metric: NonEmptyString | None = None
     value: float | None = None
+    value_unit: NonEmptyString | None = None
     evidence_refs: list[NonEmptyString] = Field(min_length=1)
     confidence: ConfidenceLevel
     caveats: list[NonEmptyString] = Field(default_factory=list)

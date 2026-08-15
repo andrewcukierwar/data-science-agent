@@ -75,7 +75,9 @@ Required investigation behavior:
    finding and every recommendation must include evidence_refs pointing to an
    executed tool event, artifact, or saved query/script path. Distinguish observed
    associations from unsupported causal claims, preserve caveats, and never invent
-   evidence or scenario ground truth.
+   evidence or scenario ground truth. For comparable period changes, use a stable
+   metric identifier, set value_unit to relative_change_fraction, and report the
+   relative change as a decimal fraction (0.10 means +10%).
 6. Return only a valid LeadResult. The answer is a candidate answer for the later
    validation/orchestration layer; do not implement or simulate the Critic feedback
    loop here.

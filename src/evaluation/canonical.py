@@ -10,10 +10,12 @@ from __future__ import annotations
 import re
 import stat
 from dataclasses import dataclass
+from math import isfinite
 
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunResult
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
+from schemas.findings import Finding
 from schemas.run_state import AgentEventStatus, ArtifactKind, RunStatus
 from schemas.validation import ValidationStatus
 from tools.artifacts import ArtifactManager
@@ -21,6 +23,53 @@ from tools.artifacts import ArtifactManager
 
 class CanonicalAcceptanceError(AssertionError):
     """Raised when a canonical run does not satisfy the MVP contract."""
+
+
+def _normalized_metric_identifier(metric: str) -> str:
+    """Normalize punctuation while preserving the metric's semantic tokens."""
+
+    return re.sub(r"[^a-z0-9]+", "_", metric.lower()).strip("_")
+
+
+def _canonical_numeric_ground_truth_failures(
+    findings: list[Finding],
+) -> list[str]:
+    """Compare canonical structured relative changes against evaluator metadata."""
+
+    failures: list[str] = []
+    indexed_findings: dict[str, list[Finding]] = {}
+    for finding in findings:
+        if finding.metric is None:
+            continue
+        normalized_metric = _normalized_metric_identifier(finding.metric)
+        indexed_findings.setdefault(normalized_metric, []).append(finding)
+
+    for metric in CANONICAL_PROFITABILITY_SCENARIO.ground_truth:
+        metric_id = _normalized_metric_identifier(metric.id)
+        matching = indexed_findings.get(metric_id, [])
+        if not matching:
+            failures.append(f"missing numeric ground-truth finding: {metric.id}")
+            continue
+        if len(matching) > 1:
+            failures.append(f"multiple numeric findings for metric: {metric.id}")
+            continue
+
+        finding = matching[0]
+        if finding.value is None:
+            failures.append(f"numeric finding has no value: {metric.id}")
+            continue
+        if not isfinite(finding.value):
+            failures.append(f"numeric finding is not finite: {metric.id}")
+            continue
+        if finding.value_unit != metric.value_unit:
+            failures.append(f"{metric.id} must use value_unit={metric.value_unit!r}")
+            continue
+        if abs(finding.value - metric.expected_relative_change) > metric.tolerance:
+            failures.append(
+                f"{metric.id}={finding.value} is outside "
+                f"{metric.expected_relative_change} +/- {metric.tolerance}"
+            )
+    return failures
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +199,12 @@ def evaluate_canonical_run(
     ]
     require(bool(chart_artifacts), "no chart artifact was registered")
     require(bool(state.findings), "no findings were persisted")
+    numeric_findings = (
+        result.lead_result.findings
+        if result.lead_result is not None
+        else state.findings
+    )
+    failures.extend(_canonical_numeric_ground_truth_failures(numeric_findings))
     require(
         result.lead_result is not None and bool(result.lead_result.findings),
         "Lead did not return final findings",
@@ -292,6 +347,7 @@ def evaluate_canonical_run(
             "critic",
             "final_report",
             "trace_and_usage",
+            "numeric_ground_truth",
             "canonical_ground_truth",
         ),
         sql_events=len(successful_sql),
