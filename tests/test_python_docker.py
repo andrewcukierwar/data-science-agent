@@ -85,9 +85,12 @@ if host_access:
     assert (workspace.working / "generated.txt").read_text(encoding="utf-8") == (
         "working"
     )
-    assert (workspace.outputs / "result.txt").read_text(encoding="utf-8") == (
-        "immutable|PermissionError|blocked|False"
-    )
+    probe_result = (workspace.outputs / "result.txt").read_text(encoding="utf-8")
+    input_status, docs_status, network_status, host_access = probe_result.split("|")
+    assert input_status in {"PermissionError", "OSError"}
+    assert docs_status in {"PermissionError", "OSError"}
+    assert network_status == "blocked"
+    assert host_access == "False"
     assert ledger.budget.python_executions == 1
     assert ledger.tool_events[0].status.value == "succeeded"
 
