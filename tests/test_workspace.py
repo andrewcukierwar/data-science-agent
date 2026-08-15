@@ -98,6 +98,18 @@ def test_cleanup_is_scoped_and_idempotent(tmp_path: Path) -> None:
     assert base_dir.is_dir()
 
 
+def test_cleanup_removes_workspace_with_read_only_sources(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "input.parquet").write_text("input", encoding="utf-8")
+    manager = WorkspaceManager(tmp_path / "workspaces")
+    workspace = manager.create_workspace("run-read-only", inputs_source=source)
+
+    assert _permissions(workspace.inputs) == 0o555
+    assert manager.cleanup_workspace("run-read-only") is True
+    assert not workspace.root.exists()
+
+
 def test_cleanup_refuses_symlinked_run_directory(tmp_path: Path) -> None:
     base_dir = tmp_path / "workspaces"
     manager = WorkspaceManager(base_dir)

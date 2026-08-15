@@ -7,6 +7,7 @@ from schemas.audit import (
     DataQualityIssue,
     DateRange,
     IssueSeverity,
+    MissingnessObservation,
     TableAudit,
 )
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
@@ -53,6 +54,7 @@ __all__ = [
     "Hypothesis",
     "HypothesisStatus",
     "IssueSeverity",
+    "MissingnessObservation",
     "LeadRecommendation",
     "LeadResult",
     "ModelUsage",

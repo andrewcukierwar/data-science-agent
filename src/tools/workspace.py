@@ -132,6 +132,11 @@ class WorkspaceManager:
             return False
         if root.is_symlink() or not root.is_dir():
             raise ValueError(f"workspace path is not a directory: {root}")
+        # Inputs and docs are intentionally read-only during analysis. Restore
+        # directory write bits only for this explicit, scoped cleanup so that
+        # ``--force`` can remove a completed run without weakening permissions
+        # while the workspace is active.
+        self._make_tree_removable(root)
         shutil.rmtree(root)
         return True
 
@@ -172,3 +177,14 @@ class WorkspaceManager:
                     if directory_mode == _READ_ONLY_MODE
                     else _WRITABLE_MODE
                 )
+
+    @staticmethod
+    def _make_tree_removable(root: Path) -> None:
+        """Make nested directories removable without following symlinks."""
+
+        for path in root.rglob("*"):
+            if path.is_symlink():
+                continue
+            if path.is_dir():
+                path.chmod(_WRITABLE_MODE)
+        root.chmod(_WRITABLE_MODE)

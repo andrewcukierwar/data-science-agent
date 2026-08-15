@@ -5,7 +5,13 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from schemas.audit import AuditResult, AuditStatus, DateRange, TableAudit
+from schemas.audit import (
+    AuditResult,
+    AuditStatus,
+    DateRange,
+    MissingnessObservation,
+    TableAudit,
+)
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.run_state import (
     AgentEvent,
@@ -62,7 +68,7 @@ def test_audit_validates_date_ranges_and_rates() -> None:
         row_count=284_182,
         date_range={"start": "2025-01-01", "end": "2025-06-30"},
         duplicate_rate=0.0017,
-        missingness={"customer_id": 0.0002},
+        missingness=[MissingnessObservation(column="customer_id", rate=0.0002)],
     )
     audit = AuditResult(status=AuditStatus.COMPLETE, tables=[table])
 

@@ -54,6 +54,15 @@ class DataQualityIssue(BaseModel):
     recommendation: NonEmptyString | None = None
 
 
+class MissingnessObservation(BaseModel):
+    """Missing-value rate for one named table column."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    column: NonEmptyString
+    rate: Rate
+
+
 class TableAudit(BaseModel):
     """Observed schema and quality facts for one input table."""
 
@@ -63,7 +72,7 @@ class TableAudit(BaseModel):
     row_count: int = Field(ge=0)
     date_range: DateRange | None = None
     duplicate_rate: Rate = 0.0
-    missingness: dict[str, Rate] = Field(default_factory=dict)
+    missingness: list[MissingnessObservation] = Field(default_factory=list)
     primary_key_candidates: list[NonEmptyString] = Field(default_factory=list)
     relationships: list[NonEmptyString] = Field(default_factory=list)
     warnings: list[NonEmptyString] = Field(default_factory=list)
