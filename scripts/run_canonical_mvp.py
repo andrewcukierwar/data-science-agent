@@ -21,6 +21,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 for import_root in (REPOSITORY_ROOT / "src", REPOSITORY_ROOT):
     if str(import_root) not in sys.path:
@@ -79,6 +81,7 @@ def _arguments() -> argparse.Namespace:
 
 
 def main() -> int:
+    load_dotenv()
     args = _arguments()
     model = os.getenv("OPENAI_DEFAULT_MODEL")
     if not os.getenv("OPENAI_API_KEY"):

@@ -16,6 +16,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 sys.path.insert(1, str(REPOSITORY_ROOT))
@@ -123,6 +125,7 @@ async def _run(args: argparse.Namespace, model: str) -> None:
 
 
 def main() -> None:
+    load_dotenv()
     args = _parser().parse_args()
     if not os.getenv("OPENAI_API_KEY"):
         _parser().error("OPENAI_API_KEY is required for the live smoke test")
