@@ -56,6 +56,17 @@ from agents.runtime import (  # noqa: E402
     ToolResponse,
     allowed_tools_for_role,
 )
+from agents.statistician import (  # noqa: E402
+    STATISTICIAN_INSTRUCTIONS,
+    STATISTICIAN_OBJECTIVE,
+    StatisticianArtifactError,
+    StatisticianEvidenceError,
+    build_statistician_agent,
+    create_statistician_agent,
+    persist_statistician_result,
+    run_statistician,
+    validate_statistician_result,
+)
 from agents.tools import (  # noqa: E402
     DocumentContents,
     WorkspaceFileInfo,
@@ -105,9 +116,18 @@ __all__ = [
     "run_analyst",
     "run_auditor",
     "run_data_auditor",
+    "STATISTICIAN_INSTRUCTIONS",
+    "STATISTICIAN_OBJECTIVE",
+    "StatisticianArtifactError",
+    "StatisticianEvidenceError",
     "run_python",
     "run_sql",
     "save_artifact",
+    "build_statistician_agent",
+    "create_statistician_agent",
+    "persist_statistician_result",
     "tools_for_role",
     "validate_analyst_result",
+    "run_statistician",
+    "validate_statistician_result",
 ]

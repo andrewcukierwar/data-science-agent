@@ -42,9 +42,7 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
             "save_artifact",
         }
     ),
-    AgentRole.STATISTICIAN: frozenset(
-        {"inspect_workspace", "read_document", "run_python", "save_artifact"}
-    ),
+    AgentRole.STATISTICIAN: frozenset({"read_document", "run_python"}),
     AgentRole.CRITIC: frozenset(
         {"inspect_workspace", "read_document", "run_sql", "run_python"}
     ),
