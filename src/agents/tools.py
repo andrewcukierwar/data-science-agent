@@ -445,6 +445,11 @@ def run_sql(
 ) -> ToolOutputText:
     """Execute bounded SQL against approved workspace data.
 
+    Approved Parquet inputs are available as registered relation names derived
+    from their file stems (for example ``customers`` or ``orders``). Prefer
+    those names; arbitrary filesystem paths and unapproved ``read_parquet``
+    access remain blocked by the execution boundary.
+
     Args:
         sql: SQL statement to execute through the approved DuckDB service.
         query_id: Optional reproducible identifier for the saved query file.

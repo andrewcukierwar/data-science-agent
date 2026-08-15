@@ -2,10 +2,12 @@
 
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from orchestration.ledger import AnalysisLedger
-from tools.sql import DuckDBExecutionService
+from tools.sql import DuckDBExecutionService, InputRelationError
 from tools.workspace import WorkspaceManager
 
 
@@ -30,6 +32,20 @@ def _workspace_with_csv(tmp_path: Path):
         "customer_id,revenue\nC001,12.50\nC002,8.00\n",
         encoding="utf-8",
     )
+    return WorkspaceManager(tmp_path / "workspaces").create_workspace(
+        "run-sql", inputs_source=source
+    )
+
+
+def _write_parquet(path: Path, values: list[int]) -> None:
+    pq.write_table(pa.table({"value": values}), path)
+
+
+def _workspace_with_parquet(tmp_path: Path, *names: str):
+    source = tmp_path / "source"
+    source.mkdir()
+    for index, name in enumerate(names):
+        _write_parquet(source / name, [index, index + 1, index + 2])
     return WorkspaceManager(tmp_path / "workspaces").create_workspace(
         "run-sql", inputs_source=source
     )
@@ -68,6 +84,64 @@ def test_execute_queries_approved_input_and_records_success(
         "truncation_message": None,
     }
     assert ledger.sql_executions == 1
+
+
+def test_parquet_inputs_are_registered_as_read_only_views(tmp_path: Path) -> None:
+    workspace = _workspace_with_parquet(
+        tmp_path, "customers.parquet", "marketing_spend.parquet"
+    )
+    service = DuckDBExecutionService(workspace)
+
+    result = service.execute(
+        "SELECT * FROM customers ORDER BY value LIMIT 3", query_id="Q-VIEWS"
+    )
+    catalog = service.execute(
+        "SELECT table_name, table_type "
+        "FROM information_schema.tables "
+        "WHERE table_schema = 'main' "
+        "ORDER BY table_name",
+        query_id="Q-CATALOG",
+    )
+
+    assert result.success is True
+    assert result.columns == ["value"]
+    assert result.rows == [[0], [1], [2]]
+    assert set(service.input_relations) == {"customers", "marketing_spend"}
+    assert catalog.success is True
+    assert catalog.rows == [
+        ["customers", "VIEW"],
+        ["marketing_spend", "VIEW"],
+    ]
+
+
+def test_parquet_relation_stems_are_sanitized_deterministically(tmp_path: Path) -> None:
+    workspace = _workspace_with_parquet(
+        tmp_path, "marketing-spend.data.parquet", "1orders.parquet"
+    )
+    service = DuckDBExecutionService(workspace)
+
+    assert set(service.input_relations) == {"marketing_spend_data", "_1orders"}
+    assert service.execute("SELECT count(*) AS rows FROM _1orders").rows == [[3]]
+
+
+def test_duplicate_sanitized_parquet_relation_names_are_rejected(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_with_parquet(
+        tmp_path, "marketing-spend.parquet", "marketing spend.parquet"
+    )
+
+    with pytest.raises(InputRelationError, match="duplicate approved input relation"):
+        DuckDBExecutionService(workspace)
+
+
+def test_parquet_stems_without_a_safe_relation_name_are_rejected(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_with_parquet(tmp_path, "!!!.parquet")
+
+    with pytest.raises(InputRelationError, match="unsafe Parquet input stem"):
+        DuckDBExecutionService(workspace)
 
 
 def test_execute_captures_duckdb_errors_and_records_failure(tmp_path: Path) -> None:
@@ -134,6 +208,23 @@ def test_execute_rejects_external_files(tmp_path: Path) -> None:
 
     result = service.execute(
         f"SELECT * FROM read_csv_auto('{outside}')", query_id="Q003"
+    )
+
+    assert result.success is False
+    assert result.error is not None
+    assert "Permission" in result.error
+
+
+def test_execute_rejects_external_parquet_even_when_approved_views_exist(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_with_parquet(tmp_path, "customers.parquet")
+    outside = tmp_path / "outside.parquet"
+    _write_parquet(outside, [99])
+    service = DuckDBExecutionService(workspace)
+
+    result = service.execute(
+        f"SELECT * FROM read_parquet('{outside}')", query_id="Q-OUTSIDE-PARQUET"
     )
 
     assert result.success is False

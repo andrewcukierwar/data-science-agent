@@ -14,12 +14,17 @@ from schemas.run_state import ToolEvent, ToolEventStatus
 from tools.workspace import Workspace
 
 _QUERY_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+_RELATION_NAME_PATTERN = re.compile(r"[a-z_][a-z0-9_]*\Z")
 _DEFAULT_MAX_ROWS = 10_000
 _MAX_ALLOWED_ROWS = 100_000
 _TRUNCATION_GUIDANCE = (
     "The result was truncated at max_rows. Aggregate or filter the query "
     "before retrieving more rows."
 )
+
+
+class InputRelationError(ValueError):
+    """Raised when an input Parquet file cannot safely become a relation."""
 
 
 class QueryExecutionResult(BaseModel):
@@ -60,6 +65,13 @@ class DuckDBExecutionService:
         self.ledger = ledger
         self.max_rows = self._validate_max_rows(max_rows)
         self._validate_workspace_layout()
+        self._input_relations = self._discover_input_relations()
+
+    @property
+    def input_relations(self) -> dict[str, Path]:
+        """Return a copy of the approved relation-to-file mapping."""
+
+        return dict(self._input_relations)
 
     def execute(
         self,
@@ -136,6 +148,7 @@ class DuckDBExecutionService:
             inputs = self.workspace.inputs.resolve()
             allowed_directories = self._sql_literal(str(inputs))
             connection.execute(f"SET allowed_directories = [{allowed_directories}]")
+            self._register_input_views(connection)
             connection.execute("SET enable_external_access = false")
             cursor = connection.execute(sql)
             columns = [description[0] for description in cursor.description or ()]
@@ -195,6 +208,70 @@ class DuckDBExecutionService:
             or not queries.is_dir()
         ):
             raise ValueError("workspace does not have a safe inputs and queries layout")
+
+    def _discover_input_relations(self) -> dict[str, Path]:
+        """Discover safe Parquet inputs and derive unique SQL relation names."""
+
+        inputs = self.workspace.inputs.resolve()
+        relations: dict[str, Path] = {}
+        for path in sorted(inputs.rglob("*")):
+            if path.is_symlink():
+                raise InputRelationError(
+                    f"workspace inputs cannot contain symlinks: {path}"
+                )
+            if not path.is_file() or path.suffix.lower() != ".parquet":
+                continue
+
+            resolved = path.resolve()
+            try:
+                resolved.relative_to(inputs)
+            except ValueError as exc:
+                raise InputRelationError(
+                    f"Parquet input escapes the approved inputs directory: {path}"
+                ) from exc
+
+            relation = self._sanitize_relation_name(path.stem)
+            previous = relations.get(relation)
+            if previous is not None:
+                raise InputRelationError(
+                    "duplicate approved input relation "
+                    f"'{relation}' from {previous} and {path}"
+                )
+            relations[relation] = path
+        return relations
+
+    def _register_input_views(self, connection: duckdb.DuckDBPyConnection) -> None:
+        """Register validated Parquet inputs as read-only DuckDB views."""
+
+        for relation, path in self._input_relations.items():
+            connection.execute(
+                f"CREATE VIEW {self._quote_identifier(relation)} AS "
+                f"SELECT * FROM read_parquet({self._sql_literal(str(path))})"
+            )
+
+    @staticmethod
+    def _sanitize_relation_name(stem: str) -> str:
+        """Convert a file stem into a conservative SQL identifier.
+
+        Punctuation and whitespace become underscores, names are normalized to
+        lowercase, and a leading digit receives an underscore prefix. Empty
+        results are rejected instead of creating an unusable relation.
+        """
+
+        relation = re.sub(r"[^A-Za-z0-9_]+", "_", stem).strip("_").lower()
+        if relation and relation[0].isdigit():
+            relation = f"_{relation}"
+        if not _RELATION_NAME_PATTERN.fullmatch(relation):
+            raise InputRelationError(
+                f"unsafe Parquet input stem {stem!r}: cannot derive a SQL relation"
+            )
+        return relation
+
+    @staticmethod
+    def _quote_identifier(identifier: str) -> str:
+        """Quote an already validated SQL identifier defensively."""
+
+        return '"' + identifier.replace('"', '""') + '"'
 
     def _artifact_ref(self, path: Path) -> str:
         return path.relative_to(self.workspace.root).as_posix()

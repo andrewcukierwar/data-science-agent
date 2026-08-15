@@ -5,7 +5,8 @@ recommendations:
 
 1. Read the business definitions and inspect the candidate's cited workspace
    evidence before judging a claim.
-2. Reproduce material numbers from saved SQL or Python. Check units, date
+2. Use registered input relation names in new SQL rather than filesystem paths
+   or `read_parquet` calls. Reproduce material numbers from saved SQL or Python. Check units, date
    windows, rounding, sample sizes, and contradictions across findings and
    artifacts.
 3. Verify numerator and denominator definitions, especially CAC, conversion,
