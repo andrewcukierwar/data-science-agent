@@ -179,6 +179,7 @@ async def run_critic(
         selected_agent,
         _candidate_prompt(candidate),
         context=context,
+        max_turns=context.run_config.max_agent_turns,
     )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)

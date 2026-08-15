@@ -111,7 +111,7 @@ def test_data_auditor_persists_typed_result_in_ledger(
         audited_at=audited_at,
     )
 
-    async def fake_run(agent, objective, *, context):  # noqa: ANN001
+    async def fake_run(agent, objective, *, context, **kwargs):  # noqa: ANN001
         assert agent.output_type is AuditResult
         assert objective == DATA_AUDITOR_OBJECTIVE
         assert context is not None

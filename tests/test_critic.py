@@ -143,7 +143,7 @@ def test_critic_persists_validation_result_and_issues(
         summary="The denominator must be corrected.",
     )
 
-    async def fake_run(agent, prompt, *, context):  # noqa: ANN001
+    async def fake_run(agent, prompt, *, context, **kwargs):  # noqa: ANN001
         assert agent.output_type is ValidationResult
         assert "CANDIDATE_ANALYSIS_JSON" in prompt
         assert candidate.objective in prompt

@@ -269,7 +269,7 @@ def test_run_lead_consumes_typed_output_and_persists_findings(
         ],
     )
 
-    async def fake_run(agent, prompt, *, context):  # noqa: ANN001
+    async def fake_run(agent, prompt, *, context, **kwargs):  # noqa: ANN001
         assert agent.output_type is LeadResult
         assert prompt == "Explain the change."
         assert context.agent_role is AgentRole.LEAD

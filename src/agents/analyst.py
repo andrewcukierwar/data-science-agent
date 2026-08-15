@@ -147,13 +147,20 @@ async def run_analyst(
         raise ValueError("run_analyst requires an Analyst AgentRunContext")
     context.record_specialist_invocation()
     selected_agent = agent or build_analyst_agent(context.run_config)
-    result = await Runner.run(selected_agent, objective, context=context)
+    result = await Runner.run(
+        selected_agent,
+        objective,
+        context=context,
+        max_turns=context.run_config.max_agent_turns,
+    )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)
     output = result.final_output
     if not isinstance(output, SpecialistResult):
         output = SpecialistResult.model_validate(output)
-    return validate_analyst_result(output, context.ledger)
+    output = validate_analyst_result(output, context.ledger)
+    context.ledger.record_specialist_result(AgentRole.ANALYST.value, output)
+    return output
 
 
 __all__ = [

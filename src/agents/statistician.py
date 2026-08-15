@@ -233,13 +233,20 @@ async def run_statistician(
         raise ValueError("run_statistician requires a Statistician context")
     context.record_specialist_invocation()
     selected_agent = agent or build_statistician_agent(context.run_config)
-    result = await Runner.run(selected_agent, objective, context=context)
+    result = await Runner.run(
+        selected_agent,
+        objective,
+        context=context,
+        max_turns=context.run_config.max_agent_turns,
+    )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)
     output = result.final_output
     if not isinstance(output, SpecialistResult):
         output = SpecialistResult.model_validate(output)
-    return persist_statistician_result(output, context)
+    output = persist_statistician_result(output, context)
+    context.ledger.record_specialist_result(AgentRole.STATISTICIAN.value, output)
+    return output
 
 
 __all__ = [

@@ -17,10 +17,12 @@ from agents.critic import (
 )
 from agents.lead import build_lead_agent, persist_lead_result, run_lead
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
+from orchestration.budgets import BudgetResource
 from orchestration.ledger import AnalysisLedger
 from schemas.audit import AuditResult, AuditStatus
 from schemas.lead import LeadResult
 from schemas.run_state import (
+    AgentEventStatus,
     AnalysisRunState,
     Artifact,
     ArtifactKind,
@@ -71,6 +73,9 @@ class AnalysisRunner:
         model_provider: str = "openai",
         docker_image: str = "data-science-agent-python:latest",
         budget: RunBudget | None = None,
+        max_agent_turns: int = 10,
+        input_cost_per_1k_tokens: float | None = None,
+        output_cost_per_1k_tokens: float | None = None,
         auditor_runner: AuditorRunner | None = None,
         lead_runner: LeadRunner | None = None,
         critic_runner: CriticRunner | None = None,
@@ -86,6 +91,11 @@ class AnalysisRunner:
         self.model_provider = model_provider
         self.docker_image = docker_image
         self.budget = budget
+        self.max_agent_turns = max_agent_turns
+        if (input_cost_per_1k_tokens is None) != (output_cost_per_1k_tokens is None):
+            raise ValueError("input and output cost rates must be provided together")
+        self.input_cost_per_1k_tokens = input_cost_per_1k_tokens
+        self.output_cost_per_1k_tokens = output_cost_per_1k_tokens
         self.auditor_runner = auditor_runner or run_data_auditor
         self.lead_runner = lead_runner or run_lead
         self.critic_runner = critic_runner or run_critic
@@ -110,6 +120,8 @@ class AnalysisRunner:
         validation_result: ValidationResult | None = None
         report: Artifact | None = None
         constrained = False
+        active_agent: tuple[str, AgentRole, str] | None = None
+        active_agent_recorded = False
 
         try:
             run_workspace = run_workspace or self._open_or_create_workspace(
@@ -131,13 +143,23 @@ class AnalysisRunner:
                 ledger,
                 AgentRole.DATA_AUDITOR,
             )
+            active_agent = (audit_agent.name, AgentRole.DATA_AUDITOR, "preflight audit")
+            audit_context.check_budget(BudgetResource.SPECIALIST_INVOCATIONS)
+            audit_specialist_usage = ledger.budget.specialist_invocations
             audit = await self.auditor_runner(
                 audit_context,
                 self._audit_prompt(business_context),
                 agent=audit_agent,
             )
+            self._ensure_budget_increment(
+                audit_context,
+                BudgetResource.SPECIALIST_INVOCATIONS,
+                audit_specialist_usage,
+            )
             if not isinstance(audit, AuditResult):
                 audit = AuditResult.model_validate(audit)
+            self._record_agent_success(ledger, active_agent, AuditResult)
+            active_agent_recorded = True
             # Keep this explicit even though the existing specialist runner also
             # persists it; it makes the application lifecycle invariant clear.
             ledger.record_audit(audit)
@@ -149,6 +171,8 @@ class AnalysisRunner:
                 ledger,
                 AgentRole.LEAD,
             )
+            active_agent = (lead_agent.name, AgentRole.LEAD, objective)
+            active_agent_recorded = False
             lead_result = await self.lead_runner(
                 lead_context,
                 objective,
@@ -158,6 +182,8 @@ class AnalysisRunner:
             )
             if not isinstance(lead_result, LeadResult):
                 lead_result = LeadResult.model_validate(lead_result)
+            self._record_agent_success(ledger, active_agent, LeadResult)
+            active_agent_recorded = True
             persist_lead_result(lead_result, lead_context)
 
             critic_context, critic_agent = self._agent_context(
@@ -172,15 +198,33 @@ class AnalysisRunner:
             critic_context.check_budget("critic_loops")
             while True:
                 candidate = self._candidate(objective, lead_result)
+                active_agent = (critic_agent.name, AgentRole.CRITIC, objective)
+                active_agent_recorded = False
+                critic_context.check_budget(BudgetResource.SPECIALIST_INVOCATIONS)
+                critic_context.check_budget(BudgetResource.CRITIC_LOOPS)
+                critic_specialist_usage = ledger.budget.specialist_invocations
+                critic_loop_usage = ledger.budget.critic_loops
                 validation_result = await self.critic_runner(
                     critic_context,
                     candidate,
                     agent=critic_agent,
                 )
+                self._ensure_budget_increment(
+                    critic_context,
+                    BudgetResource.SPECIALIST_INVOCATIONS,
+                    critic_specialist_usage,
+                )
+                self._ensure_budget_increment(
+                    critic_context,
+                    BudgetResource.CRITIC_LOOPS,
+                    critic_loop_usage,
+                )
                 if not isinstance(validation_result, ValidationResult):
                     validation_result = ValidationResult.model_validate(
                         validation_result
                     )
+                self._record_agent_success(ledger, active_agent, ValidationResult)
+                active_agent_recorded = True
                 if validation_result not in critic_context.ledger.validation_results:
                     persist_validation_result(
                         validation_result,
@@ -200,6 +244,8 @@ class AnalysisRunner:
                     lead_result,
                     validation_result,
                 )
+                active_agent = (lead_agent.name, AgentRole.LEAD, remediation_prompt)
+                active_agent_recorded = False
                 lead_result = await self.lead_runner(
                     lead_context,
                     remediation_prompt,
@@ -209,6 +255,8 @@ class AnalysisRunner:
                 )
                 if not isinstance(lead_result, LeadResult):
                     lead_result = LeadResult.model_validate(lead_result)
+                self._record_agent_success(ledger, active_agent, LeadResult)
+                active_agent_recorded = True
                 persist_lead_result(lead_result, lead_context)
 
             report = self._write_report(
@@ -237,6 +285,16 @@ class AnalysisRunner:
         except Exception as error:
             message = f"{type(error).__name__}: {error}"
             if ledger is not None:
+                if active_agent is not None and not active_agent_recorded:
+                    agent_name, role, agent_objective = active_agent
+                    ledger.record_agent_event(
+                        agent_name=agent_name,
+                        agent_role=role.value,
+                        status=AgentEventStatus.FAILED,
+                        model=self.model,
+                        objective=agent_objective,
+                        error=message,
+                    )
                 ledger.mark_failed(message)
             return AnalysisRunResult(
                 status=RunStatus.FAILED,
@@ -252,11 +310,46 @@ class AnalysisRunner:
         finally:
             if ledger is not None:
                 try:
+                    ledger.record_cost_estimate(
+                        input_cost_per_1k_tokens=self.input_cost_per_1k_tokens,
+                        output_cost_per_1k_tokens=self.output_cost_per_1k_tokens,
+                    )
                     ledger.record_elapsed(time.perf_counter() - started)
                 except Exception:
                     # Do not mask a primary lifecycle or persistence error with a
                     # final metadata-write failure.
                     pass
+
+    def _record_agent_success(
+        self,
+        ledger: AnalysisLedger,
+        invocation: tuple[str, AgentRole, str] | None,
+        output_type: type[object],
+    ) -> None:
+        """Persist a bounded trace entry without storing raw model output."""
+
+        if invocation is None:
+            return
+        agent_name, role, objective = invocation
+        ledger.record_agent_event(
+            agent_name=agent_name,
+            agent_role=role.value,
+            status=AgentEventStatus.SUCCEEDED,
+            model=self.model,
+            objective=objective,
+            output_type=output_type.__name__,
+        )
+
+    @staticmethod
+    def _ensure_budget_increment(
+        context: AgentRunContext,
+        resource: BudgetResource,
+        previous_usage: int,
+    ) -> None:
+        """Keep injected runners subject to the same observable budgets."""
+
+        if getattr(context.ledger.budget, resource.value) == previous_usage:
+            context.consume_budget(resource)
 
     def run_sync(self, *args: object, **kwargs: object) -> AnalysisRunResult:
         """Synchronous convenience wrapper for CLI/manual callers."""
@@ -323,6 +416,7 @@ class AnalysisRunner:
             agent_role=role,
             model=self.model,
             model_provider=self.model_provider,
+            max_agent_turns=self.max_agent_turns,
         )
         context = AgentRunContext(
             workspace=workspace,
@@ -517,6 +611,15 @@ class AnalysisRunner:
                 f"- Python executions: **{ledger.budget.python_executions}**",
                 f"- Specialist invocations: **{ledger.budget.specialist_invocations}**",
                 f"- Critic loops: **{ledger.budget.critic_loops}**",
+                f"- Model requests: **{ledger.usage.requests}**",
+                f"- Total tokens: **{ledger.usage.total_tokens}**",
+                f"- Elapsed seconds: **{ledger.state.elapsed_seconds or 0:.3f}**",
+                (
+                    "- Estimated model cost (USD): "
+                    f"**{ledger.state.estimated_cost_usd:.6f}**"
+                    if ledger.state.estimated_cost_usd is not None
+                    else "- Estimated model cost (USD): **not configured**"
+                ),
                 "- Evidence and artifacts are recorded in "
                 "`state/analysis_ledger.json`.",
             ]

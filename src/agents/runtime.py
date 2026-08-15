@@ -77,6 +77,7 @@ class AgentRunConfig(BaseModel):
     max_result_rows: int = Field(default=100, ge=1, le=1_000)
     max_text_chars: int = Field(default=4_000, ge=256, le=100_000)
     max_document_chars: int = Field(default=16_000, ge=256, le=1_000_000)
+    max_agent_turns: int = Field(default=10, ge=1, le=50)
 
 
 class PermissionDeniedError(PermissionError):

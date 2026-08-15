@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from evaluation.canonical import evaluate_canonical_run
 from orchestration.runner import AnalysisRunner
 from scenarios.generator import SyntheticEcommerceConfig
 from scenarios.injection import generate_canonical_profitability_scenario
@@ -61,15 +62,11 @@ def test_analysis_runner_live_canonical_end_to_end(
             objective,
             inputs_source=inputs,
             docs_source=docs,
-            business_context=(
-                "Use reporting contribution profit: net revenue minus COGS and "
-                "marketing spend."
-            ),
         )
     )
 
     assert result.error is None, result.error
-    assert result.status in {RunStatus.COMPLETED, RunStatus.BLOCKED}
+    assert result.status is RunStatus.COMPLETED
     assert result.audit is not None
     assert result.lead_result is not None
     assert result.validation_result is not None
@@ -82,3 +79,5 @@ def test_analysis_runner_live_canonical_end_to_end(
     assert result.ledger.state.elapsed_seconds is not None
     assert result.ledger.tool_events
     assert (result.workspace.outputs / "report.md").exists()
+    summary = evaluate_canonical_run(result)
+    assert summary.status == RunStatus.COMPLETED.value

@@ -12,6 +12,8 @@ from schemas.audit import (
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.lead import LeadRecommendation, LeadResult, SpecialistTask
 from schemas.run_state import (
+    AgentEvent,
+    AgentEventStatus,
     AnalysisLedger,
     AnalysisRunState,
     Artifact,
@@ -21,6 +23,7 @@ from schemas.run_state import (
     ModelUsage,
     RunBudget,
     RunStatus,
+    SpecialistResultRecord,
     ToolEvent,
     ToolEventStatus,
 )
@@ -35,6 +38,8 @@ from schemas.validation import (
 __all__ = [
     "AnalysisLedger",
     "AnalysisRunState",
+    "AgentEvent",
+    "AgentEventStatus",
     "Artifact",
     "ArtifactKind",
     "AuditResult",
@@ -53,6 +58,7 @@ __all__ = [
     "ModelUsage",
     "RunBudget",
     "RunStatus",
+    "SpecialistResultRecord",
     "SpecialistResult",
     "SpecialistTask",
     "TableAudit",

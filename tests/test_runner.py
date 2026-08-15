@@ -140,6 +140,7 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
         "Test the primary profitability drivers",
     ]
     assert result.ledger.hypotheses[0].id == "H001"
+    assert result.ledger.hypothesis_history[0].id == "H001"
     assert result.ledger.findings[0].id == "F001"
     assert result.ledger.state.final_report == result.report
     assert len(result.ledger.validation_results) == 2
@@ -149,6 +150,7 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
     assert result.ledger.usage.requests == 5
     assert result.ledger.usage.total_tokens == 70
     assert result.ledger.state.elapsed_seconds is not None
+    assert result.ledger.state.cost_estimation_note is not None
     assert "The remediated candidate is reproducible." in (
         result.workspace.outputs / "report.md"
     ).read_text(encoding="utf-8")

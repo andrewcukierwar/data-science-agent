@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 from agents import (
     Agent,
     RunContextWrapper,
@@ -22,6 +24,7 @@ from agents.runtime import (
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
 from schemas.audit import AuditResult
+from schemas.findings import SpecialistResult
 from schemas.lead import LeadResult, SpecialistTask
 from schemas.run_state import Hypothesis
 
@@ -60,8 +63,11 @@ Required investigation behavior:
    inconclusive only when the returned evidence supports that disposition.
 3. Delegate an audit when data quality or relationships are uncertain. Delegate
    bounded decomposition and metric work to Analyst, and inferential questions to
-   Statistician. Treat specialist outputs as evidence-bearing structured results,
-   not as unverified prose.
+   Statistician. When a material cohort or channel difference affects the answer,
+   ask Statistician to assess uncertainty and practical significance. When a
+   multi-component decomposition would benefit from visual comparison, ask
+   Analyst to save a relevant chart artifact. Treat specialist outputs as
+   evidence-bearing structured results, not as unverified prose.
 4. Record material open questions and decide explicitly whether each needs follow-up
    analysis. Do not pursue a follow-up merely because it is interesting; explain its
    decision value and available evidence.
@@ -170,8 +176,83 @@ class _NestedSpecialistHooks(RunHooks[AgentRunContext]):
                     else AuditResult.model_validate(output)
                 )
                 runtime_context.ledger.record_audit(audit)
+            elif self.role in {AgentRole.ANALYST, AgentRole.STATISTICIAN}:
+                try:
+                    specialist_result = (
+                        output
+                        if isinstance(output, SpecialistResult)
+                        else SpecialistResult.model_validate(output)
+                    )
+                except ValidationError:
+                    # The SDK supplies typed output in production. Keep the
+                    # hook's cleanup and trace behavior robust for test doubles
+                    # or SDK failures that do not produce a specialist result.
+                    specialist_result = None
+                if specialist_result is not None:
+                    executed_refs = {
+                        event.id for event in runtime_context.ledger.tool_events
+                    }
+                    executed_refs.update(
+                        reference
+                        for event in runtime_context.ledger.tool_events
+                        for reference in event.artifact_refs
+                    )
+                    executed_refs.update(
+                        artifact.id for artifact in runtime_context.ledger.artifacts
+                    )
+                    executed_refs.update(
+                        artifact.path for artifact in runtime_context.ledger.artifacts
+                    )
+                    for finding in specialist_result.findings:
+                        if (
+                            finding.metric is not None or finding.value is not None
+                        ) and not any(
+                            reference in executed_refs
+                            for reference in finding.evidence_refs
+                        ):
+                            raise ValueError(
+                                "specialist finding lacks executed evidence: "
+                                f"{finding.id}"
+                            )
+                    runtime_context.ledger.record_specialist_result(
+                        self.role.value,
+                        specialist_result,
+                    )
+                    for finding in specialist_result.findings:
+                        existing = next(
+                            (
+                                item
+                                for item in runtime_context.ledger.findings
+                                if item.id == finding.id
+                            ),
+                            None,
+                        )
+                        if existing is None:
+                            runtime_context.ledger.add_finding(finding)
+                        elif existing != finding:
+                            raise ValueError(
+                                f"specialist finding id conflicts: {finding.id}"
+                            )
+            runtime_context.ledger.record_agent_event(
+                agent_name=agent.name,
+                agent_role=self.role.value,
+                status="succeeded",
+                model=str(agent.model) if agent.model is not None else None,
+                objective=_nested_objective(context),
+                output_type=type(output).__name__,
+            )
         finally:
             runtime_context.exit_nested_role(self.role)
+
+
+def _nested_objective(context: Any) -> str | None:
+    """Extract only the bounded objective from a typed specialist tool input."""
+
+    tool_input = getattr(context, "tool_input", None)
+    if isinstance(tool_input, dict):
+        objective = tool_input.get("objective")
+        return objective if isinstance(objective, str) and objective.strip() else None
+    return None
 
 
 def _specialist_tool(
@@ -180,6 +261,7 @@ def _specialist_tool(
     role: AgentRole,
     tool_name: str,
     description: str,
+    max_turns: int | None = None,
 ) -> Any:
     """Expose a specialist through the SDK's manager-agent tool mechanism."""
 
@@ -196,11 +278,20 @@ def _specialist_tool(
         runtime_context = context.context
         if runtime_context.agent_role is role:
             runtime_context.exit_nested_role(role)
+        runtime_context.ledger.record_agent_event(
+            agent_name=specialist.name,
+            agent_role=role.value,
+            status="failed",
+            model=str(specialist.model) if specialist.model is not None else None,
+            objective=_nested_objective(context),
+            error=str(error),
+        )
         return f"{role.value} specialist failed: {error}"
 
     return specialist.as_tool(
         tool_name=tool_name,
         tool_description=description,
+        max_turns=max_turns,
         parameters=SpecialistTask,
         include_input_schema=True,
         hooks=hooks,
@@ -222,6 +313,7 @@ def build_lead_agent(
     if config is not None and config.agent_role is not AgentRole.LEAD:
         raise ValueError("Lead requires an AgentRunConfig with lead role")
     selected_model = model or (config.model if config is not None else None)
+    delegation_turns = config.max_agent_turns if config is not None else 10
 
     if analyst is None:
         from agents.analyst import build_analyst_agent
@@ -247,6 +339,7 @@ def build_lead_agent(
             role=AgentRole.DATA_AUDITOR,
             tool_name="delegate_to_data_auditor",
             description="Delegate a bounded data-quality or relationship audit.",
+            max_turns=delegation_turns,
         ),
         _specialist_tool(
             analyst,
@@ -255,12 +348,14 @@ def build_lead_agent(
             description=(
                 "Delegate bounded SQL/Python business analytics and decomposition."
             ),
+            max_turns=delegation_turns,
         ),
         _specialist_tool(
             statistician,
             role=AgentRole.STATISTICIAN,
             tool_name="delegate_to_statistician",
             description="Delegate a bounded inferential or statistical question.",
+            max_turns=delegation_turns,
         ),
     ]
     return Agent[AgentRunContext](
@@ -399,6 +494,7 @@ async def run_lead(
             audit=audit,
         ),
         context=context,
+        max_turns=context.run_config.max_agent_turns,
     )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)

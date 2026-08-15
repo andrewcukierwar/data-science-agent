@@ -17,3 +17,17 @@ uv run ruff format --check .
 
 The planned architecture and implementation sequence are documented in
 [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
+
+## Canonical Phase 1 live acceptance
+
+The full no-steering canonical run requires Docker, `OPENAI_API_KEY`, and
+`OPENAI_DEFAULT_MODEL`:
+
+```bash
+OPENAI_API_KEY=... OPENAI_DEFAULT_MODEL=... uv run python scripts/run_canonical_mvp.py
+```
+
+It writes the isolated workspace under `.runs/canonical-mvp/canonical-q2-mvp`,
+prints a persisted-workspace acceptance summary, and uses evaluator-only
+scenario ground truth after the agent run. Use `--force` only to intentionally
+replace that exact run directory.

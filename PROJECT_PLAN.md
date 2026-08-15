@@ -1268,6 +1268,19 @@ The canonical run autonomously generates and persists:
 
 No manual steering should be required during the run.
 
+### Canonical live acceptance command
+
+From the repository root, run the full no-steering acceptance with:
+
+```bash
+OPENAI_API_KEY=... OPENAI_DEFAULT_MODEL=... uv run python scripts/run_canonical_mvp.py
+```
+
+The script generates the seeded canonical inputs, creates the isolated
+workspace, runs the five-agent lifecycle, reloads the ledger, and evaluates the
+persisted evidence and evaluator-only scenario ground truth. Docker must be
+available for the Python specialist tools.
+
 ---
 
 # Phase 2 — Evaluation and Reliability

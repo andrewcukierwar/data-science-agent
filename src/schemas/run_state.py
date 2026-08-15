@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from schemas.audit import AuditResult
-from schemas.findings import Finding
+from schemas.findings import Finding, SpecialistResult
 from schemas.validation import ValidationIssue, ValidationResult
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
@@ -34,6 +34,15 @@ class Hypothesis(BaseModel):
     evidence_refs: list[NonEmptyString] = Field(default_factory=list)
     rationale: NonEmptyString | None = None
     parent_id: NonEmptyString | None = None
+
+
+class SpecialistResultRecord(BaseModel):
+    """Persisted typed output from one non-manager specialist invocation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_role: NonEmptyString
+    result: SpecialistResult
 
 
 class ArtifactKind(StrEnum):
@@ -116,6 +125,45 @@ class ToolEvent(BaseModel):
         return self
 
 
+class AgentEventStatus(StrEnum):
+    """Outcome of one observable agent invocation."""
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class AgentEvent(BaseModel):
+    """Concise trace entry for an agent invocation.
+
+    Agent outputs are persisted through their typed domain records. This trace
+    deliberately stores lifecycle and identity metadata rather than raw model
+    transcripts.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: NonEmptyString
+    agent_name: NonEmptyString
+    agent_role: NonEmptyString
+    status: AgentEventStatus
+    started_at: datetime
+    completed_at: datetime | None = None
+    model: NonEmptyString | None = None
+    objective: NonEmptyString | None = None
+    output_type: NonEmptyString | None = None
+    error: NonEmptyString | None = None
+
+    @model_validator(mode="after")
+    def validate_lifecycle(self) -> "AgentEvent":
+        if self.completed_at is not None and self.completed_at < self.started_at:
+            raise ValueError("completed_at must be on or after started_at")
+        if self.status is AgentEventStatus.FAILED and self.error is None:
+            raise ValueError("failed agent events must include an error")
+        if self.status is AgentEventStatus.SUCCEEDED and self.error is not None:
+            raise ValueError("succeeded agent events cannot include an error")
+        return self
+
+
 class RunStatus(StrEnum):
     """Lifecycle state of an analysis run."""
 
@@ -172,16 +220,21 @@ class AnalysisRunState(BaseModel):
     audit: AuditResult | None = None
     investigation_plan: list[NonEmptyString] = Field(default_factory=list)
     hypotheses: list[Hypothesis] = Field(default_factory=list)
+    hypothesis_history: list[Hypothesis] = Field(default_factory=list)
     rejected_hypotheses: list[NonEmptyString] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
     open_questions: list[NonEmptyString] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
     validation_results: list[ValidationResult] = Field(default_factory=list)
+    specialist_results: list[SpecialistResultRecord] = Field(default_factory=list)
     tool_events: list[ToolEvent] = Field(default_factory=list)
+    agent_events: list[AgentEvent] = Field(default_factory=list)
     run_budget: RunBudget = Field(default_factory=RunBudget)
     usage: ModelUsage = Field(default_factory=ModelUsage)
     elapsed_seconds: float | None = Field(default=None, ge=0)
+    estimated_cost_usd: float | None = Field(default=None, ge=0)
+    cost_estimation_note: NonEmptyString | None = None
     final_report: Artifact | None = None
     error: NonEmptyString | None = None
 

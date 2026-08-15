@@ -52,6 +52,7 @@ class PythonExecutionService:
         cpu_limit: float = 1.0,
         pids_limit: int = 128,
         timeout_seconds: float = 30.0,
+        max_event_output_chars: int = 4_000,
     ) -> None:
         self.workspace = workspace
         self.ledger = ledger
@@ -63,6 +64,13 @@ class PythonExecutionService:
             pids_limit=pids_limit,
             timeout_seconds=timeout_seconds,
         )
+        if (
+            not isinstance(max_event_output_chars, int)
+            or isinstance(max_event_output_chars, bool)
+            or max_event_output_chars < 256
+        ):
+            raise ValueError("max_event_output_chars must be an integer >= 256")
+        self.max_event_output_chars = max_event_output_chars
         self._validate_workspace_layout()
 
     def run_python(
@@ -113,6 +121,8 @@ class PythonExecutionService:
             timed_out=sandbox_result.timed_out,
             error=self._result_error(sandbox_result),
         )
+        event_stdout, stdout_truncated = self._truncate_event_text(result.stdout)
+        event_stderr, stderr_truncated = self._truncate_event_text(result.stderr)
         event = ToolEvent(
             id=f"tool-{script_id}",
             tool_name="run_python",
@@ -132,8 +142,10 @@ class PythonExecutionService:
                 "pids_limit": getattr(self.executor, "pids_limit", None),
             },
             output={
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                "stdout": event_stdout,
+                "stderr": event_stderr,
+                "stdout_truncated": stdout_truncated,
+                "stderr_truncated": stderr_truncated,
                 "exit_code": result.exit_code,
                 "duration_seconds": result.duration_seconds,
                 "timed_out": result.timed_out,
@@ -163,6 +175,11 @@ class PythonExecutionService:
         if self.ledger is not None:
             self.ledger.append_tool_event(event)
             self.ledger.increment_budget(python_executions=1)
+
+    def _truncate_event_text(self, value: str) -> tuple[str, bool]:
+        if len(value) <= self.max_event_output_chars:
+            return value, False
+        return value[: self.max_event_output_chars], True
 
     @staticmethod
     def _result_error(sandbox_result: SandboxExecutionResult) -> str | None:

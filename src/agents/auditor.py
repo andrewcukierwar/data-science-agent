@@ -115,7 +115,12 @@ async def run_data_auditor(
         raise ValueError("run_data_auditor requires a Data Auditor context")
     context.record_specialist_invocation()
     selected_agent = agent or build_data_auditor_agent(context.run_config)
-    result = await Runner.run(selected_agent, objective, context=context)
+    result = await Runner.run(
+        selected_agent,
+        objective,
+        context=context,
+        max_turns=context.run_config.max_agent_turns,
+    )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)
     output = result.final_output

@@ -8,6 +8,8 @@ from pydantic import ValidationError
 from schemas.audit import AuditResult, AuditStatus, DateRange, TableAudit
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.run_state import (
+    AgentEvent,
+    AgentEventStatus,
     AnalysisRunState,
     Hypothesis,
     HypothesisStatus,
@@ -130,6 +132,34 @@ def test_tool_event_validates_lifecycle_and_errors() -> None:
             started_at=started_at,
             completed_at=started_at - timedelta(seconds=1),
         )
+
+
+def test_agent_event_and_usage_metadata_round_trip() -> None:
+    timestamp = datetime(2025, 7, 1, 12, 0, tzinfo=UTC)
+    event = AgentEvent(
+        id="agent-001",
+        agent_name="Statistician",
+        agent_role="statistician",
+        status=AgentEventStatus.SUCCEEDED,
+        started_at=timestamp,
+        completed_at=timestamp + timedelta(seconds=1),
+        model="test-model",
+        output_type="SpecialistResult",
+    )
+    state = AnalysisRunState(
+        run_id="run-agent-event",
+        objective="Assess a cohort difference.",
+        agent_events=[event],
+        estimated_cost_usd=0.012,
+        cost_estimation_note="Configured test rates.",
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+
+    restored = AnalysisRunState.model_validate_json(state.model_dump_json())
+
+    assert restored.agent_events[0].agent_role == "statistician"
+    assert restored.estimated_cost_usd == 0.012
 
 
 def test_analysis_run_state_round_trips_nested_models() -> None:

@@ -132,7 +132,7 @@ def test_statistician_persists_findings_and_artifacts(
     )
     result = _result()
 
-    async def fake_run(agent, objective, *, context):  # noqa: ANN001
+    async def fake_run(agent, objective, *, context, **kwargs):  # noqa: ANN001
         assert agent.output_type is SpecialistResult
         assert objective == STATISTICIAN_OBJECTIVE
         assert context is not None

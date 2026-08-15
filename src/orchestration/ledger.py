@@ -13,6 +13,8 @@ from pydantic import ValidationError
 from schemas.audit import AuditResult
 from schemas.findings import Finding
 from schemas.run_state import (
+    AgentEvent,
+    AgentEventStatus,
     AnalysisRunState,
     Artifact,
     Hypothesis,
@@ -20,6 +22,7 @@ from schemas.run_state import (
     ModelUsage,
     RunBudget,
     RunStatus,
+    SpecialistResultRecord,
     ToolEvent,
 )
 from schemas.validation import ValidationIssue, ValidationResult
@@ -100,6 +103,12 @@ class AnalysisLedger(ToolEventLedger):
         return self._state.hypotheses
 
     @property
+    def hypothesis_history(self) -> list[Hypothesis]:
+        """All persisted hypothesis versions in update order."""
+
+        return self._state.hypothesis_history
+
+    @property
     def findings(self) -> list[Finding]:
         """Recorded analytical findings."""
 
@@ -118,6 +127,12 @@ class AnalysisLedger(ToolEventLedger):
         return self._state.tool_events
 
     @property
+    def agent_events(self) -> list[AgentEvent]:
+        """Recorded concise agent invocation trace."""
+
+        return self._state.agent_events
+
+    @property
     def validation_issues(self) -> list[ValidationIssue]:
         """Recorded Critic validation issues."""
 
@@ -128,6 +143,12 @@ class AnalysisLedger(ToolEventLedger):
         """Recorded typed Critic validation results."""
 
         return self._state.validation_results
+
+    @property
+    def specialist_results(self) -> list[SpecialistResultRecord]:
+        """Typed specialist outputs retained for later audit and evaluation."""
+
+        return self._state.specialist_results
 
     @property
     def budget(self) -> RunBudget:
@@ -173,6 +194,8 @@ class AnalysisLedger(ToolEventLedger):
         """Persist the observable lifecycle status for the run."""
 
         self._state.status = RunStatus(status)
+        if self._state.status is RunStatus.RUNNING:
+            self._state.error = None
         self.save()
         return self._state.status
 
@@ -239,6 +262,33 @@ class AnalysisLedger(ToolEventLedger):
         self.save()
         return elapsed_seconds
 
+    def record_cost_estimate(
+        self,
+        *,
+        input_cost_per_1k_tokens: float | None = None,
+        output_cost_per_1k_tokens: float | None = None,
+    ) -> float | None:
+        """Persist an optional cost estimate without inventing provider pricing."""
+
+        if input_cost_per_1k_tokens is None or output_cost_per_1k_tokens is None:
+            self._state.estimated_cost_usd = None
+            self._state.cost_estimation_note = (
+                "Cost estimate unavailable: model pricing rates were not configured."
+            )
+        else:
+            if input_cost_per_1k_tokens < 0 or output_cost_per_1k_tokens < 0:
+                raise ValueError("cost rates must be non-negative")
+            self._state.estimated_cost_usd = (
+                self.usage.input_tokens / 1_000 * input_cost_per_1k_tokens
+                + self.usage.output_tokens / 1_000 * output_cost_per_1k_tokens
+            )
+            self._state.cost_estimation_note = (
+                "Estimated from configured input/output token rates; provider billing "
+                "may differ."
+            )
+        self.save()
+        return self._state.estimated_cost_usd
+
     def record_final_report(self, artifact: Artifact) -> Artifact:
         """Persist the registered final report artifact."""
 
@@ -261,6 +311,7 @@ class AnalysisLedger(ToolEventLedger):
             "hypothesis", hypothesis.id, (item.id for item in self.hypotheses)
         )
         self._state.hypotheses.append(hypothesis)
+        self._state.hypothesis_history.append(hypothesis)
         self._sync_rejected_hypotheses()
         self.save()
         return hypothesis
@@ -271,6 +322,7 @@ class AnalysisLedger(ToolEventLedger):
         for index, current in enumerate(self.hypotheses):
             if current.id == hypothesis.id:
                 self._state.hypotheses[index] = hypothesis
+                self._state.hypothesis_history.append(hypothesis)
                 self._sync_rejected_hypotheses()
                 self.save()
                 return hypothesis
@@ -349,6 +401,44 @@ class AnalysisLedger(ToolEventLedger):
         self._state.tool_events.append(event)
         self.save()
 
+    def append_agent_event(self, event: AgentEvent) -> None:
+        """Append an agent invocation trace entry with a unique identifier."""
+
+        self._ensure_unique(
+            "agent event", event.id, (item.id for item in self.agent_events)
+        )
+        self._state.agent_events.append(event)
+        self.save()
+
+    def record_agent_event(
+        self,
+        *,
+        agent_name: str,
+        agent_role: str,
+        status: AgentEventStatus,
+        model: str | None = None,
+        objective: str | None = None,
+        output_type: str | None = None,
+        error: str | None = None,
+    ) -> AgentEvent:
+        """Create and persist a concise agent invocation trace entry."""
+
+        completed_at = datetime.now(UTC)
+        event = AgentEvent(
+            id=f"agent-{uuid.uuid4().hex}",
+            agent_name=agent_name,
+            agent_role=agent_role,
+            status=status,
+            started_at=completed_at,
+            completed_at=completed_at,
+            model=model,
+            objective=objective,
+            output_type=output_type,
+            error=error,
+        )
+        self.append_agent_event(event)
+        return event
+
     def record_tool_event(self, event: ToolEvent) -> None:
         """Compatibility alias for append_tool_event."""
 
@@ -387,6 +477,27 @@ class AnalysisLedger(ToolEventLedger):
         self._state.validation_results.append(result)
         self.save()
         return result
+
+    def record_specialist_result(
+        self,
+        agent_role: str,
+        result: object,
+    ) -> SpecialistResultRecord:
+        """Persist a typed specialist result without raw model transcript data."""
+
+        from schemas.findings import SpecialistResult
+
+        record = SpecialistResultRecord(
+            agent_role=agent_role,
+            result=(
+                result
+                if isinstance(result, SpecialistResult)
+                else SpecialistResult.model_validate(result)
+            ),
+        )
+        self._state.specialist_results.append(record)
+        self.save()
+        return record
 
     def record_audit(self, audit: AuditResult) -> AuditResult:
         """Persist the current Data Auditor result for this run."""
