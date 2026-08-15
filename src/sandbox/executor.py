@@ -294,7 +294,11 @@ class DockerSandboxExecutor:
 
     @staticmethod
     def _mount(directory: Path, destination: str, mode: str) -> str:
-        return f"type=bind,src={directory.resolve()},dst={destination},{mode}"
+        # Docker's long-form --mount syntax accepts `readonly` as a flag, but
+        # does not accept the short `rw` flag. Read-write is the default when
+        # no mode is supplied, so omit it for writable workspace mounts.
+        suffix = ",readonly" if mode == "readonly" else ""
+        return f"type=bind,src={directory.resolve()},dst={destination}{suffix}"
 
     @staticmethod
     def _default_container_user() -> str:
