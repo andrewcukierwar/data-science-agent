@@ -143,6 +143,19 @@ class RunBudget(BaseModel):
     charts_created: int = Field(default=0, ge=0)
 
 
+class ModelUsage(BaseModel):
+    """Aggregated Agents SDK request and token usage for one run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requests: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    cached_tokens: int = Field(default=0, ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+
+
 class AnalysisRunState(BaseModel):
     """Persisted, observable state for one analysis run."""
 
@@ -151,6 +164,8 @@ class AnalysisRunState(BaseModel):
     run_id: NonEmptyString
     objective: NonEmptyString
     business_context: NonEmptyString | None = None
+    model: NonEmptyString | None = None
+    model_provider: NonEmptyString | None = None
     status: RunStatus = RunStatus.CREATED
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -165,6 +180,10 @@ class AnalysisRunState(BaseModel):
     validation_results: list[ValidationResult] = Field(default_factory=list)
     tool_events: list[ToolEvent] = Field(default_factory=list)
     run_budget: RunBudget = Field(default_factory=RunBudget)
+    usage: ModelUsage = Field(default_factory=ModelUsage)
+    elapsed_seconds: float | None = Field(default=None, ge=0)
+    final_report: Artifact | None = None
+    error: NonEmptyString | None = None
 
     @model_validator(mode="after")
     def timestamps_are_timezone_aware(self) -> "AnalysisRunState":

@@ -101,6 +101,28 @@ class WorkspaceManager:
             logs=directories["logs"],
         )
 
+    def open_workspace(self, run_id: str) -> Workspace:
+        """Open an existing run workspace after validating its layout."""
+
+        self._validate_run_id(run_id)
+        root = self._run_path(run_id)
+        if root.is_symlink() or not root.is_dir():
+            raise FileNotFoundError(f"workspace does not exist: {root}")
+
+        directories = {name: root / name for name in self._DIRECTORIES}
+        for directory in directories.values():
+            if directory.is_symlink() or not directory.is_dir():
+                raise ValueError(f"workspace layout is invalid: {directory}")
+        return Workspace(
+            root=root,
+            inputs=directories["inputs"],
+            docs=directories["docs"],
+            working=directories["working"],
+            outputs=directories["outputs"],
+            state=directories["state"],
+            logs=directories["logs"],
+        )
+
     def cleanup_workspace(self, run_id: str) -> bool:
         """Remove one run workspace, returning whether it existed."""
 

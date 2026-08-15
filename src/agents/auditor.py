@@ -116,6 +116,8 @@ async def run_data_auditor(
     context.record_specialist_invocation()
     selected_agent = agent or build_data_auditor_agent(context.run_config)
     result = await Runner.run(selected_agent, objective, context=context)
+    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
+    context.record_sdk_usage(usage)
     output = result.final_output
     if not isinstance(output, AuditResult):
         output = AuditResult.model_validate(output)

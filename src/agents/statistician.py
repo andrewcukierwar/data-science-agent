@@ -234,6 +234,8 @@ async def run_statistician(
     context.record_specialist_invocation()
     selected_agent = agent or build_statistician_agent(context.run_config)
     result = await Runner.run(selected_agent, objective, context=context)
+    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
+    context.record_sdk_usage(usage)
     output = result.final_output
     if not isinstance(output, SpecialistResult):
         output = SpecialistResult.model_validate(output)

@@ -15,11 +15,27 @@ from orchestration.ledger import (
     ToolEventSink,
 )
 
+
+def __getattr__(name: str):  # noqa: ANN001
+    """Load the runner lazily to avoid the agents/runtime import cycle."""
+
+    if name in {"AnalysisRunResult", "AnalysisRunner"}:
+        from orchestration.runner import AnalysisRunner, AnalysisRunResult
+
+        return {
+            "AnalysisRunResult": AnalysisRunResult,
+            "AnalysisRunner": AnalysisRunner,
+        }[name]
+    raise AttributeError(name)
+
+
 __all__ = [
     "BudgetExhaustedError",
     "BudgetResource",
     "BudgetSnapshot",
     "AnalysisLedger",
+    "AnalysisRunResult",
+    "AnalysisRunner",
     "LedgerConflictError",
     "LedgerError",
     "RunBudgetController",

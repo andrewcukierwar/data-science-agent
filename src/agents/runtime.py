@@ -218,3 +218,8 @@ class AgentRunContext:
         """Consume one critic-loop budget unit."""
 
         return self.consume_budget(BudgetResource.CRITIC_LOOPS)
+
+    def record_sdk_usage(self, usage: object) -> None:
+        """Persist one Agents SDK usage snapshot for this run."""
+
+        self.ledger.record_model_usage(usage)

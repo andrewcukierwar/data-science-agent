@@ -130,20 +130,28 @@ def _candidate_prompt(candidate: CriticCandidate) -> str:
 def persist_validation_result(
     result: ValidationResult,
     ledger: AnalysisLedger,
+    *,
+    allow_issue_updates: bool = False,
 ) -> ValidationResult:
-    """Persist one validation result and its unique issues in the ledger."""
+    """Persist one validation result and its unique issues in the ledger.
+
+    Remediation loops may update an issue with the same stable identifier; the
+    default direct-operation behavior remains conflict-safe for callers that do
+    not explicitly opt into that lifecycle behavior.
+    """
 
     existing_issues = {issue.id: issue for issue in ledger.validation_issues}
     for issue in result.issues:
         existing = existing_issues.get(issue.id)
-        if existing is not None and existing != issue:
+        if existing is not None and existing != issue and not allow_issue_updates:
             raise CriticPersistenceError(
                 f"validation issue id already exists with different content: {issue.id}"
             )
-
     ledger.add_validation_result(result)
     for issue in result.issues:
-        if issue.id not in existing_issues:
+        if allow_issue_updates:
+            ledger.upsert_validation_issue(issue)
+        elif issue.id not in existing_issues:
             ledger.add_validation_issue(issue)
     return result
 
@@ -172,10 +180,16 @@ async def run_critic(
         _candidate_prompt(candidate),
         context=context,
     )
+    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
+    context.record_sdk_usage(usage)
     output = result.final_output
     if not isinstance(output, ValidationResult):
         output = ValidationResult.model_validate(output)
-    return persist_validation_result(output, context.ledger)
+    return persist_validation_result(
+        output,
+        context.ledger,
+        allow_issue_updates=True,
+    )
 
 
 run_validator = run_critic

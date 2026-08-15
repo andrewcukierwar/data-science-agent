@@ -348,10 +348,42 @@ def _persist_result(result: LeadResult, context: AgentRunContext) -> LeadResult:
     return result
 
 
+def persist_lead_result(result: LeadResult, context: AgentRunContext) -> LeadResult:
+    """Persist a Lead result for callers that manage the SDK lifecycle."""
+
+    return _persist_result(result, context)
+
+
+def _lead_input(
+    objective: str,
+    *,
+    business_context: str | None = None,
+    audit: AuditResult | None = None,
+) -> str:
+    """Build the bounded application context supplied to the Lead."""
+
+    if business_context is None and audit is None:
+        return objective
+    sections = [f"OBJECTIVE:\n{objective}"]
+    if business_context:
+        sections.append(f"BUSINESS_CONTEXT:\n{business_context}")
+    if audit is not None:
+        sections.append(
+            "COMPLETED_DATA_AUDIT_JSON:\n" + audit.model_dump_json(indent=2)
+        )
+    sections.append(
+        "Use this context as evidence and create/update the persisted plan and "
+        "hypotheses before constructing the candidate analysis."
+    )
+    return "\n\n".join(sections)
+
+
 async def run_lead(
     context: AgentRunContext,
     objective: str,
     *,
+    business_context: str | None = None,
+    audit: AuditResult | None = None,
     agent: Agent[AgentRunContext] | None = None,
 ) -> LeadResult:
     """Run the Lead manager once and persist its candidate conclusions."""
@@ -359,7 +391,17 @@ async def run_lead(
     if context.agent_role is not AgentRole.LEAD:
         raise ValueError("run_lead requires a Lead AgentRunContext")
     selected_agent = agent or build_lead_agent(context.run_config)
-    result = await Runner.run(selected_agent, objective, context=context)
+    result = await Runner.run(
+        selected_agent,
+        _lead_input(
+            objective,
+            business_context=business_context,
+            audit=audit,
+        ),
+        context=context,
+    )
+    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
+    context.record_sdk_usage(usage)
     output = result.final_output
     if not isinstance(output, LeadResult):
         output = LeadResult.model_validate(output)
@@ -372,6 +414,7 @@ __all__ = [
     "LeadEvidenceError",
     "build_lead_agent",
     "create_lead_agent",
+    "persist_lead_result",
     "record_hypothesis",
     "record_open_question",
     "run_lead",

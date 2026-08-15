@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import ValidationError
 
@@ -17,7 +17,9 @@ from schemas.run_state import (
     Artifact,
     Hypothesis,
     HypothesisStatus,
+    ModelUsage,
     RunBudget,
+    RunStatus,
     ToolEvent,
 )
 from schemas.validation import ValidationIssue, ValidationResult
@@ -134,6 +136,12 @@ class AnalysisLedger(ToolEventLedger):
         return self._state.run_budget
 
     @property
+    def usage(self) -> ModelUsage:
+        """Aggregated Agents SDK request and token usage."""
+
+        return self._state.usage
+
+    @property
     def audit(self) -> AuditResult | None:
         """The persisted preflight audit, when one has been recorded."""
 
@@ -160,6 +168,91 @@ class AnalysisLedger(ToolEventLedger):
 
         self._state = self._load_from_disk()
         return self._state
+
+    def set_status(self, status: RunStatus | str) -> RunStatus:
+        """Persist the observable lifecycle status for the run."""
+
+        self._state.status = RunStatus(status)
+        self.save()
+        return self._state.status
+
+    def record_run_metadata(
+        self,
+        *,
+        model: str | None = None,
+        model_provider: str | None = None,
+    ) -> None:
+        """Persist model identity used by the application runner."""
+
+        if model is not None:
+            self._state.model = model
+        if model_provider is not None:
+            self._state.model_provider = model_provider
+        self.save()
+
+    def set_business_context(self, business_context: str) -> None:
+        """Persist business context supplied when opening an existing run."""
+
+        normalized = business_context.strip()
+        if not normalized:
+            raise ValueError("business_context must be non-empty")
+        self._state.business_context = normalized
+        self.save()
+
+    def record_model_usage(self, usage: Any) -> ModelUsage:
+        """Add one Agents SDK usage snapshot to the persisted run totals."""
+
+        if usage is None:
+            return self.usage
+
+        def _integer(name: str) -> int:
+            value = getattr(usage, name, 0)
+            return int(value or 0)
+
+        input_details = getattr(usage, "input_tokens_details", None)
+        output_details = getattr(usage, "output_tokens_details", None)
+        increment = ModelUsage(
+            requests=_integer("requests"),
+            input_tokens=_integer("input_tokens"),
+            output_tokens=_integer("output_tokens"),
+            total_tokens=_integer("total_tokens"),
+            cached_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
+            reasoning_tokens=int(getattr(output_details, "reasoning_tokens", 0) or 0),
+        )
+        self._state.usage = ModelUsage(
+            requests=self.usage.requests + increment.requests,
+            input_tokens=self.usage.input_tokens + increment.input_tokens,
+            output_tokens=self.usage.output_tokens + increment.output_tokens,
+            total_tokens=self.usage.total_tokens + increment.total_tokens,
+            cached_tokens=self.usage.cached_tokens + increment.cached_tokens,
+            reasoning_tokens=self.usage.reasoning_tokens + increment.reasoning_tokens,
+        )
+        self.save()
+        return self.usage
+
+    def record_elapsed(self, elapsed_seconds: float) -> float:
+        """Persist total wall-clock duration for the run."""
+
+        if elapsed_seconds < 0:
+            raise ValueError("elapsed_seconds must be non-negative")
+        self._state.elapsed_seconds = elapsed_seconds
+        self.save()
+        return elapsed_seconds
+
+    def record_final_report(self, artifact: Artifact) -> Artifact:
+        """Persist the registered final report artifact."""
+
+        self._state.final_report = artifact
+        self.save()
+        return artifact
+
+    def mark_failed(self, error: str | Exception) -> None:
+        """Persist a failed status and concise observable error state."""
+
+        message = str(error).strip() or error.__class__.__name__
+        self._state.status = RunStatus.FAILED
+        self._state.error = message
+        self.save()
 
     def add_hypothesis(self, hypothesis: Hypothesis) -> Hypothesis:
         """Append a hypothesis with a unique identifier."""
@@ -270,6 +363,23 @@ class AnalysisLedger(ToolEventLedger):
         self._state.validation_issues.append(issue)
         self.save()
         return issue
+
+    def update_validation_issue(self, issue: ValidationIssue) -> ValidationIssue:
+        """Replace a previously observed issue during remediation."""
+
+        for index, current in enumerate(self.validation_issues):
+            if current.id == issue.id:
+                self._state.validation_issues[index] = issue
+                self.save()
+                return issue
+        raise KeyError(f"unknown validation issue: {issue.id}")
+
+    def upsert_validation_issue(self, issue: ValidationIssue) -> ValidationIssue:
+        """Create an issue or retain its latest remediation-cycle details."""
+
+        if any(current.id == issue.id for current in self.validation_issues):
+            return self.update_validation_issue(issue)
+        return self.add_validation_issue(issue)
 
     def add_validation_result(self, result: ValidationResult) -> ValidationResult:
         """Append a typed Critic result."""
