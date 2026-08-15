@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from agents import (
     ToolOutputText,
     ToolResponse,
     build_agent,
+    inspect_evidence,
     inspect_workspace,
     read_document,
     run_python,
@@ -24,7 +26,7 @@ from agents import (
 from orchestration.budgets import BudgetExhaustedError
 from orchestration.ledger import AnalysisLedger
 from sandbox.executor import SandboxExecutionResult
-from schemas.run_state import ArtifactKind, RunBudget
+from schemas.run_state import ArtifactKind, RunBudget, ToolEvent, ToolEventStatus
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService
@@ -140,6 +142,12 @@ def test_role_tool_surfaces_preserve_project_plan_permissions() -> None:
     assert "save_artifact" not in [
         tool.name for tool in tools_for_role(AgentRole.CRITIC)
     ]
+    assert "inspect_evidence" in [
+        tool.name for tool in tools_for_role(AgentRole.CRITIC)
+    ]
+    assert "inspect_evidence" not in [
+        tool.name for tool in tools_for_role(AgentRole.LEAD)
+    ]
 
     agent = build_agent("Lead", AgentRole.LEAD, model="test-model")
     assert agent.model == "test-model"
@@ -219,6 +227,80 @@ def test_forbidden_tool_returns_permission_error_without_side_effects(
     assert result.error.code == "permission_denied"
     assert context.ledger.budget.sql_executions == 0
     assert not (context.workspace.working / "queries/Q-FORBIDDEN.sql").exists()
+
+
+def test_critic_inspect_evidence_resolves_events_artifacts_and_safe_paths(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path, AgentRole.CRITIC, max_text_chars=256)
+    query = context.workspace.working / "queries" / "Q-EVIDENCE.sql"
+    query.parent.mkdir(parents=True, exist_ok=True)
+    query.write_text("SELECT 1 AS value;\n", encoding="utf-8")
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-Q-EVIDENCE",
+            tool_name="run_sql",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            arguments={"query_id": "Q-EVIDENCE"},
+            output={"columns": ["value"], "rows": [[1]], "row_count": 1},
+            artifact_refs=["working/queries/Q-EVIDENCE.sql"],
+        )
+    )
+    artifact = context.workspace.outputs / "evidence.txt"
+    artifact.write_text("documented evidence\n", encoding="utf-8")
+    context.artifact_manager.register(
+        "outputs/evidence.txt",
+        artifact_id="A-EVIDENCE",
+        kind=ArtifactKind.OTHER,
+    )
+
+    event_result = _invoke(
+        inspect_evidence,
+        context,
+        {"reference": "tool-Q-EVIDENCE"},
+    )
+    assert event_result.success is True
+    assert event_result.data["reference_type"] == "tool_event"
+    assert event_result.data["output"]["row_count"] == 1
+    assert event_result.data["artifact_refs"] == ["working/queries/Q-EVIDENCE.sql"]
+
+    artifact_result = _invoke(
+        inspect_evidence,
+        context,
+        {"reference": "A-EVIDENCE"},
+    )
+    assert artifact_result.success is True
+    assert artifact_result.data["reference_type"] == "artifact"
+    assert artifact_result.data["provenance_verified"] is True
+    assert artifact_result.data["content"] == "documented evidence\n"
+
+    path_result = _invoke(
+        inspect_evidence,
+        context,
+        {"reference": "working/queries/Q-EVIDENCE.sql"},
+    )
+    assert path_result.success is True
+    assert path_result.data["reference_type"] == "workspace_file"
+    assert path_result.data["path"] == "working/queries/Q-EVIDENCE.sql"
+
+    traversal_result = _invoke(
+        inspect_evidence,
+        context,
+        {"reference": "working/queries/../Q-EVIDENCE.sql"},
+    )
+    assert traversal_result.success is False
+
+    lead_context = _context(tmp_path / "lead", AgentRole.LEAD)
+    forbidden = _invoke(
+        inspect_evidence,
+        lead_context,
+        {"reference": "tool-Q-EVIDENCE"},
+    )
+    assert forbidden.success is False
+    assert forbidden.error is not None
+    assert forbidden.error.code == "permission_denied"
 
 
 def test_save_artifact_enforces_chart_budget_and_records_provenance(

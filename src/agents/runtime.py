@@ -53,7 +53,13 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
     ),
     AgentRole.STATISTICIAN: frozenset({"read_document", "run_python"}),
     AgentRole.CRITIC: frozenset(
-        {"inspect_workspace", "read_document", "run_sql", "run_python"}
+        {
+            "inspect_workspace",
+            "read_document",
+            "run_sql",
+            "run_python",
+            "inspect_evidence",
+        }
     ),
 }
 

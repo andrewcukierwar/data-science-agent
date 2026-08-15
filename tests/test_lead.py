@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,7 +28,7 @@ from agents import (
 from agents.lead import Runner, _NestedSpecialistHooks
 from orchestration.budgets import BudgetExhaustedError
 from orchestration.ledger import AnalysisLedger
-from schemas.findings import ConfidenceLevel, Finding
+from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.lead import LeadRecommendation, LeadResult
 from schemas.run_state import (
     Hypothesis,
@@ -302,3 +303,53 @@ def test_nested_specialist_hook_enforces_budget_and_restores_lead_role(
     )
     with pytest.raises(BudgetExhaustedError, match="specialist_invocations"):
         asyncio.run(hooks.on_agent_start(hook_context, Agent(name="Analyst")))
+
+
+def test_nested_statistician_persists_artifacts_like_standalone_run(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    script = context.workspace.working / "scripts" / "nested_stats.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("print('nested statistical result')\n", encoding="utf-8")
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-nested-statistics",
+            tool_name="run_python",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=timestamp,
+            completed_at=timestamp,
+            artifact_refs=["working/scripts/nested_stats.py"],
+        )
+    )
+    result = SpecialistResult(
+        objective="Assess the nested statistical question.",
+        findings=[
+            Finding(
+                id="S-NESTED",
+                statement="The measured difference is supported by the evidence.",
+                metric="mean_difference",
+                value=0.8,
+                evidence_refs=["working/scripts/nested_stats.py"],
+                confidence=ConfidenceLevel.HIGH,
+            )
+        ],
+        artifacts=["working/scripts/nested_stats.py"],
+    )
+    hooks = _NestedSpecialistHooks(AgentRole.STATISTICIAN)
+    hook_context = SimpleNamespace(
+        context=context,
+        tool_input={"objective": "Assess the nested statistical question."},
+    )
+    agent = Agent(name="Statistician", model="test-model")
+
+    asyncio.run(hooks.on_agent_start(hook_context, agent))
+    asyncio.run(hooks.on_agent_end(hook_context, agent, result))
+
+    reloaded = AnalysisLedger(context.ledger.state_path)
+    assert context.agent_role is AgentRole.LEAD
+    assert reloaded.findings == result.findings
+    assert len(reloaded.artifacts) == 1
+    assert reloaded.artifacts[0].path == "working/scripts/nested_stats.py"
+    assert reloaded.specialist_results[0].agent_role == AgentRole.STATISTICIAN

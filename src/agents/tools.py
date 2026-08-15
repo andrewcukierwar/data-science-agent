@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -59,6 +60,31 @@ class DocumentContents(BaseModel):
     truncated: bool = False
 
 
+class EvidenceInspection(BaseModel):
+    """Bounded metadata and content for one cited evidence reference."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reference: str = Field(min_length=1)
+    reference_type: str = Field(min_length=1)
+    tool_event_id: str | None = None
+    artifact_id: str | None = None
+    artifact_kind: ArtifactKind | None = None
+    path: str | None = None
+    tool_name: str | None = None
+    status: str | None = None
+    arguments: dict[str, Any] | None = None
+    output: dict[str, Any] | None = None
+    error: str | None = None
+    artifact_refs: list[str] = Field(default_factory=list)
+    size_bytes: int | None = Field(default=None, ge=0)
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    provenance_verified: bool | None = None
+    content: str | None = None
+    content_limit: int | None = Field(default=None, ge=1)
+    truncated: bool = False
+
+
 def _context(wrapper: RunContextWrapper[AgentRunContext]) -> AgentRunContext:
     """Extract the application context from an SDK wrapper."""
 
@@ -74,7 +100,11 @@ def _sdk_response(response: ToolResponse) -> ToolOutputText:
 def _error_response(tool_name: str, error: Exception) -> ToolOutputText:
     """Convert expected runtime errors into concise model-visible results."""
 
-    code = getattr(error, "code", "tool_error")
+    code = getattr(
+        error,
+        "code",
+        "not_found" if isinstance(error, FileNotFoundError) else "tool_error",
+    )
     return _sdk_response(ToolResponse.failed(tool_name, code, str(error)))
 
 
@@ -88,6 +118,65 @@ def _truncate_text(value: str, limit: int) -> tuple[str, bool]:
     if len(value) <= limit:
         return value, False
     return value[:limit], True
+
+
+def _bounded_json(value: Any, limit: int) -> dict[str, Any]:
+    """Keep arbitrary persisted event payloads within the model context budget."""
+
+    normalized = _json_safe(value)
+    encoded = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded) <= limit and isinstance(normalized, dict):
+        return normalized
+    preview, _ = _truncate_text(encoded, limit)
+    return {"truncated": True, "preview_json": preview}
+
+
+def _file_provenance(path: Path) -> tuple[str, int]:
+    digest = sha256()
+    size_bytes = 0
+    with path.open("rb") as evidence_file:
+        while chunk := evidence_file.read(1024 * 1024):
+            digest.update(chunk)
+            size_bytes += len(chunk)
+    return digest.hexdigest(), size_bytes
+
+
+def _evidence_file(
+    context: AgentRunContext,
+    reference: str,
+) -> tuple[Path, str]:
+    """Resolve only an approved working/ or outputs/ evidence path."""
+
+    normalized = reference.replace("\\", "/")
+    parts = PurePosixPath(normalized).parts
+    if not parts or parts[0] not in {"working", "outputs"}:
+        raise FileNotFoundError(f"evidence reference not found: {reference}")
+    return _safe_relative_file(
+        context,
+        normalized,
+        directory_name=parts[0],
+        allow_directory_prefix=False,
+    )
+
+
+def _evidence_content(path: Path, limit: int) -> tuple[str | None, bool]:
+    """Read bounded text evidence while leaving binary artifacts summarized."""
+
+    if path.suffix.lower() not in {
+        ".csv",
+        ".json",
+        ".md",
+        ".py",
+        ".sql",
+        ".tsv",
+        ".txt",
+        ".yaml",
+        ".yml",
+    }:
+        return None, False
+    with path.open("r", encoding="utf-8") as evidence_file:
+        content = evidence_file.read(limit + 1)
+    return _truncate_text(content, limit)
 
 
 def _safe_relative_file(
@@ -234,6 +323,113 @@ def read_document(
             path=relative_path,
             content=content,
             character_limit=context.run_config.max_document_chars,
+            truncated=truncated,
+        )
+        return _sdk_response(ToolResponse.ok(tool_name, data.model_dump(mode="json")))
+    except (PermissionDeniedError, ValueError, OSError, UnicodeError) as error:
+        return _error_response(tool_name, error)
+
+
+@function_tool
+def inspect_evidence(
+    ctx: RunContextWrapper[AgentRunContext],
+    reference: str,
+) -> ToolOutputText:
+    """Inspect one cited tool event, registered artifact, or safe evidence path.
+
+    The reference must be a persisted tool-event ID, artifact ID/path, or a
+    workspace-relative file under ``working/`` or ``outputs/``. State, logs,
+    inputs, absolute paths, and traversal paths are never exposed.
+    """
+
+    tool_name = "inspect_evidence"
+    try:
+        context = _context(ctx)
+        context.require_permission(tool_name)
+        reference = reference.strip()
+        if not reference:
+            raise ValueError("reference must be a non-empty string")
+
+        event = next(
+            (item for item in context.ledger.tool_events if item.id == reference),
+            None,
+        )
+        if event is not None:
+            data = EvidenceInspection(
+                reference=reference,
+                reference_type="tool_event",
+                tool_event_id=event.id,
+                tool_name=event.tool_name,
+                status=event.status.value,
+                arguments=_bounded_json(
+                    event.arguments,
+                    context.run_config.max_text_chars,
+                ),
+                output=(
+                    _bounded_json(event.output, context.run_config.max_text_chars)
+                    if event.output is not None
+                    else None
+                ),
+                error=event.error,
+                artifact_refs=event.artifact_refs,
+            )
+            return _sdk_response(
+                ToolResponse.ok(tool_name, data.model_dump(mode="json"))
+            )
+
+        artifact = next(
+            (
+                item
+                for item in context.ledger.artifacts
+                if item.id == reference or item.path == reference
+            ),
+            None,
+        )
+        if artifact is not None:
+            evidence_path, relative_path = _evidence_file(context, artifact.path)
+            try:
+                verified = context.artifact_manager.verify_artifact(artifact.id)
+            except (KeyError, OSError, ValueError):
+                verified = False
+            content, truncated = _evidence_content(
+                evidence_path,
+                context.run_config.max_text_chars,
+            )
+            data = EvidenceInspection(
+                reference=reference,
+                reference_type="artifact",
+                artifact_id=artifact.id,
+                artifact_kind=artifact.kind,
+                path=relative_path,
+                size_bytes=artifact.size_bytes,
+                sha256=artifact.sha256,
+                provenance_verified=verified,
+                content=content,
+                content_limit=(
+                    context.run_config.max_text_chars if content is not None else None
+                ),
+                truncated=truncated,
+            )
+            return _sdk_response(
+                ToolResponse.ok(tool_name, data.model_dump(mode="json"))
+            )
+
+        evidence_path, relative_path = _evidence_file(context, reference)
+        checksum, size_bytes = _file_provenance(evidence_path)
+        content, truncated = _evidence_content(
+            evidence_path,
+            context.run_config.max_text_chars,
+        )
+        data = EvidenceInspection(
+            reference=reference,
+            reference_type="workspace_file",
+            path=relative_path,
+            size_bytes=size_bytes,
+            sha256=checksum,
+            content=content,
+            content_limit=(
+                context.run_config.max_text_chars if content is not None else None
+            ),
             truncated=truncated,
         )
         return _sdk_response(ToolResponse.ok(tool_name, data.model_dump(mode="json")))
@@ -401,6 +597,7 @@ _ALL_TOOLS: tuple[FunctionTool, ...] = (
     run_sql,
     run_python,
     save_artifact,
+    inspect_evidence,
 )
 
 
@@ -462,11 +659,13 @@ def build_agent_from_config(
 
 __all__ = [
     "DocumentContents",
+    "EvidenceInspection",
     "WorkspaceFileInfo",
     "WorkspaceInspection",
     "build_agent",
     "build_agent_from_config",
     "inspect_workspace",
+    "inspect_evidence",
     "read_document",
     "run_python",
     "run_sql",

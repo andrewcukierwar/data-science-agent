@@ -49,8 +49,9 @@ Required review procedure:
 - Inspect the workspace and read the relevant business definitions before
   judging any metric or recommendation.
 - Trace every material finding and recommendation to its cited query, script,
-  tool event, or registered artifact. Reproduce important numerical claims with
-  SQL or Python and compare values, units, periods, and rounding.
+  tool event, or registered artifact. Use inspect_evidence for a cited event or
+  artifact before reproducing important numerical claims with SQL or Python;
+  compare values, units, periods, and rounding.
 - Check that metric definitions, date windows, cohorts, refund/cancellation
   rules, and reporting conventions match the documented business definitions.
 - Check denominators, especially CAC/new-customer denominators, rates, cohort

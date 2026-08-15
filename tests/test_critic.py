@@ -43,6 +43,7 @@ def test_critic_is_structured_and_cannot_delegate() -> None:
         "read_document",
         "run_sql",
         "run_python",
+        "inspect_evidence",
     ]
 
 
@@ -70,6 +71,7 @@ def test_critic_instructions_cover_validation_procedure() -> None:
         "data-quality",
         "contradictions",
         "recommendation",
+        "inspect_evidence",
         "pass",
         "revise",
         "delegate",

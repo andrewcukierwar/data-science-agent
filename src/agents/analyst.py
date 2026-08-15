@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
+from typing import Final
 
 from agents import Agent, Runner
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import SpecialistResult
+from schemas.run_state import ArtifactKind
+from tools.artifacts import ArtifactManager
 
 ANALYST_OBJECTIVE = (
     "Decompose the Q1-to-Q2 profitability change and identify which major "
@@ -84,6 +88,23 @@ class AnalystEvidenceError(ValueError):
     """Raised when a material Analyst finding cites unexecuted evidence."""
 
 
+class AnalystArtifactError(ValueError):
+    """Raised when an Analyst-listed artifact cannot be safely registered."""
+
+
+_ARTIFACT_SUFFIXES: Final[dict[str, ArtifactKind]] = {
+    ".html": ArtifactKind.CHART,
+    ".jpeg": ArtifactKind.CHART,
+    ".jpg": ArtifactKind.CHART,
+    ".png": ArtifactKind.CHART,
+    ".svg": ArtifactKind.CHART,
+    ".md": ArtifactKind.REPORT,
+    ".pdf": ArtifactKind.REPORT,
+    ".py": ArtifactKind.SCRIPT,
+    ".sql": ArtifactKind.QUERY,
+}
+
+
 def build_analyst_agent(
     config: AgentRunConfig | None = None,
     *,
@@ -135,6 +156,52 @@ def validate_analyst_result(
     return result
 
 
+def _persist_analyst_artifacts(
+    result: SpecialistResult,
+    artifact_manager: ArtifactManager,
+) -> None:
+    """Register model-listed files not already registered by ``save_artifact``."""
+
+    for path in result.artifacts:
+        if artifact_manager.ledger.get_artifact(path) is not None:
+            continue
+        if any(artifact.path == path for artifact in artifact_manager.ledger.artifacts):
+            continue
+        try:
+            artifact_manager.register(
+                path,
+                artifact_id=f"analyst-{sha256(path.encode('utf-8')).hexdigest()[:20]}",
+                kind=_ARTIFACT_SUFFIXES.get(
+                    Path(path).suffix.lower(), ArtifactKind.OTHER
+                ),
+                description="Analyst analysis artifact",
+            )
+        except (OSError, ValueError) as exc:
+            raise AnalystArtifactError(
+                f"analyst artifact could not be registered: {path}: {exc}"
+            ) from exc
+
+
+def persist_analyst_result(
+    result: SpecialistResult,
+    context: AgentRunContext,
+) -> SpecialistResult:
+    """Validate and persist Analyst findings for direct or nested runs."""
+
+    _persist_analyst_artifacts(result, context.artifact_manager)
+    validate_analyst_result(result, context.ledger)
+    for finding in result.findings:
+        existing = next(
+            (item for item in context.ledger.findings if item.id == finding.id),
+            None,
+        )
+        if existing is None:
+            context.ledger.add_finding(finding)
+        elif existing != finding:
+            raise AnalystEvidenceError(f"analyst finding id conflicts: {finding.id}")
+    return result
+
+
 async def run_analyst(
     context: AgentRunContext,
     objective: str,
@@ -158,7 +225,7 @@ async def run_analyst(
     output = result.final_output
     if not isinstance(output, SpecialistResult):
         output = SpecialistResult.model_validate(output)
-    output = validate_analyst_result(output, context.ledger)
+    output = persist_analyst_result(output, context)
     context.ledger.record_specialist_result(AgentRole.ANALYST.value, output)
     return output
 
@@ -166,9 +233,11 @@ async def run_analyst(
 __all__ = [
     "ANALYST_INSTRUCTIONS",
     "ANALYST_OBJECTIVE",
+    "AnalystArtifactError",
     "AnalystEvidenceError",
     "build_analyst_agent",
     "create_analyst_agent",
+    "persist_analyst_result",
     "run_analyst",
     "validate_analyst_result",
 ]

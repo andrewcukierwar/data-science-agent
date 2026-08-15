@@ -191,50 +191,24 @@ class _NestedSpecialistHooks(RunHooks[AgentRunContext]):
                     # or SDK failures that do not produce a specialist result.
                     specialist_result = None
                 if specialist_result is not None:
-                    executed_refs = {
-                        event.id for event in runtime_context.ledger.tool_events
-                    }
-                    executed_refs.update(
-                        reference
-                        for event in runtime_context.ledger.tool_events
-                        for reference in event.artifact_refs
-                    )
-                    executed_refs.update(
-                        artifact.id for artifact in runtime_context.ledger.artifacts
-                    )
-                    executed_refs.update(
-                        artifact.path for artifact in runtime_context.ledger.artifacts
-                    )
-                    for finding in specialist_result.findings:
-                        if (
-                            finding.metric is not None or finding.value is not None
-                        ) and not any(
-                            reference in executed_refs
-                            for reference in finding.evidence_refs
-                        ):
-                            raise ValueError(
-                                "specialist finding lacks executed evidence: "
-                                f"{finding.id}"
-                            )
+                    if self.role is AgentRole.ANALYST:
+                        from agents.analyst import persist_analyst_result
+
+                        specialist_result = persist_analyst_result(
+                            specialist_result,
+                            runtime_context,
+                        )
+                    else:
+                        from agents.statistician import persist_statistician_result
+
+                        specialist_result = persist_statistician_result(
+                            specialist_result,
+                            runtime_context,
+                        )
                     runtime_context.ledger.record_specialist_result(
                         self.role.value,
                         specialist_result,
                     )
-                    for finding in specialist_result.findings:
-                        existing = next(
-                            (
-                                item
-                                for item in runtime_context.ledger.findings
-                                if item.id == finding.id
-                            ),
-                            None,
-                        )
-                        if existing is None:
-                            runtime_context.ledger.add_finding(finding)
-                        elif existing != finding:
-                            raise ValueError(
-                                f"specialist finding id conflicts: {finding.id}"
-                            )
             runtime_context.ledger.record_agent_event(
                 agent_name=agent.name,
                 agent_role=self.role.value,
