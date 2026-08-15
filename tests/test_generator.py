@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -103,6 +104,30 @@ def test_customer_relationships_and_dates_are_valid() -> None:
     assert (
         dataset.marketing_spend["clicks"] <= dataset.marketing_spend["impressions"]
     ).all()
+    assert (
+        (
+            dataset.orders["gross_revenue"]
+            - dataset.orders["discount"]
+            - dataset.orders["refund"]
+        )
+        .round(2)
+        .eq(dataset.orders["net_revenue"])
+        .all()
+    )
+
+
+def test_marketing_spend_scales_with_configured_company_size() -> None:
+    small = SyntheticEcommerceGenerator(
+        SyntheticEcommerceConfig(num_customers=1_000)
+    )._generate_marketing_spend(np.random.default_rng(123))
+    reference = SyntheticEcommerceGenerator(
+        SyntheticEcommerceConfig(num_customers=50_000)
+    )._generate_marketing_spend(np.random.default_rng(123))
+
+    ratio = reference["spend"].sum() / small["spend"].sum()
+    assert ratio == pytest.approx(50.0, rel=1e-6)
+    assert small["spend"].sum() / 1_000 < 1_000
+    assert 100 < reference["spend"].sum() / 50_000 < 300
 
 
 def test_write_outputs_parquet_tables_and_documentation(tmp_path: Path) -> None:

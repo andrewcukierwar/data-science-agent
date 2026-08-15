@@ -16,6 +16,7 @@ DEFAULT_CHANNELS = (
     "Affiliate",
     "Organic",
 )
+REFERENCE_CUSTOMER_COUNT = 50_000
 REGIONS = ("Northeast", "South", "Midwest", "West")
 DEVICES = ("mobile", "desktop", "tablet")
 
@@ -156,20 +157,29 @@ class SyntheticEcommerceGenerator:
         product_indices = rng.integers(0, self.config.num_products, size=order_count)
         quantity = rng.integers(1, 4, size=order_count)
         unit_prices = np.linspace(18.0, 180.0, self.config.num_products)
-        gross_revenue = (
+        gross_revenue = np.round(
             unit_prices[product_indices]
             * quantity
-            * rng.lognormal(mean=0.0, sigma=0.08, size=order_count)
+            * rng.lognormal(mean=0.0, sigma=0.08, size=order_count),
+            2,
         )
-        discount = gross_revenue * rng.beta(2.0, 18.0, size=order_count) * 0.35
+        discount = np.round(
+            gross_revenue * rng.beta(2.0, 18.0, size=order_count) * 0.35,
+            2,
+        )
+        discount = np.minimum(discount, gross_revenue)
         discounted_revenue = gross_revenue - discount
         refunded = rng.random(order_count) < 0.03
-        refund = np.where(
-            refunded,
-            discounted_revenue * rng.uniform(0.25, 1.0, size=order_count),
-            0.0,
+        refund = np.round(
+            np.where(
+                refunded,
+                discounted_revenue * rng.uniform(0.25, 1.0, size=order_count),
+                0.0,
+            ),
+            2,
         )
-        net_revenue = discounted_revenue - refund
+        refund = np.minimum(refund, discounted_revenue)
+        net_revenue = np.round(discounted_revenue - refund, 2)
         cogs = net_revenue * rng.uniform(0.28, 0.58, size=order_count)
 
         return pd.DataFrame(
@@ -183,10 +193,10 @@ class SyntheticEcommerceGenerator:
                 ),
                 "product_id": [f"P{index + 1:03d}" for index in product_indices],
                 "quantity": quantity,
-                "gross_revenue": np.round(gross_revenue, 2),
-                "discount": np.round(discount, 2),
-                "refund": np.round(refund, 2),
-                "net_revenue": np.round(net_revenue, 2),
+                "gross_revenue": gross_revenue,
+                "discount": discount,
+                "refund": refund,
+                "net_revenue": net_revenue,
                 "cogs": np.round(cogs, 2),
             }
         )
@@ -246,7 +256,8 @@ class SyntheticEcommerceGenerator:
         channel_count = len(self.config.channels)
         channel_positions = np.tile(np.arange(channel_count), day_count)
         day_positions = np.repeat(np.arange(day_count), channel_count)
-        base_spend = np.linspace(9_000.0, 2_000.0, channel_count)
+        company_scale = self.config.num_customers / REFERENCE_CUSTOMER_COUNT
+        base_spend = np.linspace(9_000.0, 2_000.0, channel_count) * company_scale
         base_cpm = np.linspace(8.0, 18.0, channel_count)
         base_ctr = np.linspace(0.018, 0.045, channel_count)
         seasonal = 1.0 + 0.12 * np.sin(2 * np.pi * day_positions / day_count)
