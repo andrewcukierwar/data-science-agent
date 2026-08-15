@@ -4,7 +4,7 @@ See `PROJECT_PLAN.md` for the full architecture, implementation plan, and roadma
 
 ## Current Phase
 
-Phase 0: Foundation.
+Phase 1: Multi-Agent MVP.
 
 Do not implement future phases unless explicitly requested.
 

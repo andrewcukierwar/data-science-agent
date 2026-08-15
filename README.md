@@ -2,8 +2,9 @@
 
 Foundation for an evidence-backed, multi-agent business analytics system.
 
-The repository is currently in Phase 0: deterministic project infrastructure and
-package boundaries are being established before agent behavior is implemented.
+Phase 0 deterministic infrastructure is complete. Phase 1: Multi-Agent MVP is
+underway; agent behavior is being added on top of the tested execution and
+evidence foundation.
 
 ## Development
 

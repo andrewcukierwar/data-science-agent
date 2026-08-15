@@ -1092,9 +1092,20 @@ Build deterministic infrastructure before agent intelligence.
 
 ### Current status
 
-The original six foundation tasks have been implemented: repository scaffolding, typed schemas, workspace lifecycle, DuckDB execution, persistent Analysis Ledger, and deterministic synthetic ecommerce generation.
+The deterministic foundation is complete: repository scaffolding, typed schemas,
+workspace lifecycle, DuckDB execution, persistent Analysis Ledger, synthetic
+ecommerce generation, artifact provenance, Docker-backed Python execution, and
+the end-to-end acceptance path are implemented.
 
-Phase 0 is **not complete until the remaining execution and integration work below is finished**.
+Phase 1: Multi-Agent MVP is now underway. Agent behavior remains intentionally
+outside the completed Phase 0 foundation work.
+
+### Phase 0 completion status
+
+- [x] Safe workspaces, artifacts, and persistent typed ledger
+- [x] Bounded SQL and Docker-backed Python execution
+- [x] Deterministic SQL → Python → artifact → ledger acceptance test
+- [x] GitHub Actions checks for pytest and Ruff
 
 ### Build
 
@@ -1105,14 +1116,14 @@ Phase 0 is **not complete until the remaining execution and integration work bel
 - [x] Analysis Ledger
 - [x] DuckDB execution tool
 - [x] First synthetic ecommerce dataset
-- [ ] Artifact manager with provenance
-- [ ] Docker-backed Python execution tool
-- [ ] Sandbox executor / Docker runtime
-- [ ] Bounded SQL result materialization and budget accounting
-- [ ] End-to-end deterministic Phase 0 integration test
-- [ ] CI for pytest + Ruff
+- [x] Artifact manager with provenance
+- [x] Docker-backed Python execution tool
+- [x] Sandbox executor / Docker runtime
+- [x] Bounded SQL result materialization and budget accounting
+- [x] End-to-end deterministic Phase 0 integration test
+- [x] CI for pytest + Ruff
 
-### Remaining Phase 0 tasks
+### Phase 0 task record
 
 #### Task 7 — Artifact management
 
@@ -1754,16 +1765,18 @@ Acceptance criteria:
 - [x] DuckDB can query approved workspace data and persist tool events.
 - [x] Analysis Ledger persists typed structured state.
 - [x] No API keys or `.env` secrets are committed.
-- [ ] Artifact manager is implemented and tested.
-- [ ] Python execution can analyze approved workspace data inside the Docker sandbox.
-- [ ] Docker sandbox prevents input mutation, host filesystem escape, and network access.
-- [ ] DuckDB result materialization is bounded and SQL/Python usage updates budgets.
-- [ ] Deterministic Phase 0 integration test covers SQL → Python → artifact → ledger.
-- [ ] Full pytest suite passes.
-- [ ] Ruff check and format check pass.
-- [ ] GitHub Actions CI passes on `main`.
+- [x] Artifact manager is implemented and tested.
+- [x] Python execution can analyze approved workspace data inside the Docker sandbox.
+- [x] Docker sandbox prevents input mutation, host filesystem escape, and network access.
+- [x] DuckDB result materialization is bounded and SQL/Python usage updates budgets.
+- [x] Deterministic Phase 0 integration test covers SQL → Python → artifact → ledger.
+- [x] Full pytest suite passes.
+- [x] Ruff check and format check pass.
+- [x] GitHub Actions CI runs deterministic checks on `main`.
 
-Once this milestone is complete, mark Phase 0 complete and begin **Phase 1 Task 1: the canonical profitability scenario**, followed by the shared agent runtime/tool-adapter layer. Do not jump directly to the Analyst.
+This milestone is complete. Begin **Phase 1 Task 1: the canonical profitability
+scenario**, followed by the shared agent runtime/tool-adapter layer. Do not jump
+directly to the Analyst.
 
 ---
 
@@ -1837,17 +1850,12 @@ A beautiful interface around a weak agent is not the goal.
 
 Current recommended sequence:
 
-1. Complete **Phase 0 Task 7 — Artifact management**.
-2. Complete **Phase 0 Task 8 — Docker-backed Python execution**.
-3. Complete **Phase 0 Task 9 — Execution hardening + integration acceptance test**.
-4. Complete **Phase 0 Task 10 — CI + phase transition**.
-5. Confirm pytest, Ruff, Docker-backed acceptance, and GitHub Actions all pass.
-6. Update `AGENTS.md` current phase to **Phase 1: Multi-Agent MVP**.
-7. Begin **Phase 1 Task 1 — Canonical profitability scenario**.
-8. Implement **Phase 1 Task 2 — Agents SDK runtime/tool adapters**.
-9. Implement specialists independently in this order: Analyst → Data Auditor → Statistician → Critic.
-10. Implement the Lead only after the specialist contracts and tools are stable.
-11. Implement `AnalysisRunner` to enforce mandatory audit/critic workflow and bounded remediation.
-12. Run the canonical end-to-end acceptance scenario with no human steering.
+1. Keep deterministic pytest, Ruff, and Docker-backed acceptance checks green in CI.
+2. Begin **Phase 1 Task 1 — Canonical profitability scenario**.
+3. Implement **Phase 1 Task 2 — Agents SDK runtime/tool adapters**.
+4. Implement specialists independently in this order: Analyst → Data Auditor → Statistician → Critic.
+5. Implement the Lead only after the specialist contracts and tools are stable.
+6. Implement `AnalysisRunner` to enforce mandatory audit/critic workflow and bounded remediation.
+7. Run the canonical end-to-end acceptance scenario with no human steering.
 
 Do not build Streamlit or AWS infrastructure during Phase 1. The priority is proving the autonomous analytical system works and is reproducible.
