@@ -41,6 +41,10 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
     lead_calls = 0
     critic_calls = 0
     audit = _audit()
+    hypothesis = Hypothesis(
+        id="H001",
+        statement="Acquisition efficiency declined.",
+    )
 
     async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
         assert context.agent_role is AgentRole.DATA_AUDITOR
@@ -59,18 +63,14 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
             context.ledger.update_investigation_plan(
                 ["Read definitions", "Test the primary profitability drivers"]
             )
-            context.ledger.upsert_hypothesis(
-                Hypothesis(
-                    id="H001",
-                    statement="Acquisition efficiency declined.",
-                )
-            )
+            context.ledger.upsert_hypothesis(hypothesis)
         else:
             assert "CRITIC_VALIDATION_JSON" in objective
         context.record_sdk_usage(_usage())
         return LeadResult(
             objective="Explain profitability.",
             answer="Acquisition efficiency is the leading observed explanation.",
+            hypotheses=[hypothesis],
             findings=[
                 Finding(
                     id="F001",
@@ -141,6 +141,7 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
     ]
     assert result.ledger.hypotheses[0].id == "H001"
     assert result.ledger.hypothesis_history[0].id == "H001"
+    assert len(result.ledger.hypothesis_history) == 1
     assert result.ledger.findings[0].id == "F001"
     assert result.ledger.state.final_report == result.report
     assert len(result.ledger.validation_results) == 2

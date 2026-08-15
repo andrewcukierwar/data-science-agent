@@ -321,6 +321,8 @@ class AnalysisLedger(ToolEventLedger):
 
         for index, current in enumerate(self.hypotheses):
             if current.id == hypothesis.id:
+                if current == hypothesis:
+                    return current
                 self._state.hypotheses[index] = hypothesis
                 self._state.hypothesis_history.append(hypothesis)
                 self._sync_rejected_hypotheses()

@@ -100,6 +100,18 @@ def test_rejected_hypotheses_are_kept_in_ledger_state(tmp_path: Path) -> None:
     assert ledger.state.rejected_hypotheses == ["H001"]
 
 
+def test_identical_hypothesis_updates_are_idempotent(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    hypothesis = Hypothesis(id="H001", statement="AOV declined in Q2.")
+    ledger.add_hypothesis(hypothesis)
+    history_length = len(ledger.hypothesis_history)
+
+    assert ledger.update_hypothesis(hypothesis) == hypothesis
+    assert ledger.upsert_hypothesis(hypothesis) == hypothesis
+    assert len(ledger.hypothesis_history) == history_length
+    assert len(AnalysisLedger(ledger.state_path).hypothesis_history) == 1
+
+
 def test_duplicate_ids_are_rejected_without_overwriting_disk_state(
     tmp_path: Path,
 ) -> None:
