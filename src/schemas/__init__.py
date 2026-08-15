@@ -10,6 +10,7 @@ from schemas.audit import (
     TableAudit,
 )
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
+from schemas.lead import LeadRecommendation, LeadResult, SpecialistTask
 from schemas.run_state import (
     AnalysisLedger,
     AnalysisRunState,
@@ -46,9 +47,12 @@ __all__ = [
     "Hypothesis",
     "HypothesisStatus",
     "IssueSeverity",
+    "LeadRecommendation",
+    "LeadResult",
     "RunBudget",
     "RunStatus",
     "SpecialistResult",
+    "SpecialistTask",
     "TableAudit",
     "ToolEvent",
     "ToolEventStatus",

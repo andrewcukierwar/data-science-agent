@@ -183,6 +183,34 @@ class AnalysisLedger(ToolEventLedger):
                 return hypothesis
         raise KeyError(f"unknown hypothesis: {hypothesis.id}")
 
+    def upsert_hypothesis(self, hypothesis: Hypothesis) -> Hypothesis:
+        """Create a hypothesis or update its existing status and evidence."""
+
+        if any(current.id == hypothesis.id for current in self.hypotheses):
+            return self.update_hypothesis(hypothesis)
+        return self.add_hypothesis(hypothesis)
+
+    def update_investigation_plan(self, steps: Iterable[str]) -> list[str]:
+        """Replace the explicit investigation plan and persist it."""
+
+        normalized = [step.strip() for step in steps]
+        if not normalized or any(not step for step in normalized):
+            raise ValueError("investigation plan must contain non-empty steps")
+        self._state.investigation_plan = normalized
+        self.save()
+        return list(self._state.investigation_plan)
+
+    def add_open_question(self, question: str) -> str:
+        """Record a material unanswered question once."""
+
+        normalized = question.strip()
+        if not normalized:
+            raise ValueError("open question must be non-empty")
+        if normalized not in self._state.open_questions:
+            self._state.open_questions.append(normalized)
+            self.save()
+        return normalized
+
     def add_finding(self, finding: Finding) -> Finding:
         """Append a finding with a unique identifier."""
 

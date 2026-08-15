@@ -29,7 +29,16 @@ class AgentRole(StrEnum):
 
 
 _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
-    AgentRole.LEAD: frozenset({"inspect_workspace", "read_document", "save_artifact"}),
+    AgentRole.LEAD: frozenset(
+        {
+            "inspect_workspace",
+            "read_document",
+            "save_artifact",
+            "update_investigation_plan",
+            "record_hypothesis",
+            "record_open_question",
+        }
+    ),
     AgentRole.DATA_AUDITOR: frozenset(
         {"inspect_workspace", "read_document", "run_sql", "run_python"}
     ),
@@ -143,6 +152,7 @@ class AgentRunContext:
     artifact_manager: ArtifactManager
     run_config: AgentRunConfig
     budget_manager: RunBudgetManager = field(init=False, repr=False)
+    _role_stack: list[AgentRole] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Reject cross-run dependencies that could break isolation."""
@@ -163,7 +173,20 @@ class AgentRunContext:
     def agent_role(self) -> AgentRole:
         """Role controlling this context's available tools."""
 
-        return self.run_config.agent_role
+        return self._role_stack[-1] if self._role_stack else self.run_config.agent_role
+
+    def enter_nested_role(self, role: AgentRole | str) -> None:
+        """Activate a specialist permission boundary for a nested agent tool."""
+
+        self._role_stack.append(AgentRole(role))
+
+    def exit_nested_role(self, role: AgentRole | str) -> None:
+        """Restore the parent permission boundary after a nested agent tool."""
+
+        expected_role = AgentRole(role)
+        if not self._role_stack or self._role_stack[-1] is not expected_role:
+            raise RuntimeError("nested agent role stack is out of order")
+        self._role_stack.pop()
 
     def allowed_tools(self) -> frozenset[str]:
         """Return the role's permitted tool names."""
