@@ -2,6 +2,7 @@
 
 from datetime import date
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -76,6 +77,50 @@ def _cohort_90_day_ltv(dataset, customer_ids: set[str]) -> float:
     in_window = order_age.between(pd.Timedelta(0), pd.Timedelta(days=90))
     revenue = orders.loc[in_window].groupby("customer_id")["net_revenue"].sum()
     return float(revenue.reindex(customer_ids, fill_value=0.0).mean())
+
+
+def _customer_90_day_ltv(
+    dataset,
+    period: int,
+    channel: str | None = None,
+) -> pd.Series:
+    customer_mask = _period_mask(dataset.customers["acquisition_date"], period)
+    if channel is not None:
+        customer_mask &= dataset.customers["acquisition_channel"].eq(channel)
+    customer_ids = set(dataset.customers.loc[customer_mask, "customer_id"])
+    customers = dataset.customers.set_index("customer_id")
+    acquisition_dates = pd.to_datetime(
+        customers.loc[list(customer_ids), "acquisition_date"]
+    )
+    orders = dataset.orders[dataset.orders["customer_id"].isin(customer_ids)].copy()
+    order_age = pd.to_datetime(orders["order_date"]) - orders["customer_id"].map(
+        acquisition_dates
+    )
+    in_window = order_age.between(pd.Timedelta(0), pd.Timedelta(days=90))
+    revenue = orders.loc[in_window].groupby("customer_id")["net_revenue"].sum()
+    return revenue.reindex(sorted(customer_ids), fill_value=0.0)
+
+
+def _customer_90_day_contribution_profit(
+    dataset,
+    period: int,
+) -> pd.Series:
+    customer_mask = _period_mask(dataset.customers["acquisition_date"], period)
+    customer_ids = set(dataset.customers.loc[customer_mask, "customer_id"])
+    customers = dataset.customers.set_index("customer_id")
+    acquisition_dates = pd.to_datetime(
+        customers.loc[list(customer_ids), "acquisition_date"]
+    )
+    orders = dataset.orders[dataset.orders["customer_id"].isin(customer_ids)].copy()
+    order_age = pd.to_datetime(orders["order_date"]) - orders["customer_id"].map(
+        acquisition_dates
+    )
+    in_window = order_age.between(pd.Timedelta(0), pd.Timedelta(days=90))
+    orders = orders.loc[in_window].assign(
+        contribution_profit=lambda frame: frame["net_revenue"] - frame["cogs"]
+    )
+    profit = orders.groupby("customer_id")["contribution_profit"].sum()
+    return profit.reindex(sorted(customer_ids), fill_value=0.0)
 
 
 def _reporting_contribution_profit(
@@ -369,6 +414,26 @@ def test_exact_canonical_live_configuration_has_a_meta_root_cause() -> None:
         .eq(scenario.orders["net_revenue"])
         .all()
     )
+
+
+def test_exact_canonical_customer_economics_have_realistic_variance() -> None:
+    scenario = generate_canonical_profitability_scenario(
+        _canonical_live_config()
+    ).dataset
+
+    q1_ltv = _customer_90_day_ltv(scenario, 1)
+    q2_ltv = _customer_90_day_ltv(scenario, 2)
+    q1_meta_ltv = _customer_90_day_ltv(scenario, 1, "Meta")
+    q2_meta_ltv = _customer_90_day_ltv(scenario, 2, "Meta")
+    q1_profit = _customer_90_day_contribution_profit(scenario, 1)
+    q2_profit = _customer_90_day_contribution_profit(scenario, 2)
+
+    for values in (q1_ltv, q2_ltv, q1_meta_ltv, q2_meta_ltv, q1_profit, q2_profit):
+        assert np.var(values.to_numpy()) > 0.0
+        assert values.nunique() >= 50
+
+    meta_ltv_change = q2_meta_ltv.mean() / q1_meta_ltv.mean() - 1.0
+    assert meta_ltv_change == pytest.approx(0.0, abs=0.05)
 
 
 def test_canonical_scenario_preserves_data_quality_and_order_coherence() -> None:

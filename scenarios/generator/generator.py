@@ -171,45 +171,49 @@ class SyntheticEcommerceGenerator:
         maximum_offsets = (
             self.config.period_days - 1 - acquisition_offsets[customer_indices]
         )
-        cycle_offsets = np.floor(rng.exponential(scale=60.0, size=cycle_count)).astype(
-            np.int64
-        )
+        # Keep the balanced customer assignment above, but draw every order's
+        # economics independently. Reusing one realization per cycle makes all
+        # customers in a cycle share identical timing, products, discounts, and
+        # margins, which collapses customer-level LTV distributions.
         order_offsets = np.minimum(
-            cycle_offsets[cycle_indices],
+            np.floor(rng.exponential(scale=60.0, size=order_count)).astype(np.int64),
             maximum_offsets,
         )
         product_indices = rng.integers(
             0,
             self.config.num_products,
-            size=cycle_count,
-        )[cycle_indices]
-        quantity = rng.integers(1, 4, size=cycle_count)[cycle_indices]
+            size=order_count,
+        )
+        quantity = rng.choice(
+            np.array([1, 2, 3, 4], dtype=np.int64),
+            size=order_count,
+            p=np.array([0.52, 0.30, 0.13, 0.05]),
+        )
         unit_prices = np.linspace(18.0, 180.0, self.config.num_products)
         gross_revenue = np.round(
             unit_prices[product_indices]
             * quantity
-            * rng.lognormal(mean=0.0, sigma=0.08, size=cycle_count)[cycle_indices],
+            * rng.lognormal(mean=0.0, sigma=0.12, size=order_count),
             2,
         )
         discount = np.round(
-            gross_revenue * rng.beta(2.0, 18.0, size=cycle_count)[cycle_indices] * 0.35,
+            gross_revenue * rng.beta(2.0, 18.0, size=order_count) * 0.35,
             2,
         )
         discount = np.minimum(discount, gross_revenue)
         discounted_revenue = gross_revenue - discount
-        refunded = rng.random(cycle_count)[cycle_indices] < 0.03
+        refunded = rng.random(order_count) < 0.03
         refund = np.round(
             np.where(
                 refunded,
-                discounted_revenue
-                * rng.uniform(0.25, 1.0, size=cycle_count)[cycle_indices],
+                discounted_revenue * rng.uniform(0.20, 0.85, size=order_count),
                 0.0,
             ),
             2,
         )
         refund = np.minimum(refund, discounted_revenue)
         net_revenue = np.round(discounted_revenue - refund, 2)
-        cogs = net_revenue * rng.uniform(0.28, 0.58, size=cycle_count)[cycle_indices]
+        cogs = np.round(net_revenue * rng.uniform(0.28, 0.58, size=order_count), 2)
 
         return pd.DataFrame(
             {

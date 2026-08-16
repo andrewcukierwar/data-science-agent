@@ -86,13 +86,18 @@ def test_configured_sizes_and_canonical_columns_are_respected() -> None:
 
 
 def test_customer_relationships_and_dates_are_valid() -> None:
-    dataset = SyntheticEcommerceGenerator(_small_config()).generate()
+    config = _small_config()
+    dataset = SyntheticEcommerceGenerator(config).generate()
     customers = dataset.customers.set_index("customer_id")
 
     assert set(dataset.orders["customer_id"]).issubset(customers.index)
     assert (
         dataset.orders["order_date"]
         >= dataset.orders["customer_id"].map(customers["acquisition_date"])
+    ).all()
+    assert (
+        dataset.orders["order_date"]
+        <= config.start_date + pd.Timedelta(days=config.period_days - 1)
     ).all()
     converted = dataset.sessions["converted"].astype(bool)
     converted_sessions = dataset.sessions.loc[converted].set_index("customer_id")
@@ -105,6 +110,11 @@ def test_customer_relationships_and_dates_are_valid() -> None:
     assert dataset.sessions["session_date"].notna().all()
     assert (dataset.orders["net_revenue"] >= 0).all()
     assert (dataset.orders["cogs"] >= 0).all()
+    assert (dataset.orders["cogs"] < dataset.orders["net_revenue"]).all()
+    assert (
+        dataset.orders["gross_revenue"]
+        >= dataset.orders["discount"] + dataset.orders["refund"]
+    ).all()
     assert (
         dataset.marketing_spend["clicks"] <= dataset.marketing_spend["impressions"]
     ).all()
@@ -118,6 +128,28 @@ def test_customer_relationships_and_dates_are_valid() -> None:
         .eq(dataset.orders["net_revenue"])
         .all()
     )
+
+
+def test_order_economics_vary_across_the_exact_canonical_fixture() -> None:
+    config = SyntheticEcommerceConfig(
+        seed=42,
+        num_customers=1_000,
+        num_orders=4_000,
+        num_sessions=8_000,
+        num_products=4,
+        period_days=365,
+    )
+    orders = SyntheticEcommerceGenerator(config).generate().orders
+    customer_order_counts = orders.groupby("customer_id").size()
+
+    assert customer_order_counts.max() - customer_order_counts.min() <= 1
+    assert orders["order_date"].nunique() > 100
+    assert orders["product_id"].nunique() == config.num_products
+    assert orders["quantity"].nunique() >= 3
+    assert orders["gross_revenue"].nunique() > 100
+    assert orders["discount"].nunique() > 50
+    assert orders["refund"].gt(0).any()
+    assert (orders["cogs"] / orders["net_revenue"]).round(3).nunique() > 100
 
 
 def test_converted_acquisition_sessions_reconcile_by_period_and_channel() -> None:
