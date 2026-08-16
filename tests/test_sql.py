@@ -176,11 +176,11 @@ def test_inspect_relations_returns_exact_canonical_metadata(tmp_path: Path) -> N
     ]
     assert [column.name for column in relations["sessions"].columns] == [
         "session_id",
-        "customer_id",
         "session_date",
         "channel",
         "device",
         "converted",
+        "customer_id",
     ]
     assert ledger.sql_executions == 1
     assert ledger.events[0].tool_name == "inspect_relations"

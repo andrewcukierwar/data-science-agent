@@ -21,11 +21,12 @@ _SCENARIO_DEFINITIONS = """
 ## Canonical Q2 scenario reporting definitions
 
 - **Reporting contribution profit**: for a reporting period and acquisition
-  channel, sum `net_revenue` for orders belonging to customers acquired in that
-  period and channel, subtract their `cogs`, and subtract `marketing_spend`
-  recorded for that channel during the same period. This is the scenario's
-  reporting-level profitability metric:
-  `SUM(net_revenue) - SUM(cogs) - SUM(marketing_spend)`.
+  channel, sum `net_revenue - cogs` for orders from customers acquired in that
+  period and channel when the order falls from `acquisition_date` through
+  `acquisition_date + 90 days`, then subtract `marketing_spend` recorded for
+  that channel during the acquisition period. The same 90-day observation
+  window is used for Q1 and Q2:
+  `SUM(net_revenue - cogs) - SUM(marketing_spend)`.
 - **Acquired-customer 90-day LTV**: for a customer cohort, average each
   customer's cumulative `net_revenue` from acquisition through 90 days after
   acquisition. LTV does not include marketing spend.
@@ -44,7 +45,6 @@ class CanonicalScenarioInjectionConfig(BaseModel):
     q2_start: date = date(2025, 4, 1)
     q2_end: date = date(2025, 6, 30)
     meta_q2_conversion_multiplier: float = Field(default=0.82, gt=0, le=1)
-    meta_q2_customer_multiplier: float = Field(default=0.82, gt=0, le=1)
     meta_q2_spend_multiplier: float = Field(default=1.07, gt=0)
 
     @model_validator(mode="after")
@@ -98,22 +98,6 @@ class CanonicalProfitabilityScenarioInjector:
 
         year_start = date(self.config.q2_start.year, 1, 1)
         q1_end = self.config.q2_start - timedelta(days=1)
-        q1_customer_mask = self._date_mask(
-            customers["acquisition_date"], year_start, q1_end
-        )
-        q2_customer_mask = self._date_mask(
-            customers["acquisition_date"],
-            self.config.q2_start,
-            self.config.q2_end,
-        )
-        q1_meta_customers = customers.loc[
-            q1_customer_mask
-            & customers["acquisition_channel"].eq(self.config.meta_channel)
-        ].sort_values("customer_id")
-        q2_meta_customers = customers.loc[
-            q2_customer_mask
-            & customers["acquisition_channel"].eq(self.config.meta_channel)
-        ].sort_values("customer_id")
         q1_session_mask = self._date_mask(
             sessions["session_date"], year_start, q1_end
         ) & sessions["channel"].eq(self.config.meta_channel)
@@ -123,7 +107,6 @@ class CanonicalProfitabilityScenarioInjector:
             self.config.q2_end,
         ) & sessions["channel"].eq(self.config.meta_channel)
         self._validate_scenario_window(
-            q2_meta_customers,
             q2_session_mask,
             sessions,
             self._date_mask(
@@ -133,41 +116,52 @@ class CanonicalProfitabilityScenarioInjector:
             )
             & marketing_spend["channel"].eq(self.config.meta_channel),
         )
-        q1_conversion_rate = float(
-            sessions.loc[q1_session_mask, "converted"].astype(bool).mean()
+        self._rebalance_meta_session_volume(
+            sessions,
+            q1_session_mask,
+            q2_session_mask,
+            q1_start=year_start,
+            q1_end=q1_end,
+            q2_start=self.config.q2_start,
+            q2_end=self.config.q2_end,
         )
-        if q1_conversion_rate <= 0:
+        q1_session_mask = self._date_mask(
+            sessions["session_date"], year_start, q1_end
+        ) & sessions["channel"].eq(self.config.meta_channel)
+        q2_session_mask = self._date_mask(
+            sessions["session_date"],
+            self.config.q2_start,
+            self.config.q2_end,
+        ) & sessions["channel"].eq(self.config.meta_channel)
+
+        q1_converted_count = int(
+            sessions.loc[q1_session_mask, "converted"].astype(bool).sum()
+        )
+        q2_converted_indices = sessions.index[
+            q2_session_mask & sessions["converted"].astype(bool)
+        ]
+        if q1_converted_count <= 0:
             raise ValueError("baseline must contain converted Meta sessions in Q1")
-        converted_q2_customer_ids = set(
-            sessions.loc[
-                q2_session_mask & sessions["converted"].astype(bool), "customer_id"
-            ]
+        target_q2_converted_count = round(
+            q1_converted_count * self.config.meta_q2_conversion_multiplier
         )
-        q2_session_customer_ids = set(sessions.loc[q2_session_mask, "customer_id"])
-        removal_candidates = pd.concat(
-            [
-                q2_meta_customers.loc[
-                    q2_meta_customers["customer_id"].isin(converted_q2_customer_ids),
-                    "customer_id",
-                ],
-                q2_meta_customers.loc[
-                    q2_meta_customers["customer_id"].isin(q2_session_customer_ids)
-                    & ~q2_meta_customers["customer_id"].isin(converted_q2_customer_ids),
-                    "customer_id",
-                ],
-                q2_meta_customers.loc[
-                    ~q2_meta_customers["customer_id"].isin(q2_session_customer_ids),
-                    "customer_id",
-                ],
-            ],
-            ignore_index=True,
-        ).drop_duplicates()
-        removed_customer_ids = self._select_removed_ids(
-            q2_meta_customers["customer_id"],
-            len(q1_meta_customers),
-            removal_candidates,
-            self.config.meta_q2_customer_multiplier,
+        if target_q2_converted_count < 1:
+            raise ValueError("scenario must retain at least one Q2 Meta acquisition")
+        if target_q2_converted_count > len(q2_converted_indices):
+            raise ValueError(
+                "baseline Q2 Meta acquisition traffic cannot support the requested "
+                "conversion target"
+            )
+        removed_session_indices = sorted(
+            q2_converted_indices,
+            key=lambda index: str(sessions.at[index, "customer_id"]),
+        )[: len(q2_converted_indices) - target_q2_converted_count]
+        removed_customer_ids = set(
+            sessions.loc[removed_session_indices, "customer_id"].astype(str)
         )
+        if removed_session_indices:
+            sessions.loc[removed_session_indices, "converted"] = False
+            sessions.loc[removed_session_indices, "customer_id"] = None
         removed_mask = customers["customer_id"].isin(removed_customer_ids)
         customers = customers.loc[~removed_mask].reset_index(drop=True)
         orders = orders.loc[
@@ -176,17 +170,6 @@ class CanonicalProfitabilityScenarioInjector:
         sessions = sessions.loc[
             ~sessions["customer_id"].isin(removed_customer_ids)
         ].reset_index(drop=True)
-
-        q2_session_mask = self._date_mask(
-            sessions["session_date"],
-            self.config.q2_start,
-            self.config.q2_end,
-        ) & sessions["channel"].eq(self.config.meta_channel)
-        self._set_conversion_rate(
-            sessions,
-            q2_session_mask,
-            target_rate=q1_conversion_rate * self.config.meta_q2_conversion_multiplier,
-        )
 
         q1_spend_mask = self._date_mask(
             marketing_spend["date"], year_start, q1_end
@@ -202,7 +185,13 @@ class CanonicalProfitabilityScenarioInjector:
             q2_spend_mask,
         )
 
-        q1_meta_customer_ids = set(q1_meta_customers["customer_id"])
+        q1_meta_customer_ids = set(
+            customers.loc[
+                self._date_mask(customers["acquisition_date"], year_start, q1_end)
+                & customers["acquisition_channel"].eq(self.config.meta_channel),
+                "customer_id",
+            ]
+        )
         q2_meta_customer_ids = set(
             customers.loc[
                 self._date_mask(
@@ -226,6 +215,7 @@ class CanonicalProfitabilityScenarioInjector:
                 target_ltv=q1_ltv,
             )
         self._validate_order_revenue_identity(orders)
+        self._validate_acquisition_funnel(customers, sessions)
         self._validate_referential_integrity(customers, orders, sessions)
 
         return SyntheticEcommerceDataset(
@@ -257,13 +247,10 @@ class CanonicalProfitabilityScenarioInjector:
 
     @staticmethod
     def _validate_scenario_window(
-        q2_meta_customers: pd.DataFrame,
         q2_meta_session_mask: pd.Series,
         sessions: pd.DataFrame,
         q2_meta_spend_mask: pd.Series,
     ) -> None:
-        if q2_meta_customers.empty:
-            raise ValueError("baseline must contain Meta customers in the Q2 window")
         if (
             not q2_meta_session_mask.any()
             or not (q2_meta_session_mask & sessions["converted"].astype(bool)).any()
@@ -287,24 +274,45 @@ class CanonicalProfitabilityScenarioInjector:
         return normalized.ge(start) & normalized.le(end)
 
     @staticmethod
-    def _select_removed_ids(
-        customer_ids: pd.Series,
-        q1_customer_count: int,
-        preferred_ids: pd.Series,
-        retention_multiplier: float,
-    ) -> set[str]:
-        target_count = round(q1_customer_count * retention_multiplier)
-        remove_count = len(customer_ids) - target_count
-        if target_count > len(customer_ids):
-            raise ValueError("baseline Q2 Meta cohort is smaller than the target")
-        if remove_count <= 0:
-            return set()
-        if target_count < 1:
-            raise ValueError("scenario target must retain at least one Meta customer")
-        ordered_candidates = pd.concat(
-            [preferred_ids, customer_ids[~customer_ids.isin(preferred_ids)]]
-        ).drop_duplicates()
-        return set(ordered_candidates.iloc[:remove_count])
+    def _rebalance_meta_session_volume(
+        sessions: pd.DataFrame,
+        q1_mask: pd.Series,
+        q2_mask: pd.Series,
+        *,
+        q1_start: date,
+        q1_end: date,
+        q2_start: date,
+        q2_end: date,
+    ) -> None:
+        """Keep Q1 and Q2 Meta acquisition traffic comparable.
+
+        Only anonymous non-converting sessions may be moved between periods.
+        Converted acquisition sessions remain anchored to their customers'
+        acquisition dates, preserving the funnel invariant.
+        """
+
+        q1_count = int(q1_mask.sum())
+        q2_count = int(q2_mask.sum())
+        difference = q2_count - q1_count
+        if abs(difference) <= 1:
+            return
+
+        if difference > 0:
+            source_mask = q2_mask & sessions["customer_id"].isna()
+            target_start, target_end = q1_start, q1_end
+        else:
+            source_mask = q1_mask & sessions["customer_id"].isna()
+            target_start, target_end = q2_start, q2_end
+
+        move_count = abs(difference) // 2
+        source_indices = sessions.index[source_mask].sort_values()[:move_count]
+        if len(source_indices) < move_count:
+            raise ValueError(
+                "baseline does not contain enough anonymous Meta acquisition "
+                "traffic to balance Q1 and Q2"
+            )
+        target_dates = pd.date_range(target_start, target_end, periods=move_count)
+        sessions.loc[source_indices, "session_date"] = target_dates.date
 
     @staticmethod
     def _cohort_90_day_ltv(
@@ -382,40 +390,64 @@ class CanonicalProfitabilityScenarioInjector:
         customer_ids = set(customers["customer_id"])
         if not set(orders["customer_id"]).issubset(customer_ids):
             raise ValueError("scenario orders reference an absent customer")
-        if not set(sessions["customer_id"]).issubset(customer_ids):
+        session_customer_ids = set(sessions["customer_id"].dropna())
+        if not session_customer_ids.issubset(customer_ids):
             raise ValueError("scenario sessions reference an absent customer")
 
     @staticmethod
-    def _set_conversion_rate(
+    def _validate_acquisition_funnel(
+        customers: pd.DataFrame,
         sessions: pd.DataFrame,
-        q2_meta_mask: pd.Series,
-        *,
-        target_rate: float,
     ) -> None:
-        session_indices = sessions.index[q2_meta_mask]
-        target_count = round(len(session_indices) * target_rate)
-        converted_indices = sessions.index[
-            q2_meta_mask & sessions["converted"].astype(bool)
-        ]
-        if target_count < len(converted_indices):
-            drop_count = len(converted_indices) - target_count
-            positions = np.floor(
-                np.arange(drop_count) * len(converted_indices) / drop_count
-            ).astype(int)
-            sessions.loc[converted_indices[positions], "converted"] = False
-        elif target_count > len(converted_indices):
-            unconverted_indices = sessions.index[
-                q2_meta_mask & ~sessions["converted"].astype(bool)
-            ]
-            add_count = min(
-                target_count - len(converted_indices), len(unconverted_indices)
+        """Validate the observable acquisition-session/customer invariant."""
+
+        customer_ids = set(customers["customer_id"])
+        converted = sessions["converted"].astype(bool)
+        converted_sessions = sessions.loc[converted]
+        if converted_sessions["customer_id"].isna().any():
+            raise ValueError("converted acquisition sessions require customer IDs")
+        if set(converted_sessions["customer_id"]) != customer_ids:
+            raise ValueError(
+                "each customer must correspond to exactly one converted "
+                "acquisition session"
             )
-            if add_count <= 0:
-                return
-            positions = np.floor(
-                np.arange(add_count) * len(unconverted_indices) / add_count
-            ).astype(int)
-            sessions.loc[unconverted_indices[positions], "converted"] = True
+        if converted_sessions["customer_id"].duplicated().any():
+            raise ValueError("customers must have exactly one converted session")
+        if sessions.loc[~converted, "customer_id"].notna().any():
+            raise ValueError(
+                "non-converting acquisition sessions must not claim a customer"
+            )
+
+        customer_lookup = customers.set_index("customer_id")
+        converted_with_customer = converted_sessions.set_index("customer_id")
+        if (
+            not pd.to_datetime(converted_with_customer["session_date"])
+            .eq(
+                pd.to_datetime(
+                    customer_lookup.loc[
+                        converted_with_customer.index, "acquisition_date"
+                    ]
+                )
+            )
+            .all()
+        ):
+            raise ValueError("converted sessions must occur on acquisition_date")
+        if (
+            not converted_with_customer["channel"]
+            .eq(
+                customer_lookup.loc[
+                    converted_with_customer.index, "acquisition_channel"
+                ]
+            )
+            .all()
+        ):
+            raise ValueError("converted session channels must match acquisition")
+        if (
+            not converted_with_customer["device"]
+            .eq(customer_lookup.loc[converted_with_customer.index, "device"])
+            .all()
+        ):
+            raise ValueError("converted session devices must match customer devices")
 
     def _set_spend_relative_to_q1(
         self,

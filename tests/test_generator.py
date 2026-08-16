@@ -70,11 +70,11 @@ def test_configured_sizes_and_canonical_columns_are_respected() -> None:
     ]
     assert list(dataset.sessions.columns) == [
         "session_id",
-        "customer_id",
         "session_date",
         "channel",
         "device",
         "converted",
+        "customer_id",
     ]
     assert list(dataset.marketing_spend.columns) == [
         "date",
@@ -87,18 +87,22 @@ def test_configured_sizes_and_canonical_columns_are_respected() -> None:
 
 def test_customer_relationships_and_dates_are_valid() -> None:
     dataset = SyntheticEcommerceGenerator(_small_config()).generate()
-    acquisition_dates = dataset.customers.set_index("customer_id")["acquisition_date"]
+    customers = dataset.customers.set_index("customer_id")
 
-    assert set(dataset.orders["customer_id"]).issubset(acquisition_dates.index)
-    assert set(dataset.sessions["customer_id"]).issubset(acquisition_dates.index)
+    assert set(dataset.orders["customer_id"]).issubset(customers.index)
     assert (
         dataset.orders["order_date"]
-        >= dataset.orders["customer_id"].map(acquisition_dates)
+        >= dataset.orders["customer_id"].map(customers["acquisition_date"])
     ).all()
-    assert (
-        dataset.sessions["session_date"]
-        >= dataset.sessions["customer_id"].map(acquisition_dates)
-    ).all()
+    converted = dataset.sessions["converted"].astype(bool)
+    converted_sessions = dataset.sessions.loc[converted].set_index("customer_id")
+    assert len(converted_sessions) == len(dataset.customers)
+    assert set(converted_sessions.index) == set(customers.index)
+    assert converted_sessions["session_date"].eq(customers["acquisition_date"]).all()
+    assert converted_sessions["channel"].eq(customers["acquisition_channel"]).all()
+    assert converted_sessions["device"].eq(customers["device"]).all()
+    assert dataset.sessions.loc[~converted, "customer_id"].isna().all()
+    assert dataset.sessions["session_date"].notna().all()
     assert (dataset.orders["net_revenue"] >= 0).all()
     assert (dataset.orders["cogs"] >= 0).all()
     assert (
@@ -114,6 +118,33 @@ def test_customer_relationships_and_dates_are_valid() -> None:
         .eq(dataset.orders["net_revenue"])
         .all()
     )
+
+
+def test_converted_acquisition_sessions_reconcile_by_period_and_channel() -> None:
+    dataset = SyntheticEcommerceGenerator(_small_config()).generate()
+    customers = dataset.customers.assign(
+        period=pd.to_datetime(dataset.customers["acquisition_date"]).dt.to_period("D")
+    )
+    sessions = dataset.sessions.loc[dataset.sessions["converted"]].assign(
+        period=pd.to_datetime(
+            dataset.sessions.loc[dataset.sessions["converted"], "session_date"]
+        ).dt.to_period("D")
+    )
+    customer_counts = customers.groupby(["period", "acquisition_channel"]).size()
+    session_counts = sessions.groupby(["period", "channel"]).size()
+    session_counts.index = session_counts.index.set_names(
+        ["period", "acquisition_channel"]
+    )
+    pd.testing.assert_series_equal(
+        customer_counts.sort_index(),
+        session_counts.sort_index(),
+        check_names=True,
+    )
+
+
+def test_session_count_must_cover_all_acquired_customers() -> None:
+    with pytest.raises(ValueError, match="num_sessions"):
+        SyntheticEcommerceConfig(num_customers=10, num_sessions=9)
 
 
 def test_marketing_spend_scales_with_configured_company_size() -> None:

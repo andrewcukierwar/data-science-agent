@@ -41,6 +41,11 @@ class SyntheticEcommerceConfig(BaseModel):
             raise ValueError("channels must be unique")
         if any(not channel.strip() for channel in self.channels):
             raise ValueError("channels must not be empty")
+        if self.num_sessions < self.num_customers:
+            raise ValueError(
+                "num_sessions must be at least num_customers so every acquired "
+                "customer can have one converted acquisition session"
+            )
         return self
 
 
@@ -104,7 +109,7 @@ class SyntheticEcommerceGenerator:
         rng = np.random.default_rng(self.config.seed)
         customers, acquisition_offsets = self._generate_customers(rng)
         orders = self._generate_orders(rng, customers, acquisition_offsets)
-        sessions = self._generate_sessions(rng, customers, acquisition_offsets)
+        sessions = self._generate_sessions(rng, customers)
         marketing_spend = self._generate_marketing_spend(rng)
         return SyntheticEcommerceDataset(
             customers=customers,
@@ -119,20 +124,24 @@ class SyntheticEcommerceGenerator:
         rng: np.random.Generator,
     ) -> tuple[pd.DataFrame, np.ndarray]:
         customer_count = self.config.num_customers
-        acquisition_offsets = rng.integers(
-            0, self.config.period_days, size=customer_count
-        )
+        acquisition_offsets = np.arange(customer_count) % self.config.period_days
+        rng.shuffle(acquisition_offsets)
+        acquisition_dates = self._dates_from_offsets(acquisition_offsets)
+        acquisition_quarters = pd.to_datetime(acquisition_dates).dt.quarter.to_numpy()
+        acquisition_channels = np.empty(customer_count, dtype=object)
+        for quarter in np.unique(acquisition_quarters):
+            quarter_indices = np.flatnonzero(acquisition_quarters == quarter)
+            acquisition_channels[quarter_indices] = self._balanced_channel_choices(
+                rng,
+                len(quarter_indices),
+            )
         customers = pd.DataFrame(
             {
                 "customer_id": [
                     f"C{index:06d}" for index in range(1, customer_count + 1)
                 ],
-                "acquisition_date": self._dates_from_offsets(acquisition_offsets),
-                "acquisition_channel": rng.choice(
-                    self.config.channels,
-                    size=customer_count,
-                    p=self._channel_probabilities(),
-                ),
+                "acquisition_date": acquisition_dates,
+                "acquisition_channel": acquisition_channels,
                 "region": rng.choice(REGIONS, size=customer_count),
                 "device": rng.choice(
                     DEVICES,
@@ -150,37 +159,57 @@ class SyntheticEcommerceGenerator:
         acquisition_offsets: np.ndarray,
     ) -> pd.DataFrame:
         order_count = self.config.num_orders
-        customer_indices = rng.integers(0, self.config.num_customers, size=order_count)
-        order_offsets = self._customer_relative_offsets(
-            rng, acquisition_offsets, customer_indices
+        customer_count = self.config.num_customers
+        cycle_indices = np.arange(order_count) // customer_count
+        cycle_count = int(cycle_indices.max()) + 1
+        customer_indices = np.arange(order_count) % customer_count
+        for cycle in range(cycle_count):
+            cycle_mask = cycle_indices == cycle
+            cycle_customers = customer_indices[cycle_mask].copy()
+            rng.shuffle(cycle_customers)
+            customer_indices[cycle_mask] = cycle_customers
+        maximum_offsets = (
+            self.config.period_days - 1 - acquisition_offsets[customer_indices]
         )
-        product_indices = rng.integers(0, self.config.num_products, size=order_count)
-        quantity = rng.integers(1, 4, size=order_count)
+        cycle_offsets = np.floor(rng.exponential(scale=60.0, size=cycle_count)).astype(
+            np.int64
+        )
+        order_offsets = np.minimum(
+            cycle_offsets[cycle_indices],
+            maximum_offsets,
+        )
+        product_indices = rng.integers(
+            0,
+            self.config.num_products,
+            size=cycle_count,
+        )[cycle_indices]
+        quantity = rng.integers(1, 4, size=cycle_count)[cycle_indices]
         unit_prices = np.linspace(18.0, 180.0, self.config.num_products)
         gross_revenue = np.round(
             unit_prices[product_indices]
             * quantity
-            * rng.lognormal(mean=0.0, sigma=0.08, size=order_count),
+            * rng.lognormal(mean=0.0, sigma=0.08, size=cycle_count)[cycle_indices],
             2,
         )
         discount = np.round(
-            gross_revenue * rng.beta(2.0, 18.0, size=order_count) * 0.35,
+            gross_revenue * rng.beta(2.0, 18.0, size=cycle_count)[cycle_indices] * 0.35,
             2,
         )
         discount = np.minimum(discount, gross_revenue)
         discounted_revenue = gross_revenue - discount
-        refunded = rng.random(order_count) < 0.03
+        refunded = rng.random(cycle_count)[cycle_indices] < 0.03
         refund = np.round(
             np.where(
                 refunded,
-                discounted_revenue * rng.uniform(0.25, 1.0, size=order_count),
+                discounted_revenue
+                * rng.uniform(0.25, 1.0, size=cycle_count)[cycle_indices],
                 0.0,
             ),
             2,
         )
         refund = np.minimum(refund, discounted_revenue)
         net_revenue = np.round(discounted_revenue - refund, 2)
-        cogs = net_revenue * rng.uniform(0.28, 0.58, size=order_count)
+        cogs = net_revenue * rng.uniform(0.28, 0.58, size=cycle_count)[cycle_indices]
 
         return pd.DataFrame(
             {
@@ -205,43 +234,71 @@ class SyntheticEcommerceGenerator:
         self,
         rng: np.random.Generator,
         customers: pd.DataFrame,
-        acquisition_offsets: np.ndarray,
     ) -> pd.DataFrame:
-        session_count = self.config.num_sessions
-        customer_indices = rng.integers(
-            0, self.config.num_customers, size=session_count
-        )
-        session_offsets = self._customer_relative_offsets(
-            rng, acquisition_offsets, customer_indices
-        )
-        channels = rng.choice(
-            self.config.channels,
-            size=session_count,
-            p=self._channel_probabilities(),
-        )
-        conversion_rates = np.linspace(0.075, 0.035, len(self.config.channels))
-        channel_positions = {
-            channel: position for position, channel in enumerate(self.config.channels)
-        }
-        converted = rng.random(session_count) < np.array(
-            [conversion_rates[channel_positions[channel]] for channel in channels]
-        )
-        return pd.DataFrame(
+        """Generate acquisition traffic with a reconciled conversion event.
+
+        Customer creation and conversion are intentionally one operation in the
+        baseline: each customer contributes exactly one converted acquisition
+        session on their acquisition date. Remaining configured sessions are
+        anonymous, non-converting acquisition traffic. This makes the customer
+        denominator and funnel numerator observable from the same table.
+        """
+
+        customer_count = len(customers)
+        anonymous_count = self.config.num_sessions - customer_count
+        acquisition_sessions = pd.DataFrame(
             {
-                "session_id": [
-                    f"S{index:08d}" for index in range(1, session_count + 1)
-                ],
-                "customer_id": customers.iloc[customer_indices][
-                    "customer_id"
-                ].to_numpy(),
-                "session_date": self._dates_from_offsets(
-                    acquisition_offsets[customer_indices] + session_offsets
-                ),
-                "channel": channels,
-                "device": customers.iloc[customer_indices]["device"].to_numpy(),
-                "converted": converted,
+                "customer_id": customers["customer_id"].to_numpy(),
+                "session_date": customers["acquisition_date"].to_numpy(),
+                "channel": customers["acquisition_channel"].to_numpy(),
+                "device": customers["device"].to_numpy(),
+                "converted": np.ones(customer_count, dtype=bool),
             }
         )
+
+        anonymous_sessions = pd.DataFrame(
+            {
+                "customer_id": pd.Series([None] * anonymous_count, dtype="object"),
+                "session_date": self._dates_from_offsets(
+                    rng.integers(
+                        0,
+                        self.config.period_days,
+                        size=anonymous_count,
+                    )
+                ),
+                "channel": rng.choice(
+                    self.config.channels,
+                    size=anonymous_count,
+                    p=self._session_channel_probabilities(),
+                ),
+                "device": rng.choice(
+                    DEVICES,
+                    size=anonymous_count,
+                    p=np.array([0.58, 0.34, 0.08]),
+                ),
+                "converted": np.zeros(anonymous_count, dtype=bool),
+            }
+        )
+        sessions = pd.concat(
+            [acquisition_sessions, anonymous_sessions],
+            ignore_index=True,
+        )
+        sessions = sessions.iloc[rng.permutation(len(sessions))].reset_index(drop=True)
+        sessions.insert(
+            0,
+            "session_id",
+            [f"S{index:08d}" for index in range(1, len(sessions) + 1)],
+        )
+        return sessions[
+            [
+                "session_id",
+                "session_date",
+                "channel",
+                "device",
+                "converted",
+                "customer_id",
+            ]
+        ]
 
     def _generate_marketing_spend(
         self,
@@ -284,19 +341,6 @@ class SyntheticEcommerceGenerator:
             }
         )
 
-    def _customer_relative_offsets(
-        self,
-        rng: np.random.Generator,
-        acquisition_offsets: np.ndarray,
-        customer_indices: np.ndarray,
-    ) -> np.ndarray:
-        maximum_offsets = (
-            self.config.period_days - 1 - acquisition_offsets[customer_indices]
-        )
-        return np.floor(
-            rng.random(len(customer_indices)) * (maximum_offsets + 1)
-        ).astype(np.int64)
-
     def _dates_from_offsets(self, offsets: np.ndarray) -> pd.Series:
         return pd.Series(
             pd.to_datetime(self.config.start_date) + pd.to_timedelta(offsets, unit="D")
@@ -304,6 +348,29 @@ class SyntheticEcommerceGenerator:
 
     def _channel_probabilities(self) -> np.ndarray:
         weights = np.linspace(1.0, 0.5, len(self.config.channels))
+        return weights / weights.sum()
+
+    def _balanced_channel_choices(
+        self,
+        rng: np.random.Generator,
+        count: int,
+    ) -> np.ndarray:
+        """Allocate channels evenly according to configured probabilities."""
+
+        expected = self._channel_probabilities() * count
+        channel_counts = np.floor(expected).astype(int)
+        remainder = count - int(channel_counts.sum())
+        if remainder:
+            fractional_order = np.argsort(-(expected - channel_counts))
+            channel_counts[fractional_order[:remainder]] += 1
+        choices = np.repeat(np.asarray(self.config.channels), channel_counts)
+        rng.shuffle(choices)
+        return choices
+
+    def _session_channel_probabilities(self) -> np.ndarray:
+        """Return a distinct but stable mix for anonymous acquisition traffic."""
+
+        weights = np.linspace(1.15, 0.65, len(self.config.channels))
         return weights / weights.sum()
 
     @staticmethod
@@ -319,13 +386,20 @@ class SyntheticEcommerceGenerator:
 - **Gross revenue**: the pre-discount, pre-refund value of items in an order,
   calculated as quantity multiplied by the generated item price.
 - **Net revenue**: `gross_revenue - discount - refund`.
-- **Contribution profit**: `net_revenue - cogs`. Marketing spend is reported
-  separately and is not allocated to individual orders in the baseline.
+- **Contribution profit**: `net_revenue - cogs` at the order level.
+- **90-day acquisition-cohort contribution profit**: for customers acquired in
+  a reporting period, sum `net_revenue - cogs` for their orders from
+  `acquisition_date` through `acquisition_date + 90 days`, then subtract
+  marketing spend for the corresponding acquisition period and channel. The
+  same 90-day observation window is used for every cohort comparison.
 - **30-day LTV**, **60-day LTV**, and **90-day LTV**: cumulative net revenue
   per acquired customer from acquisition through the respective number of
   days after `acquisition_date`.
-- **Conversion**: converted sessions divided by total sessions for the same
-  reporting slice.
+- **Conversion**: converted acquisition sessions divided by all acquisition
+  sessions for the same reporting slice. Every customer has exactly one
+  converted acquisition session on `acquisition_date`; additional
+  non-converting acquisition sessions intentionally have `customer_id = null`
+  because no customer was created.
 
 ## Data treatment
 

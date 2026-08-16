@@ -16,9 +16,9 @@ CANONICAL_PROFITABILITY_SCENARIO = ScenarioDefinition(
         InjectedCondition(
             id="meta-q2-conversion-decline",
             description=(
-                "Meta Q2 conversion declines by approximately 18%; a deterministic "
-                "subset of would-be Meta-acquired customers is absent, together "
-                "with its associated orders and sessions."
+                "Meta Q2 acquisition-session conversion declines by approximately "
+                "18%; the affected converted acquisition sessions become anonymous "
+                "non-conversions and therefore do not create customers."
             ),
             affected_tables=("customers", "sessions", "orders"),
             relative_change=-0.18,
@@ -32,8 +32,9 @@ CANONICAL_PROFITABILITY_SCENARIO = ScenarioDefinition(
         InjectedCondition(
             id="meta-q2-ltv-stability",
             description=(
-                "Orders for retained Meta customers are unchanged, preserving "
-                "their approximately stable 90-day acquired-customer LTV."
+                "Orders for retained Meta customers are rescaled proportionally "
+                "only as needed to preserve their approximately stable 90-day "
+                "acquired-customer LTV."
             ),
             affected_tables=("customers", "orders"),
             relative_change=0.0,
@@ -59,9 +60,11 @@ CANONICAL_PROFITABILITY_SCENARIO = ScenarioDefinition(
     expected_data_quality_findings=(
         "Customer IDs referenced by orders and sessions remain valid.",
         (
-            "The scenario does not inject missing values, duplicate keys, or "
-            "missing reporting days."
+            "Non-converting acquisition sessions intentionally have null "
+            "customer_id because no customer was created; this is expected, not "
+            "a data-quality defect."
         ),
+        "The scenario does not inject duplicate keys or missing reporting days.",
         "Business definitions explicitly define reporting contribution profit and LTV.",
     ),
     ground_truth=(

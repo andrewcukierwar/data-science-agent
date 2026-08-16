@@ -89,7 +89,19 @@ def _reporting_contribution_profit(
             _reporting_contribution_profit(dataset, period, item) for item in channels
         )
     customer_ids = _acquired_customer_ids(dataset, period, channel)
-    cohort_orders = dataset.orders[dataset.orders["customer_id"].isin(customer_ids)]
+    customers = dataset.customers.set_index("customer_id")
+    acquisition_dates = pd.to_datetime(
+        customers.loc[list(customer_ids), "acquisition_date"]
+    )
+    cohort_orders = dataset.orders[
+        dataset.orders["customer_id"].isin(customer_ids)
+    ].copy()
+    order_age = pd.to_datetime(cohort_orders["order_date"]) - cohort_orders[
+        "customer_id"
+    ].map(acquisition_dates)
+    cohort_orders = cohort_orders.loc[
+        order_age.between(pd.Timedelta(days=0), pd.Timedelta(days=90))
+    ]
     return float(
         cohort_orders["net_revenue"].sum()
         - cohort_orders["cogs"].sum()
@@ -108,7 +120,21 @@ def _profit_by_channel(dataset, period: int) -> pd.Series:
 
 
 def _margin(dataset, period: int) -> float:
-    orders = dataset.orders.loc[_period_mask(dataset.orders["order_date"], period)]
+    customer_ids = set(
+        dataset.customers.loc[
+            _period_mask(dataset.customers["acquisition_date"], period),
+            "customer_id",
+        ]
+    )
+    customers = dataset.customers.set_index("customer_id")
+    acquisition_dates = pd.to_datetime(
+        customers.loc[list(customer_ids), "acquisition_date"]
+    )
+    orders = dataset.orders[dataset.orders["customer_id"].isin(customer_ids)].copy()
+    order_age = pd.to_datetime(orders["order_date"]) - orders["customer_id"].map(
+        acquisition_dates
+    )
+    orders = orders.loc[order_age.between(pd.Timedelta(days=0), pd.Timedelta(days=90))]
     return float(1.0 - orders["cogs"].sum() / orders["net_revenue"].sum())
 
 
@@ -152,7 +178,7 @@ def test_injection_is_reproducible_and_does_not_mutate_clean_baseline() -> None:
     assert baseline.business_definitions != first.business_definitions
 
 
-def test_canonical_scenario_removes_customers_and_associated_rows() -> None:
+def test_canonical_scenario_removes_customers_only_from_disabled_conversions() -> None:
     baseline = SyntheticEcommerceGenerator(_dataset_config()).generate()
     scenario = generate_canonical_profitability_scenario(_dataset_config()).dataset
 
@@ -166,14 +192,35 @@ def test_canonical_scenario_removes_customers_and_associated_rows() -> None:
     )
     assert removed_ids.isdisjoint(set(scenario.customers["customer_id"]))
     assert not removed_ids.intersection(set(scenario.orders["customer_id"]))
-    assert not removed_ids.intersection(set(scenario.sessions["customer_id"]))
-    q2_meta_session_mask = _q2_mask(
-        baseline.sessions["session_date"]
-    ) & baseline.sessions["channel"].eq("Meta")
-    q2_meta_session_customer_ids = set(
-        baseline.sessions.loc[q2_meta_session_mask, "customer_id"]
+    assert not removed_ids.intersection(set(scenario.sessions["customer_id"].dropna()))
+    baseline_q2_meta_sessions = baseline.sessions.loc[
+        _q2_mask(baseline.sessions["session_date"])
+        & baseline.sessions["channel"].eq("Meta")
+    ]
+    scenario_q2_meta_sessions = scenario.sessions.loc[
+        _q2_mask(scenario.sessions["session_date"])
+        & scenario.sessions["channel"].eq("Meta")
+    ]
+    assert set(scenario.sessions["session_id"]) == set(baseline.sessions["session_id"])
+    scenario_q1_meta_sessions = scenario.sessions.loc[
+        _period_mask(scenario.sessions["session_date"], 1)
+        & scenario.sessions["channel"].eq("Meta")
+    ]
+    assert len(scenario_q2_meta_sessions) == pytest.approx(
+        len(scenario_q1_meta_sessions), abs=1
     )
-    assert removed_ids <= q2_meta_session_customer_ids
+    removed_session_ids = set(
+        baseline_q2_meta_sessions.loc[
+            baseline_q2_meta_sessions["customer_id"].isin(removed_ids),
+            "session_id",
+        ]
+    )
+    scenario_removed_sessions = scenario.sessions.loc[
+        scenario.sessions["session_id"].isin(removed_session_ids)
+    ]
+    assert len(removed_session_ids) == len(removed_ids)
+    assert not scenario_removed_sessions["converted"].any()
+    assert scenario_removed_sessions["customer_id"].isna().all()
 
     surviving_ids = baseline_q2_meta_ids - removed_ids
     baseline_survivors = baseline.customers.set_index("customer_id").loc[
@@ -227,6 +274,25 @@ def test_canonical_ground_truth_is_observable_from_q1_and_q2() -> None:
         expected["meta-q2-90-day-ltv"].expected_relative_change,
         abs=expected["meta-q2-90-day-ltv"].tolerance,
     )
+    q1_meta_sessions = scenario.sessions.loc[
+        _period_mask(scenario.sessions["session_date"], 1)
+        & scenario.sessions["channel"].eq("Meta")
+    ]
+    q2_meta_sessions = scenario.sessions.loc[
+        _period_mask(scenario.sessions["session_date"], 2)
+        & scenario.sessions["channel"].eq("Meta")
+    ]
+    assert len(q2_meta_sessions) == pytest.approx(len(q1_meta_sessions), abs=1)
+    assert int(q1_meta_sessions["converted"].sum()) == len(q1_customers)
+    assert int(q2_meta_sessions["converted"].sum()) == len(q2_customers)
+    assert (
+        set(q1_meta_sessions.loc[q1_meta_sessions["converted"], "customer_id"])
+        == q1_customers
+    )
+    assert (
+        set(q2_meta_sessions.loc[q2_meta_sessions["converted"], "customer_id"])
+        == q2_customers
+    )
     assert _reporting_contribution_profit(scenario, 2) < _reporting_contribution_profit(
         scenario, 1
     )
@@ -275,12 +341,22 @@ def test_exact_canonical_live_configuration_has_a_meta_root_cause() -> None:
     assert scenario.sessions["session_id"].is_unique
     assert scenario.customers.notna().all().all()
     assert scenario.orders.notna().all().all()
-    assert scenario.sessions.notna().all().all()
+    assert scenario.sessions.drop(columns=["customer_id"]).notna().all().all()
+    assert (
+        scenario.sessions.loc[scenario.sessions["converted"], "customer_id"]
+        .notna()
+        .all()
+    )
+    assert (
+        scenario.sessions.loc[~scenario.sessions["converted"], "customer_id"]
+        .isna()
+        .all()
+    )
     assert scenario.marketing_spend.notna().all().all()
     assert set(scenario.orders["customer_id"]).issubset(
         set(scenario.customers["customer_id"])
     )
-    assert set(scenario.sessions["customer_id"]).issubset(
+    assert set(scenario.sessions["customer_id"].dropna()).issubset(
         set(scenario.customers["customer_id"])
     )
     assert (
@@ -303,18 +379,29 @@ def test_canonical_scenario_preserves_data_quality_and_order_coherence() -> None
     assert scenario.sessions["session_id"].is_unique
     assert scenario.customers.notna().all().all()
     assert scenario.orders.notna().all().all()
-    assert scenario.sessions.notna().all().all()
+    assert scenario.sessions.drop(columns=["customer_id"]).notna().all().all()
+    assert (
+        scenario.sessions.loc[scenario.sessions["converted"], "customer_id"]
+        .notna()
+        .all()
+    )
+    assert (
+        scenario.sessions.loc[~scenario.sessions["converted"], "customer_id"]
+        .isna()
+        .all()
+    )
     assert scenario.marketing_spend.notna().all().all()
     assert set(scenario.orders["customer_id"]).issubset(
         set(scenario.customers["customer_id"])
     )
-    assert set(scenario.sessions["customer_id"]).issubset(
+    assert set(scenario.sessions["customer_id"].dropna()).issubset(
         set(scenario.customers["customer_id"])
     )
     assert scenario.marketing_spend["date"].nunique() == 365
-    assert "SUM(net_revenue) - SUM(cogs) - SUM(marketing_spend)" in (
+    assert "SUM(net_revenue - cogs) - SUM(marketing_spend)" in (
         scenario.business_definitions
     )
+    assert "customer_id = null" in scenario.business_definitions
     assert "90-day LTV" in scenario.business_definitions
     assert "missing values" not in scenario.business_definitions
 

@@ -15,6 +15,8 @@ Use this procedure for a reproducible preflight audit:
    only when the candidate key repeats.
 5. Identify likely primary keys and plausible relationships. Check that foreign
    keys resolve to the referenced table before treating a join as reliable.
+   A documented nullable relationship can be intentional; for an acquisition
+   funnel, anonymous non-converting sessions may correctly have no customer.
 6. Look for suspicious temporal gaps, invalid dates, impossible numeric values,
    broken references, and unusually extreme counts. Compare with neighboring
    periods or documented business rules where possible.
