@@ -233,12 +233,9 @@ async def run_critic(
     if context.agent_role is not AgentRole.CRITIC:
         raise ValueError("run_critic requires a Critic context")
 
-    # Reserve both resources together so an exhausted critic loop cannot leave
-    # a misleading specialist-invocation increment behind.
-    context.consume_budgets(
-        BudgetResource.SPECIALIST_INVOCATIONS,
-        BudgetResource.CRITIC_LOOPS,
-    )
+    # Critic is mandatory lifecycle validation, not Lead-delegated analytical
+    # specialist work. Its hard limit is the separate critic-loop budget.
+    context.consume_budget(BudgetResource.CRITIC_LOOPS)
 
     completeness = candidate_completeness_validation(candidate)
     if completeness is not None:

@@ -91,7 +91,6 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
         events.append("critic")
         assert context.agent_role is AgentRole.CRITIC
         assert context.run_config.turn_limit == 8
-        context.consume_budget("specialist_invocations")
         context.consume_budget("critic_loops")
         context.record_sdk_usage(_usage())
         if critic_calls == 1:
@@ -115,7 +114,7 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
         workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
         model="test-model",
         model_provider="test-provider",
-        budget=RunBudget(max_critic_loops=2),
+        budget=RunBudget(max_specialist_invocations=0, max_critic_loops=2),
         input_cost_per_1k_tokens=1.0,
         output_cost_per_1k_tokens=2.0,
         auditor_runner=fake_auditor,
@@ -163,6 +162,42 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
     assert "The remediated candidate is reproducible." in report_text
     assert "Estimated model cost (USD): **0.090000**" in report_text
     assert "- Elapsed seconds: **" in report_text
+
+
+def test_runner_mandatory_audit_does_not_consume_analytical_specialist_budget(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        events.append("audit")
+        return _audit()
+
+    async def fake_lead(context, objective, *, business_context, audit, agent):  # noqa: ANN001
+        events.append("lead")
+        return LeadResult(objective=objective, answer="The audit is sufficient.")
+
+    async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
+        events.append("critic")
+        context.consume_budget("critic_loops")
+        return ValidationResult(status=ValidationStatus.PASS)
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        budget=RunBudget(max_specialist_invocations=0, max_critic_loops=1),
+        auditor_runner=fake_auditor,
+        lead_runner=fake_lead,
+        critic_runner=fake_critic,
+    )
+    result = asyncio.run(runner.run("run-audit-budget", "Explain profitability."))
+
+    assert result.status is RunStatus.COMPLETED
+    assert events == ["audit", "lead", "critic"]
+    assert result.ledger is not None
+    assert result.ledger.audit is not None
+    assert result.ledger.audit.status is AuditStatus.COMPLETE
+    assert result.ledger.budget.specialist_invocations == 0
+    assert result.ledger.budget.critic_loops == 1
 
 
 def test_report_lists_lead_chart_artifacts_in_supporting_visualizations(
@@ -253,7 +288,6 @@ def test_runner_must_complete_objective_critical_lead_follow_up_before_critic(
         assert candidate.follow_up_analysis is False
         assert candidate.follow_up_rationale is None
         assert "upstream mechanism" in candidate.answer
-        context.consume_budget("specialist_invocations")
         context.consume_budget("critic_loops")
         return ValidationResult(
             status=ValidationStatus.PASS,
@@ -305,7 +339,6 @@ def test_runner_allows_nonblocking_open_question_to_finalize(
             "A lower-priority experiment may be useful later."
         ]
         assert candidate.follow_up_analysis is False
-        context.consume_budget("specialist_invocations")
         context.consume_budget("critic_loops")
         return ValidationResult(
             status=ValidationStatus.PASS,
@@ -365,7 +398,6 @@ def test_runner_constrains_when_lead_follow_up_reaches_continuation_limit(
 
     async def bounded_critic(context, candidate, *, agent):  # noqa: ANN001
         assert candidate.follow_up_analysis is True
-        context.consume_budget("specialist_invocations")
         context.consume_budget("critic_loops")
         return ValidationResult(status=ValidationStatus.REVISE, issues=[issue])
 
@@ -416,7 +448,6 @@ def test_runner_returns_constrained_report_after_critic_limit(
         )
 
     async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
-        context.consume_budget("specialist_invocations")
         context.consume_budget("critic_loops")
         return ValidationResult(status=ValidationStatus.REVISE, issues=[issue])
 
@@ -473,7 +504,6 @@ def test_runner_preserves_candidate_when_sql_budget_stops_remediation(
         )
 
     async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
-        context.consume_budget("specialist_invocations")
         context.consume_budget("critic_loops")
         return ValidationResult(status=ValidationStatus.REVISE, issues=[issue])
 
@@ -500,6 +530,63 @@ def test_runner_preserves_candidate_when_sql_budget_stops_remediation(
     assert "sql_executions" in report_text
     assert "V-SQL" in report_text
     assert result.ledger.agent_events[-1].status.value == "failed"
+
+
+def test_runner_constrains_when_analytical_specialist_budget_stops_remediation(
+    tmp_path: Path,
+) -> None:
+    lead_calls = 0
+    issue = ValidationIssue(
+        id="V-ANALYTICAL-REMEDIATION",
+        severity=ValidationSeverity.HIGH,
+        message="The candidate needs analytical evidence.",
+    )
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def fake_lead(
+        context,
+        objective,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        context.consume_budget("specialist_invocations")
+        return LeadResult(
+            objective="Explain profitability.",
+            answer="The initial candidate remains the best available explanation.",
+        )
+
+    async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
+        context.consume_budget("critic_loops")
+        return ValidationResult(status=ValidationStatus.REVISE, issues=[issue])
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        budget=RunBudget(max_specialist_invocations=1, max_critic_loops=2),
+        auditor_runner=fake_auditor,
+        lead_runner=fake_lead,
+        critic_runner=fake_critic,
+    )
+    result = asyncio.run(
+        runner.run("run-analytical-remediation", "Explain profitability.")
+    )
+
+    assert lead_calls == 2
+    assert result.status is RunStatus.BLOCKED
+    assert result.constrained is True
+    assert result.error is None
+    assert result.validation_result is not None
+    assert result.validation_result.status is ValidationStatus.REVISE
+    assert result.ledger is not None
+    assert result.ledger.budget.specialist_invocations == 1
+    report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
+    assert "Remediation stopped by budget exhaustion" in report_text
+    assert "V-ANALYTICAL-REMEDIATION" in report_text
 
 
 def test_runner_preserves_candidate_when_lead_turns_stop_remediation(
@@ -533,7 +620,6 @@ def test_runner_preserves_candidate_when_lead_turns_stop_remediation(
         )
 
     async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
-        context.consume_budget("specialist_invocations")
         context.consume_budget("critic_loops")
         return ValidationResult(status=ValidationStatus.REVISE, issues=[issue])
 
@@ -558,16 +644,20 @@ def test_runner_preserves_candidate_when_lead_turns_stop_remediation(
     assert "V-TURNS" in report_text
 
 
-def test_runner_preserves_candidate_when_critic_rereview_budget_is_exhausted(
+def test_runner_re_reviews_even_when_analytical_specialist_budget_is_exhausted(
     tmp_path: Path,
 ) -> None:
+    events: list[str] = []
+    lead_calls = 0
+    critic_calls = 0
     issue = ValidationIssue(
-        id="V-CRITIC-BUDGET",
+        id="V-ANALYTICAL-BUDGET",
         severity=ValidationSeverity.HIGH,
-        message="The candidate needs another bounded review.",
+        message="The candidate needs one bounded remediation.",
     )
 
     async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        events.append("audit")
         return _audit()
 
     async def fake_lead(
@@ -578,43 +668,118 @@ def test_runner_preserves_candidate_when_critic_rereview_budget_is_exhausted(
         audit,
         agent,
     ):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        events.append("lead")
+        if lead_calls == 1:
+            context.consume_budget("specialist_invocations")
         return LeadResult(
             objective="Explain profitability.",
-            answer="The initial candidate is retained with explicit caveats.",
+            answer="The candidate is retained after bounded remediation.",
         )
 
     async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
-        # The first review is valid and consumes the only specialist
-        # invocation. The runner must not turn the blocked re-review into a
-        # failed run.
-        context.consume_budget("specialist_invocations")
+        nonlocal critic_calls
+        critic_calls += 1
+        events.append("critic")
         context.consume_budget("critic_loops")
-        return ValidationResult(
-            status=ValidationStatus.REVISE,
-            issues=[issue],
-            summary="The first review found an unresolved issue.",
-        )
+        if critic_calls == 1:
+            return ValidationResult(
+                status=ValidationStatus.REVISE,
+                issues=[issue],
+                summary="The first review found an unresolved issue.",
+            )
+        return ValidationResult(status=ValidationStatus.PASS)
 
     runner = AnalysisRunner(
         workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
-        budget=RunBudget(max_specialist_invocations=2, max_critic_loops=2),
+        budget=RunBudget(max_specialist_invocations=1, max_critic_loops=2),
         auditor_runner=fake_auditor,
         lead_runner=fake_lead,
         critic_runner=fake_critic,
     )
     result = asyncio.run(runner.run("run-critic-budget", "Explain profitability."))
 
-    assert result.status is RunStatus.BLOCKED
-    assert result.constrained is True
+    assert result.status is RunStatus.COMPLETED
+    assert result.constrained is False
     assert result.error is None
-    assert result.validation_result is not None
-    assert result.validation_result.status is ValidationStatus.REVISE
+    assert events == ["audit", "lead", "critic", "lead", "critic"]
+    assert lead_calls == 2
+    assert critic_calls == 2
     assert result.ledger is not None
     assert result.ledger.state.error is None
-    assert result.ledger.budget.specialist_invocations == 2
-    report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
-    assert "Critic re-review stopped by budget exhaustion" in report_text
-    assert "V-CRITIC-BUDGET" in report_text
+    assert result.ledger.budget.specialist_invocations == 1
+    assert result.ledger.budget.critic_loops == 2
+
+
+def test_runner_goes_directly_from_remediation_to_critic_review(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    lead_calls = 0
+    critic_calls = 0
+    issue = ValidationIssue(
+        id="V-DIRECT-REVIEW",
+        severity=ValidationSeverity.MEDIUM,
+        message="Complete the targeted follow-up.",
+    )
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        events.append("audit")
+        return _audit()
+
+    async def fake_lead(
+        context,
+        objective,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        events.append("lead")
+        if lead_calls == 1:
+            return LeadResult(
+                objective="Explain profitability.",
+                answer="The main driver is identified.",
+                follow_up_analysis=False,
+            )
+        return LeadResult(
+            objective="Explain profitability.",
+            answer="The targeted remediation was attempted.",
+            open_questions=["The remaining question is for Critic review."],
+            follow_up_analysis=True,
+            follow_up_rationale=(
+                "The remaining question is material but now needs validation."
+            ),
+        )
+
+    async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
+        nonlocal critic_calls
+        critic_calls += 1
+        events.append("critic")
+        context.consume_budget("critic_loops")
+        if critic_calls == 1:
+            return ValidationResult(status=ValidationStatus.REVISE, issues=[issue])
+        assert candidate.follow_up_analysis is True
+        return ValidationResult(status=ValidationStatus.PASS)
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        budget=RunBudget(max_critic_loops=2),
+        auditor_runner=fake_auditor,
+        lead_runner=fake_lead,
+        critic_runner=fake_critic,
+    )
+    result = asyncio.run(runner.run("run-direct-review", "Explain profitability."))
+
+    assert result.status is RunStatus.COMPLETED
+    assert events == ["audit", "lead", "critic", "lead", "critic"]
+    assert lead_calls == 2
+    assert critic_calls == 2
+    assert result.lead_result is not None
+    assert result.lead_result.follow_up_analysis is True
 
 
 def test_runner_observes_lead_turn_limit_failure_and_marks_run_failed(

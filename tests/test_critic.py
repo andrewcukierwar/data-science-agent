@@ -110,7 +110,7 @@ def test_critic_candidate_round_trips_candidate_evidence() -> None:
 def _context(tmp_path: Path) -> AgentRunContext:
     workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace("run-critic")
     ledger = AnalysisLedger(workspace, objective=CRITIC_OBJECTIVE)
-    ledger.update_budget(RunBudget(max_specialist_invocations=1, max_critic_loops=1))
+    ledger.update_budget(RunBudget(max_specialist_invocations=0, max_critic_loops=1))
     return AgentRunContext(
         workspace=workspace,
         ledger=ledger,
@@ -167,7 +167,7 @@ def test_critic_persists_validation_result_and_issues(
     assert returned == validation
     assert reloaded.validation_results == [validation]
     assert reloaded.validation_issues == [issue]
-    assert reloaded.budget.specialist_invocations == 1
+    assert reloaded.budget.specialist_invocations == 0
     assert reloaded.budget.critic_loops == 1
 
 

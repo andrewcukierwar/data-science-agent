@@ -151,7 +151,6 @@ def test_canonical_acceptance_rejects_incomplete_persisted_runs(
         return LeadResult(objective=objective, answer="Not enough evidence.")
 
     async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
-        context.consume_budget("specialist_invocations")
         context.consume_budget("critic_loops")
         return ValidationResult(status=ValidationStatus.PASS)
 

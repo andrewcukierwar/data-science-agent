@@ -152,19 +152,12 @@ class AnalysisRunner:
                 AgentRole.DATA_AUDITOR,
             )
             active_agent = (audit_agent.name, AgentRole.DATA_AUDITOR, "preflight audit")
-            audit_context.check_budget(BudgetResource.SPECIALIST_INVOCATIONS)
-            audit_specialist_usage = ledger.budget.specialist_invocations
             audit = await self.auditor_runner(
                 audit_context,
                 self._audit_prompt(business_context),
                 agent=audit_agent,
             )
             audit_context.assert_base_role(AgentRole.DATA_AUDITOR)
-            self._ensure_budget_increment(
-                audit_context,
-                BudgetResource.SPECIALIST_INVOCATIONS,
-                audit_specialist_usage,
-            )
             if not isinstance(audit, AuditResult):
                 audit = AuditResult.model_validate(audit)
             self._record_agent_success(ledger, active_agent, AuditResult)
@@ -184,8 +177,10 @@ class AnalysisRunner:
 
             async def run_lead_candidate(
                 lead_objective: str,
+                *,
+                allow_follow_up: bool = True,
             ) -> tuple[LeadResult, str | None]:
-                """Run Lead and exhaust its bounded objective-critical follow-up."""
+                """Run Lead and optionally exhaust objective-critical follow-up."""
 
                 nonlocal active_agent
                 nonlocal active_agent_recorded
@@ -206,6 +201,9 @@ class AnalysisRunner:
                 self._record_agent_success(ledger, active_agent, LeadResult)
                 active_agent_recorded = True
                 candidate = persist_lead_result(candidate, lead_context)
+
+                if not allow_follow_up:
+                    return candidate, None
 
                 while candidate.follow_up_analysis:
                     if lead_follow_up_cycles >= MAX_LEAD_FOLLOW_UP_CYCLES:
@@ -283,9 +281,7 @@ class AnalysisRunner:
                 active_agent = (critic_agent.name, AgentRole.CRITIC, objective)
                 active_agent_recorded = False
                 try:
-                    critic_context.check_budget(BudgetResource.SPECIALIST_INVOCATIONS)
                     critic_context.check_budget(BudgetResource.CRITIC_LOOPS)
-                    critic_specialist_usage = ledger.budget.specialist_invocations
                     critic_loop_usage = ledger.budget.critic_loops
                     validation_result = await self.critic_runner(
                         critic_context,
@@ -293,11 +289,6 @@ class AnalysisRunner:
                         agent=critic_agent,
                     )
                     critic_context.assert_base_role(AgentRole.CRITIC)
-                    self._ensure_budget_increment(
-                        critic_context,
-                        BudgetResource.SPECIALIST_INVOCATIONS,
-                        critic_specialist_usage,
-                    )
                     self._ensure_budget_increment(
                         critic_context,
                         BudgetResource.CRITIC_LOOPS,
@@ -357,7 +348,10 @@ class AnalysisRunner:
                     (
                         remediated_lead_result,
                         follow_up_constraint,
-                    ) = await run_lead_candidate(remediation_prompt)
+                    ) = await run_lead_candidate(
+                        remediation_prompt,
+                        allow_follow_up=False,
+                    )
                     lead_result = remediated_lead_result
                     if follow_up_constraint is not None:
                         constrained = True

@@ -63,13 +63,15 @@ Required investigation behavior:
 2. Use update_investigation_plan and record_hypothesis to persist an explicit plan
    and hypothesis tree. Update hypothesis status to supported, rejected, or
    inconclusive only when the returned evidence supports that disposition.
-3. Delegate an audit when data quality or relationships are uncertain. Delegate
-   bounded decomposition and metric work to Analyst, and inferential questions to
-   Statistician. When a material cohort or channel difference affects the answer,
-   ask Statistician to assess uncertainty and practical significance. When a
-   multi-component decomposition would benefit from visual comparison, ask
-   Analyst to save a relevant chart artifact. Treat specialist outputs as
-   evidence-bearing structured results, not as unverified prose.
+3. The application has already completed and persisted the mandatory Data Audit
+   before you start. Use the supplied audit as the data-quality and relationship
+   baseline; do not delegate another broad audit. Delegate bounded decomposition
+   and metric work to Analyst, and inferential questions to Statistician. When a
+   material cohort or channel difference affects the answer, ask Statistician to
+   assess uncertainty and practical significance. When a multi-component
+   decomposition would benefit from visual comparison, ask Analyst to save a
+   relevant chart artifact. Treat specialist outputs as evidence-bearing
+   structured results, not as unverified prose.
 4. Record material open questions and decide explicitly whether each needs follow-up
    analysis. Do not pursue a follow-up merely because it is interesting; explain its
    decision value and available evidence. When the objective asks why a major
@@ -341,7 +343,6 @@ def build_lead_agent(
     instructions: str | None = None,
     analyst: Agent[AgentRunContext] | None = None,
     statistician: Agent[AgentRunContext] | None = None,
-    data_auditor: Agent[AgentRunContext] | None = None,
 ) -> Agent[AgentRunContext]:
     """Build the Lead manager with specialists exposed as tools, never handoffs."""
 
@@ -362,10 +363,6 @@ def build_lead_agent(
         from agents.statistician import build_statistician_agent
 
         statistician = build_statistician_agent(model=selected_model)
-    if data_auditor is None:
-        from agents.auditor import build_data_auditor_agent
-
-        data_auditor = build_data_auditor_agent(model=selected_model)
 
     state_tools = [
         update_investigation_plan,
@@ -373,13 +370,6 @@ def build_lead_agent(
         record_open_question,
     ]
     specialist_tools = [
-        _specialist_tool(
-            data_auditor,
-            role=AgentRole.DATA_AUDITOR,
-            tool_name="delegate_to_data_auditor",
-            description="Delegate a bounded data-quality or relationship audit.",
-            max_turns=specialist_turns(AgentRole.DATA_AUDITOR),
-        ),
         _specialist_tool(
             analyst,
             role=AgentRole.ANALYST,

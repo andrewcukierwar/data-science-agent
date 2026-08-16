@@ -63,15 +63,12 @@ def test_lead_uses_manager_tools_and_has_no_computational_tools() -> None:
         "record_hypothesis",
         "record_open_question",
     ]
-    assert names[-3:] == [
-        "delegate_to_data_auditor",
-        "delegate_to_analyst",
-        "delegate_to_statistician",
-    ]
+    assert names[-2:] == ["delegate_to_analyst", "delegate_to_statistician"]
+    assert "delegate_to_data_auditor" not in names
     assert "run_sql" not in names
     assert "run_python" not in names
 
-    for tool in agent.tools[-3:]:
+    for tool in agent.tools[-2:]:
         assert "objective" in tool.params_json_schema["properties"]
         assert "required_outputs" in tool.params_json_schema["properties"]
 
@@ -102,13 +99,11 @@ def test_lead_uses_configured_turn_limits_for_nested_specialists() -> None:
     )
     build_lead_agent(
         config,
-        data_auditor=FakeSpecialist(),
         analyst=FakeSpecialist(),
         statistician=FakeSpecialist(),
     )
 
     assert captured == {
-        "delegate_to_data_auditor": 3,
         "delegate_to_analyst": 4,
         "delegate_to_statistician": 5,
     }
