@@ -7,6 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from orchestration.ledger import AnalysisLedger
+from scenarios.generator import SyntheticEcommerceConfig, SyntheticEcommerceGenerator
 from tools.sql import DuckDBExecutionService, InputRelationError
 from tools.workspace import WorkspaceManager
 
@@ -112,6 +113,78 @@ def test_parquet_inputs_are_registered_as_read_only_views(tmp_path: Path) -> Non
         ["customers", "VIEW"],
         ["marketing_spend", "VIEW"],
     ]
+
+
+def test_inspect_relations_returns_exact_canonical_metadata(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    dataset = SyntheticEcommerceGenerator(
+        SyntheticEcommerceConfig(
+            seed=42,
+            num_customers=10,
+            num_orders=20,
+            num_sessions=30,
+            num_products=3,
+            period_days=30,
+        )
+    ).generate()
+    dataset.write(source)
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(
+        "run-relations",
+        inputs_source=source,
+    )
+    ledger = RecordingLedger()
+    service = DuckDBExecutionService(workspace, ledger)
+
+    result = service.inspect_relations()
+
+    assert result.total_relations == 4
+    assert result.truncated is False
+    assert result.row_counts_included is True
+    relations = {item.relation_name: item for item in result.relations}
+    assert set(relations) == {"customers", "orders", "sessions", "marketing_spend"}
+    assert relations["marketing_spend"].source_path == "marketing_spend.parquet"
+    assert relations["marketing_spend"].row_count == 30 * 5
+    assert [
+        (column.name, column.data_type)
+        for column in relations["marketing_spend"].columns
+    ] == [
+        ("date", "TIMESTAMP"),
+        ("channel", "VARCHAR"),
+        ("spend", "DOUBLE"),
+        ("impressions", "BIGINT"),
+        ("clicks", "BIGINT"),
+    ]
+    assert [column.name for column in relations["customers"].columns] == [
+        "customer_id",
+        "acquisition_date",
+        "acquisition_channel",
+        "region",
+        "device",
+    ]
+    assert [column.name for column in relations["orders"].columns] == [
+        "order_id",
+        "customer_id",
+        "order_date",
+        "product_id",
+        "quantity",
+        "gross_revenue",
+        "discount",
+        "refund",
+        "net_revenue",
+        "cogs",
+    ]
+    assert [column.name for column in relations["sessions"].columns] == [
+        "session_id",
+        "customer_id",
+        "session_date",
+        "channel",
+        "device",
+        "converted",
+    ]
+    assert ledger.sql_executions == 1
+    assert ledger.events[0].tool_name == "inspect_relations"
+    assert ledger.events[0].status.value == "succeeded"
 
 
 def test_parquet_relation_stems_are_sanitized_deterministically(tmp_path: Path) -> None:

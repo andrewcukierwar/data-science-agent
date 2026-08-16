@@ -33,7 +33,7 @@ class AgentRole(StrEnum):
 DEFAULT_AGENT_TURN_LIMITS: Mapping[AgentRole, int] = MappingProxyType(
     {
         AgentRole.LEAD: 16,
-        AgentRole.DATA_AUDITOR: 8,
+        AgentRole.DATA_AUDITOR: 12,
         AgentRole.ANALYST: 10,
         AgentRole.STATISTICIAN: 10,
         AgentRole.CRITIC: 8,
@@ -78,12 +78,19 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
         }
     ),
     AgentRole.DATA_AUDITOR: frozenset(
-        {"inspect_workspace", "read_document", "run_sql", "run_python"}
+        {
+            "inspect_workspace",
+            "read_document",
+            "inspect_relations",
+            "run_sql",
+            "run_python",
+        }
     ),
     AgentRole.ANALYST: frozenset(
         {
             "inspect_workspace",
             "read_document",
+            "inspect_relations",
             "run_sql",
             "run_python",
             "save_artifact",
@@ -94,6 +101,7 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
         {
             "inspect_workspace",
             "read_document",
+            "inspect_relations",
             "run_sql",
             "run_python",
             "inspect_evidence",

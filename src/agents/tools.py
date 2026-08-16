@@ -26,6 +26,7 @@ from agents.runtime import (
 )
 from orchestration.budgets import BudgetResource
 from schemas.run_state import ArtifactKind
+from tools.sql import RelationInspectionResult
 
 
 class WorkspaceFileInfo(BaseModel):
@@ -296,6 +297,30 @@ def inspect_workspace(
 
 
 @function_tool
+def inspect_relations(
+    ctx: RunContextWrapper[AgentRunContext],
+) -> ToolOutputText:
+    """Inspect approved input relation names, columns, types, and row counts.
+
+    This reads metadata from the same registered DuckDB views used by
+    ``run_sql``. It does not accept filesystem paths or execute model-authored
+    schema SQL. The returned source paths are relative to ``inputs/``.
+    """
+
+    tool_name = "inspect_relations"
+    try:
+        context = _context(ctx)
+        context.require_permission(tool_name)
+        context.check_budget(BudgetResource.SQL_EXECUTIONS)
+        result: RelationInspectionResult = context.sql_service.inspect_relations()
+        return _sdk_response(ToolResponse.ok(tool_name, result.model_dump(mode="json")))
+    except (PermissionDeniedError, ValueError, OSError) as error:
+        return _error_response(tool_name, error)
+    except Exception as error:
+        return _error_response(tool_name, error)
+
+
+@function_tool
 def read_document(
     ctx: RunContextWrapper[AgentRunContext],
     path: str,
@@ -445,10 +470,11 @@ def run_sql(
 ) -> ToolOutputText:
     """Execute bounded SQL against approved workspace data.
 
-    Approved Parquet inputs are available as registered relation names derived
-    from their file stems (for example ``customers`` or ``orders``). Prefer
-    those names; arbitrary filesystem paths and unapproved ``read_parquet``
-    access remain blocked by the execution boundary.
+    Approved Parquet inputs are automatically registered as read-only relation
+    names derived from their file stems: ``customers``, ``orders``,
+    ``sessions``, and ``marketing_spend`` for the canonical dataset. Use those
+    names directly. Do not use filesystem paths or ``read_parquet``; arbitrary
+    filesystem access remains blocked by the execution boundary.
 
     Args:
         sql: SQL statement to execute through the approved DuckDB service.
@@ -504,6 +530,12 @@ def run_python(
     A successful run returns exact ``generated_evidence`` references for new or
     modified files under ``working/`` and ``outputs/``. Copy those references
     verbatim into later finding evidence; do not construct a path manually.
+
+    Python runs in a separate isolated container and does not inherit the
+    DuckDB connection or registered SQL views from ``run_sql``. To read raw
+    approved inputs, use pandas or PyArrow with paths under
+    ``/workspace/inputs``; do not open a fresh DuckDB connection expecting
+    ``customers``, ``orders``, ``sessions``, or ``marketing_spend`` views.
 
     Args:
         source: Python source code to persist under working/scripts/.
@@ -610,6 +642,7 @@ def save_artifact(
 _ALL_TOOLS: tuple[FunctionTool, ...] = (
     inspect_workspace,
     read_document,
+    inspect_relations,
     run_sql,
     run_python,
     save_artifact,
@@ -680,6 +713,7 @@ __all__ = [
     "WorkspaceInspection",
     "build_agent",
     "build_agent_from_config",
+    "inspect_relations",
     "inspect_workspace",
     "inspect_evidence",
     "read_document",

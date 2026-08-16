@@ -41,6 +41,7 @@ def test_critic_is_structured_and_cannot_delegate() -> None:
     assert [tool.name for tool in agent.tools] == [
         "inspect_workspace",
         "read_document",
+        "inspect_relations",
         "run_sql",
         "run_python",
         "inspect_evidence",

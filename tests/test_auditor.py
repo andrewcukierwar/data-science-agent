@@ -34,6 +34,7 @@ def test_data_auditor_is_structured_and_cannot_delegate() -> None:
     assert [tool.name for tool in agent.tools] == [
         "inspect_workspace",
         "read_document",
+        "inspect_relations",
         "run_sql",
         "run_python",
     ]
@@ -65,6 +66,10 @@ def test_data_auditor_instructions_cover_preflight_checks() -> None:
         "temporal gaps",
         "anomalies",
         "business definitions",
+        "inspect_relations",
+        "spend_date",
+        "separate isolated",
+        "/workspace/inputs",
         "delegate",
         "user-facing report",
     ):
@@ -115,7 +120,7 @@ def test_data_auditor_persists_typed_result_in_ledger(
         assert agent.output_type is AuditResult
         assert objective == DATA_AUDITOR_OBJECTIVE
         assert context is not None
-        assert kwargs["max_turns"] == 8
+        assert kwargs["max_turns"] == 12
         return SimpleNamespace(final_output=audit)
 
     monkeypatch.setattr(Runner, "run", fake_run)

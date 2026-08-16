@@ -15,12 +15,14 @@ Use this procedure for evidence-backed KPI investigation:
    the LTV cohort, channel, and denominator aligned with CAC.
 5. Analyze funnels from sessions through conversion and orders. Reconcile
    funnel counts to customer and order tables before interpreting rates.
-6. Use the registered input relation names (for example `customers`, `orders`,
-   `sessions`, and `marketing_spend`) in SQL. Do not use `read_parquet` paths
-   or other filesystem paths when querying approved inputs. Use SQL for
-   bounded aggregation and joins. Use Python for reproducible calculations,
-   statistical checks, and charts. Save useful outputs under approved
-   working/ or outputs/ paths and retain their evidence references.
+6. Use `inspect_relations` or the registered input relation names (for example
+   `customers`, `orders`, `sessions`, and `marketing_spend`) in SQL. Do not use
+   `read_parquet` paths or other filesystem paths when querying approved inputs.
+   Use SQL for bounded aggregation and joins. `run_python` executes in a
+   separate isolated container and does not inherit the SQL connection or its
+   registered views; read raw approved files with pandas or PyArrow under
+   `/workspace/inputs` when needed. Save useful outputs under approved
+   `working/` or `outputs/` paths and retain their evidence references.
 7. Treat a period difference as an observation, not a causal explanation.
    Report association, limitations, and what follow-up test or data would be
    needed before making a causal claim.

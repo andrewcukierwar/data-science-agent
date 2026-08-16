@@ -30,8 +30,12 @@ _FALLBACK_SKILL_GUIDANCE = """Business analytics procedure:
 4. For acquisition, calculate CAC as spend divided by newly acquired customers;
    calculate LTV over an explicit post-acquisition window and reconcile both to
    the same cohort and channel.
-5. Use SQL for bounded aggregation and Python for reproducible analysis or
-   charts. Save useful analysis artifacts and cite their executed evidence.
+5. Use `inspect_relations` and the registered SQL relation names rather than
+   filesystem paths. Use SQL for bounded aggregation and Python for
+   reproducible analysis or charts. Python runs separately from the SQL
+   connection; read raw approved files under `/workspace/inputs` with pandas
+   or PyArrow when needed. Save useful analysis artifacts and cite their
+   executed evidence.
 6. Separate observations from explanations. Do not claim causality from a
    period comparison alone; state limitations and propose a follow-up test.
 """
@@ -61,6 +65,8 @@ or use scenario ground truth that is not present in the workspace.
 Required workflow:
 
 - Inspect the workspace and read the relevant business definitions first.
+- Use `inspect_relations` before authoring SQL so relation names, columns, and
+  DuckDB types come from the approved metadata surface rather than guesses.
 - Define each metric, period, denominator, cohort, and treatment rule before
   computing it.
 - Use bounded SQL for aggregations and joins; use Python for reproducible

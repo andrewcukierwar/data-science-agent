@@ -17,6 +17,7 @@ from agents import (
     ToolResponse,
     build_agent,
     inspect_evidence,
+    inspect_relations,
     inspect_workspace,
     read_document,
     run_python,
@@ -165,11 +166,15 @@ def test_role_tool_surfaces_preserve_project_plan_permissions() -> None:
     assert [tool.name for tool in tools_for_role(AgentRole.DATA_AUDITOR)] == [
         "inspect_workspace",
         "read_document",
+        "inspect_relations",
         "run_sql",
         "run_python",
     ]
     assert "run_sql" not in [
         tool.name for tool in tools_for_role(AgentRole.STATISTICIAN)
+    ]
+    assert "inspect_relations" in [
+        tool.name for tool in tools_for_role(AgentRole.ANALYST)
     ]
     assert "save_artifact" not in [
         tool.name for tool in tools_for_role(AgentRole.CRITIC)
@@ -212,6 +217,12 @@ def test_tools_bind_to_context_and_return_bounded_structured_results(
     assert document_result.data["path"] == "docs/business_definitions.md"
     assert "Profit" in document_result.data["content"]
 
+    relations_result = _invoke(inspect_relations, context)
+    assert relations_result.success is True
+    assert relations_result.data["relations"] == []
+    assert relations_result.data["total_relations"] == 0
+    assert context.ledger.budget.sql_executions == 1
+
     sql_result = _invoke(
         run_sql,
         context,
@@ -224,7 +235,7 @@ def test_tools_bind_to_context_and_return_bounded_structured_results(
     assert len(sql_result.data["rows"]) == 2
     assert sql_result.data["row_count"] == 500
     assert sql_result.data["model_rows_truncated"] is True
-    assert context.ledger.budget.sql_executions == 1
+    assert context.ledger.budget.sql_executions == 2
 
     context.python_service.executor.result = SandboxExecutionResult(
         success=True,
@@ -241,6 +252,15 @@ def test_tools_bind_to_context_and_return_bounded_structured_results(
     assert len(python_result.data["stdout"]) == 256
     assert python_result.data["stdout_truncated"] is True
     assert context.ledger.budget.python_executions == 1
+
+
+def test_python_tool_documents_separate_data_access_environment() -> None:
+    description = run_python.description.lower()
+
+    assert "separate isolated container" in description
+    assert "does not inherit" in description
+    assert "/workspace/inputs" in description
+    assert "registered sql views" in description
 
 
 def test_forbidden_tool_returns_permission_error_without_side_effects(

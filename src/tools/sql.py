@@ -17,6 +17,8 @@ _QUERY_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _RELATION_NAME_PATTERN = re.compile(r"[a-z_][a-z0-9_]*\Z")
 _DEFAULT_MAX_ROWS = 10_000
 _MAX_ALLOWED_ROWS = 100_000
+_MAX_RELATIONS_IN_INSPECTION = 100
+_MAX_COLUMNS_PER_RELATION = 256
 _TRUNCATION_GUIDANCE = (
     "The result was truncated at max_rows. Aggregate or filter the query "
     "before retrieving more rows."
@@ -42,6 +44,39 @@ class QueryExecutionResult(BaseModel):
     truncated: bool = False
     truncation_message: str | None = None
     error: str | None = None
+
+
+class RelationColumnMetadata(BaseModel):
+    """One column exposed by an approved input relation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    data_type: str = Field(min_length=1)
+
+
+class RelationMetadata(BaseModel):
+    """Bounded schema metadata for one approved input relation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    relation_name: str = Field(min_length=1)
+    source_path: str = Field(min_length=1)
+    columns: list[RelationColumnMetadata] = Field(default_factory=list)
+    columns_truncated: bool = False
+    row_count: int | None = Field(default=None, ge=0)
+
+
+class RelationInspectionResult(BaseModel):
+    """Typed metadata returned for approved registered input relations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    relations: list[RelationMetadata] = Field(default_factory=list)
+    total_relations: int = Field(ge=0)
+    relation_limit: int = Field(ge=1)
+    truncated: bool = False
+    row_counts_included: bool = False
 
 
 class SQLExecutionLedger(ToolEventLedger, Protocol):
@@ -72,6 +107,56 @@ class DuckDBExecutionService:
         """Return a copy of the approved relation-to-file mapping."""
 
         return dict(self._input_relations)
+
+    def inspect_relations(
+        self,
+        *,
+        include_row_counts: bool = True,
+    ) -> RelationInspectionResult:
+        """Inspect the schemas of the approved registered input relations.
+
+        Metadata is derived from the same temporary DuckDB views used by
+        :meth:`execute`. The method never accepts a path or model-authored
+        relation name, and only returns bounded metadata rather than rows.
+        """
+
+        started_at = datetime.now(UTC)
+        event_id = f"tool-inspect-relations-{uuid.uuid4().hex}"
+        try:
+            result = self._inspect_relations(include_row_counts=include_row_counts)
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            self._emit_event(
+                ToolEvent(
+                    id=event_id,
+                    tool_name="inspect_relations",
+                    status=ToolEventStatus.FAILED,
+                    started_at=started_at,
+                    completed_at=datetime.now(UTC),
+                    arguments={
+                        "include_row_counts": include_row_counts,
+                        "relation_limit": _MAX_RELATIONS_IN_INSPECTION,
+                    },
+                    error=error,
+                )
+            )
+            raise
+
+        self._emit_event(
+            ToolEvent(
+                id=event_id,
+                tool_name="inspect_relations",
+                status=ToolEventStatus.SUCCEEDED,
+                started_at=started_at,
+                completed_at=datetime.now(UTC),
+                arguments={
+                    "include_row_counts": include_row_counts,
+                    "relation_limit": _MAX_RELATIONS_IN_INSPECTION,
+                },
+                output=result.model_dump(mode="json"),
+            )
+        )
+        return result
 
     def execute(
         self,
@@ -155,6 +240,59 @@ class DuckDBExecutionService:
             rows = [list(row) for row in cursor.fetchmany(self.max_rows + 1)]
             truncated = len(rows) > self.max_rows
             return columns, rows[: self.max_rows], truncated
+        finally:
+            connection.close()
+
+    def _inspect_relations(
+        self,
+        *,
+        include_row_counts: bool,
+    ) -> RelationInspectionResult:
+        """Read bounded schema metadata from the approved DuckDB views."""
+
+        connection = duckdb.connect(database=":memory:")
+        try:
+            inputs = self.workspace.inputs.resolve()
+            allowed_directories = self._sql_literal(str(inputs))
+            connection.execute(f"SET allowed_directories = [{allowed_directories}]")
+            self._register_input_views(connection)
+            connection.execute("SET enable_external_access = false")
+
+            relation_items = list(self._input_relations.items())
+            visible_items = relation_items[:_MAX_RELATIONS_IN_INSPECTION]
+            relations: list[RelationMetadata] = []
+            for relation, path in visible_items:
+                description = connection.execute(
+                    f"DESCRIBE {self._quote_identifier(relation)}"
+                ).fetchmany(_MAX_COLUMNS_PER_RELATION + 1)
+                columns_truncated = len(description) > _MAX_COLUMNS_PER_RELATION
+                columns = [
+                    RelationColumnMetadata(name=row[0], data_type=row[1])
+                    for row in description[:_MAX_COLUMNS_PER_RELATION]
+                ]
+                row_count = None
+                if include_row_counts:
+                    row_count = int(
+                        connection.execute(
+                            f"SELECT COUNT(*) FROM {self._quote_identifier(relation)}"
+                        ).fetchone()[0]
+                    )
+                relations.append(
+                    RelationMetadata(
+                        relation_name=relation,
+                        source_path=path.relative_to(inputs).as_posix(),
+                        columns=columns,
+                        columns_truncated=columns_truncated,
+                        row_count=row_count,
+                    )
+                )
+            return RelationInspectionResult(
+                relations=relations,
+                total_relations=len(relation_items),
+                relation_limit=_MAX_RELATIONS_IN_INSPECTION,
+                truncated=len(relation_items) > _MAX_RELATIONS_IN_INSPECTION,
+                row_counts_included=include_row_counts,
+            )
         finally:
             connection.close()
 

@@ -36,6 +36,7 @@ def test_analyst_is_structured_and_cannot_delegate() -> None:
     assert [tool.name for tool in agent.tools] == [
         "inspect_workspace",
         "read_document",
+        "inspect_relations",
         "run_sql",
         "run_python",
         "save_artifact",
@@ -66,6 +67,9 @@ def test_analyst_instructions_cover_procedure_and_evidence_contract() -> None:
         "funnel",
         "period",
         "definitions",
+        "inspect_relations",
+        "separate isolated",
+        "/workspace/inputs",
         "causal",
         "follow_up_questions",
         "evidence_refs",
