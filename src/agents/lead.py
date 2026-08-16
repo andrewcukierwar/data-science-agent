@@ -24,7 +24,7 @@ from agents.runtime import (
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
 from schemas.audit import AuditResult
-from schemas.findings import SpecialistResult
+from schemas.findings import SpecialistResult, canonicalize_specialist_result
 from schemas.lead import LeadResult, SpecialistTask
 from schemas.run_state import Hypothesis
 
@@ -267,12 +267,44 @@ def _specialist_tool(
     return specialist.as_tool(
         tool_name=tool_name,
         tool_description=description,
+        custom_output_extractor=(
+            _canonical_specialist_output(role)
+            if role in {AgentRole.ANALYST, AgentRole.STATISTICIAN}
+            else None
+        ),
         max_turns=max_turns,
         parameters=SpecialistTask,
         include_input_schema=True,
         hooks=hooks,
         failure_error_function=_failure_error,
     )
+
+
+def _canonical_specialist_output(role: AgentRole) -> Any:
+    """Build an extractor that returns the persisted namespaced result."""
+
+    async def _extract(run_result: Any) -> str:
+        output = getattr(run_result, "final_output", None)
+        try:
+            result = (
+                output
+                if isinstance(output, SpecialistResult)
+                else SpecialistResult.model_validate_json(output)
+                if isinstance(output, str)
+                else SpecialistResult.model_validate(output)
+            )
+        except (TypeError, ValidationError):
+            return str(output)
+
+        # The nested hook persists the role-specific form. The output
+        # extractor repeats the idempotent transformation so the Lead sees the
+        # same canonical IDs that were written to the ledger.
+        return canonicalize_specialist_result(
+            result,
+            role.value,
+        ).model_dump_json()
+
+    return _extract
 
 
 def build_lead_agent(

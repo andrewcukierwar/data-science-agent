@@ -10,7 +10,12 @@ from schemas.audit import (
     MissingnessObservation,
     TableAudit,
 )
-from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
+from schemas.findings import (
+    ConfidenceLevel,
+    Finding,
+    SpecialistResult,
+    canonicalize_specialist_result,
+)
 from schemas.lead import LeadRecommendation, LeadResult, SpecialistTask
 from schemas.run_state import (
     AgentEvent,
@@ -46,6 +51,7 @@ __all__ = [
     "AuditResult",
     "AuditStatus",
     "ConfidenceLevel",
+    "canonicalize_specialist_result",
     "CriticCandidate",
     "DataAuditResult",
     "DataQualityIssue",

@@ -501,6 +501,10 @@ def run_python(
 ) -> ToolOutputText:
     """Execute analysis Python through the Docker-backed service.
 
+    A successful run returns exact ``generated_evidence`` references for new or
+    modified files under ``working/`` and ``outputs/``. Copy those references
+    verbatim into later finding evidence; do not construct a path manually.
+
     Args:
         source: Python source code to persist under working/scripts/.
         script_id: Optional reproducible identifier for the saved script.
@@ -535,6 +539,13 @@ def run_python(
             "exit_code": result.exit_code,
             "duration_seconds": result.duration_seconds,
             "timed_out": result.timed_out,
+            "generated_evidence": [
+                item.model_dump(mode="json") for item in result.generated_evidence
+            ],
+            "generated_evidence_refs": [
+                item.evidence_ref for item in result.generated_evidence
+            ],
+            "generated_evidence_truncated": result.generated_evidence_truncated,
         }
         if not result.success:
             return _sdk_response(

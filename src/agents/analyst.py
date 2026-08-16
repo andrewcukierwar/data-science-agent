@@ -10,7 +10,7 @@ from agents import Agent, Runner
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
-from schemas.findings import SpecialistResult
+from schemas.findings import SpecialistResult, canonicalize_specialist_result
 from schemas.run_state import ArtifactKind
 from tools.artifacts import ArtifactManager
 
@@ -69,9 +69,11 @@ Required workflow:
 - Treat each material quantitative claim as unsupported until it is tied to an
   executed query/script or registered artifact.
 - Put exact evidence references in every material quantitative Finding's
-  `evidence_refs`. Use the query/script path or artifact identifier returned by
-  the tools; never invent a reference. If evidence is unavailable, do not make
-  the quantitative claim and add a follow-up question instead.
+  `evidence_refs`. Copy references verbatim from the results returned by
+  `run_sql`, `run_python`, `save_artifact`, or another approved evidence tool;
+  never construct a path manually or assume that a workspace file was
+  executed evidence. If evidence is unavailable, do not make the quantitative
+  claim and add a follow-up question instead.
 - Distinguish observed period differences from unsupported causal explanations.
   Include caveats when the data supports association but not causation.
 - When an analysis reveals a material unanswered sub-question, record it in
@@ -158,15 +160,24 @@ def validate_analyst_result(
 
 def _persist_analyst_artifacts(
     result: SpecialistResult,
+    ledger: AnalysisLedger,
     artifact_manager: ArtifactManager,
 ) -> None:
-    """Register model-listed files not already registered by ``save_artifact``."""
+    """Register model-listed files only when execution returned their refs."""
+
+    executed_refs = {
+        reference for event in ledger.tool_events for reference in event.artifact_refs
+    }
 
     for path in result.artifacts:
         if artifact_manager.ledger.get_artifact(path) is not None:
             continue
         if any(artifact.path == path for artifact in artifact_manager.ledger.artifacts):
             continue
+        if path not in executed_refs:
+            raise AnalystArtifactError(
+                f"analyst artifact was not returned by an executed tool: {path}"
+            )
         try:
             artifact_manager.register(
                 path,
@@ -188,9 +199,17 @@ def persist_analyst_result(
 ) -> SpecialistResult:
     """Validate and persist Analyst findings for direct or nested runs."""
 
-    _persist_analyst_artifacts(result, context.artifact_manager)
-    validate_analyst_result(result, context.ledger)
-    for finding in result.findings:
+    canonical_result = canonicalize_specialist_result(
+        result,
+        AgentRole.ANALYST.value,
+    )
+    _persist_analyst_artifacts(
+        canonical_result,
+        context.ledger,
+        context.artifact_manager,
+    )
+    validate_analyst_result(canonical_result, context.ledger)
+    for finding in canonical_result.findings:
         existing = next(
             (item for item in context.ledger.findings if item.id == finding.id),
             None,
@@ -199,7 +218,7 @@ def persist_analyst_result(
             context.ledger.add_finding(finding)
         elif existing != finding:
             raise AnalystEvidenceError(f"analyst finding id conflicts: {finding.id}")
-    return result
+    return canonical_result
 
 
 async def run_analyst(

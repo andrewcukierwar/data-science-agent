@@ -1,11 +1,14 @@
 """Unit tests for the high-level Python analysis execution service."""
 
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
+from agents.analyst import validate_analyst_result
 from orchestration.ledger import AnalysisLedger
 from sandbox.executor import SandboxExecutionResult
+from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from tools.python import PythonExecutionService
 from tools.workspace import WorkspaceManager
 
@@ -32,9 +35,15 @@ class FakeExecutor:
     cpu_limit = 1.0
     pids_limit = 128
 
-    def __init__(self, workspace, result: SandboxExecutionResult) -> None:
+    def __init__(
+        self,
+        workspace,
+        result: SandboxExecutionResult,
+        generated_files: dict[str, str | bytes] | None = None,
+    ) -> None:
         self.workspace = workspace
         self.result = result
+        self.generated_files = generated_files or {}
         self.calls = []
 
     def execute(self, script_path: str, *, timeout_seconds: float | None = None):
@@ -47,6 +56,13 @@ class FakeExecutor:
                 "timeout_seconds": timeout_seconds,
             }
         )
+        for relative_path, content in self.generated_files.items():
+            path = self.workspace.root / relative_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(content, bytes):
+                path.write_bytes(content)
+            else:
+                path.write_text(content, encoding="utf-8")
         return self.result
 
 
@@ -121,6 +137,102 @@ def test_run_python_records_failure_and_increments_usage(
     assert ledger.events[0].status.value == "failed"
     assert ledger.events[0].error == result.error
     assert ledger.python_executions == 1
+
+
+def test_successful_python_run_returns_csv_as_executed_evidence(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    ledger = AnalysisLedger(workspace, objective="Test generated evidence.")
+    executor = FakeExecutor(
+        workspace,
+        SandboxExecutionResult(success=True, exit_code=0, duration_seconds=0.1),
+        generated_files={"working/results/summary.csv": "metric,value\ncac,1.2\n"},
+    )
+    service = PythonExecutionService(workspace, ledger, executor=executor)
+
+    result = service.run_python("pass", script_id="P-CSV")
+
+    assert result.generated_evidence[0].evidence_ref == "working/results/summary.csv"
+    assert result.generated_evidence[0].change_type == "created"
+    event = ledger.tool_events[0]
+    assert "working/results/summary.csv" in event.artifact_refs
+    assert event.output is not None
+    assert event.output["generated_evidence_refs"] == ["working/results/summary.csv"]
+    assert event.output["generated_evidence"][0]["size_bytes"] == len(
+        "metric,value\ncac,1.2\n"
+    )
+    finding = Finding(
+        id="F-CSV",
+        statement="The generated CSV contains the measured CAC.",
+        metric="cac",
+        value=1.2,
+        evidence_refs=[result.generated_evidence[0].evidence_ref],
+        confidence=ConfidenceLevel.MEDIUM,
+    )
+    assert validate_analyst_result(
+        SpecialistResult(objective="Use the generated CSV.", findings=[finding]),
+        ledger,
+    ).findings == [finding]
+
+
+def test_successful_python_run_retains_chart_checksum_and_size(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    ledger = AnalysisLedger(workspace, objective="Test generated chart evidence.")
+    chart_bytes = b"not-a-rendered-chart-but-a-generated-file"
+    executor = FakeExecutor(
+        workspace,
+        SandboxExecutionResult(success=True, exit_code=0, duration_seconds=0.1),
+        generated_files={"outputs/charts/diagnostic.png": chart_bytes},
+    )
+    service = PythonExecutionService(workspace, ledger, executor=executor)
+
+    result = service.run_python("pass", script_id="P-CHART")
+
+    evidence = result.generated_evidence[0]
+    assert evidence.evidence_ref == "outputs/charts/diagnostic.png"
+    assert evidence.sha256 == sha256(chart_bytes).hexdigest()
+    assert evidence.size_bytes == len(chart_bytes)
+    assert ledger.tool_events[0].artifact_refs[-1] == evidence.evidence_ref
+
+
+def test_untouched_preexisting_file_is_not_executed_evidence(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    ledger = AnalysisLedger(workspace, objective="Reject unrelated evidence.")
+    preexisting = workspace.working / "results" / "unrelated.csv"
+    preexisting.parent.mkdir(parents=True, exist_ok=True)
+    preexisting.write_text("metric,value\nother,99\n", encoding="utf-8")
+    service = PythonExecutionService(
+        workspace,
+        ledger,
+        executor=FakeExecutor(
+            workspace,
+            SandboxExecutionResult(success=True, exit_code=0, duration_seconds=0.1),
+        ),
+    )
+
+    result = service.run_python("pass", script_id="P-NO-UNRELATED")
+
+    assert result.generated_evidence == []
+    assert "working/results/unrelated.csv" not in ledger.tool_events[0].artifact_refs
+    unrelated_finding = Finding(
+        id="F-UNRELATED",
+        statement="The unrelated file is evidence.",
+        metric="other",
+        value=99,
+        evidence_refs=["working/results/unrelated.csv"],
+        confidence=ConfidenceLevel.LOW,
+    )
+    with pytest.raises(ValueError, match="F-UNRELATED"):
+        validate_analyst_result(
+            SpecialistResult(
+                objective="Reject unrelated evidence.",
+                findings=[unrelated_finding],
+            ),
+            ledger,
+        )
 
 
 def test_run_python_persists_events_and_budget_through_analysis_ledger(

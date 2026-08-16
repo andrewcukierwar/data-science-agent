@@ -42,3 +42,36 @@ class SpecialistResult(BaseModel):
     methods_used: list[NonEmptyString] = Field(default_factory=list)
     follow_up_questions: list[NonEmptyString] = Field(default_factory=list)
     caveats: list[NonEmptyString] = Field(default_factory=list)
+
+
+def canonicalize_specialist_result(
+    result: SpecialistResult,
+    namespace: str,
+) -> SpecialistResult:
+    """Namespace specialist-local finding IDs for persistent run state.
+
+    Models can safely use concise local identifiers such as ``F1``. The
+    application owns global identity, so the namespace is applied
+    deterministically at the persistence boundary and repeated application is
+    idempotent for the same specialist.
+    """
+
+    normalized_namespace = namespace.strip().lower()
+    if not normalized_namespace:
+        raise ValueError("specialist finding namespace must be non-empty")
+
+    prefix = f"{normalized_namespace}:"
+    findings: list[Finding] = []
+    seen_ids: set[str] = set()
+    for finding in result.findings:
+        canonical_id = (
+            finding.id if finding.id.startswith(prefix) else prefix + finding.id
+        )
+        if canonical_id in seen_ids:
+            raise ValueError(
+                f"duplicate finding id in {normalized_namespace} result: {canonical_id}"
+            )
+        seen_ids.add(canonical_id)
+        findings.append(finding.model_copy(update={"id": canonical_id}))
+
+    return result.model_copy(update={"findings": findings})

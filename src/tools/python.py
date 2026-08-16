@@ -3,7 +3,9 @@
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import Protocol
+from hashlib import sha256
+from pathlib import Path, PurePosixPath
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,6 +15,19 @@ from schemas.run_state import ToolEvent, ToolEventStatus
 from tools.workspace import Workspace
 
 _SCRIPT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+_APPROVED_GENERATED_DIRECTORIES = ("working", "outputs")
+_MAX_GENERATED_EVIDENCE = 100
+
+
+class PythonGeneratedEvidence(BaseModel):
+    """Provenance for one file created or modified by a Python execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_ref: str = Field(min_length=1)
+    change_type: Literal["created", "modified"]
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=0)
 
 
 class PythonExecutionResult(BaseModel):
@@ -29,6 +44,8 @@ class PythonExecutionResult(BaseModel):
     duration_seconds: float = Field(ge=0)
     timed_out: bool = False
     error: str | None = None
+    generated_evidence: list[PythonGeneratedEvidence] = Field(default_factory=list)
+    generated_evidence_truncated: bool = False
 
 
 class PythonExecutionLedger(ToolEventLedger, Protocol):
@@ -97,6 +114,7 @@ class PythonExecutionService:
                 f"Python script already exists: {relative_path}"
             ) from exc
 
+        self._execution_snapshot = self._snapshot_approved_files()
         started_at = datetime.now(UTC)
         try:
             sandbox_result = self.executor.execute(
@@ -110,6 +128,10 @@ class PythonExecutionService:
                 error=f"{type(exc).__name__}: {exc}",
             )
 
+        generated_evidence, generated_evidence_truncated = (
+            self._generated_evidence() if sandbox_result.success else ([], False)
+        )
+
         result = PythonExecutionResult(
             script_id=script_id,
             script_path=relative_path,
@@ -120,6 +142,8 @@ class PythonExecutionService:
             duration_seconds=sandbox_result.duration_seconds,
             timed_out=sandbox_result.timed_out,
             error=self._result_error(sandbox_result),
+            generated_evidence=generated_evidence,
+            generated_evidence_truncated=generated_evidence_truncated,
         )
         event_stdout, stdout_truncated = self._truncate_event_text(result.stdout)
         event_stderr, stderr_truncated = self._truncate_event_text(result.stderr)
@@ -149,9 +173,19 @@ class PythonExecutionService:
                 "exit_code": result.exit_code,
                 "duration_seconds": result.duration_seconds,
                 "timed_out": result.timed_out,
+                "generated_evidence": [
+                    item.model_dump(mode="json") for item in result.generated_evidence
+                ],
+                "generated_evidence_refs": [
+                    item.evidence_ref for item in result.generated_evidence
+                ],
+                "generated_evidence_truncated": result.generated_evidence_truncated,
             },
             error=result.error,
-            artifact_refs=[relative_path],
+            artifact_refs=[
+                relative_path,
+                *(item.evidence_ref for item in result.generated_evidence),
+            ],
         )
         self._record(event)
         return result
@@ -180,6 +214,87 @@ class PythonExecutionService:
         if len(value) <= self.max_event_output_chars:
             return value, False
         return value[: self.max_event_output_chars], True
+
+    def _generated_evidence(
+        self,
+    ) -> tuple[list[PythonGeneratedEvidence], bool]:
+        """Return safe files changed since the pre-execution snapshot.
+
+        The snapshot is captured immediately before execution, after the
+        submitted script has been persisted. Only regular files with no
+        symlink components under ``working/`` or ``outputs/`` are eligible.
+        """
+
+        before = getattr(self, "_execution_snapshot", {})
+        after = self._snapshot_approved_files()
+        changed: list[PythonGeneratedEvidence] = []
+        for relative_path in sorted(after):
+            previous = before.get(relative_path)
+            checksum, size_bytes = after[relative_path]
+            if previous == (checksum, size_bytes):
+                continue
+            changed.append(
+                PythonGeneratedEvidence(
+                    evidence_ref=relative_path,
+                    change_type="created" if previous is None else "modified",
+                    sha256=checksum,
+                    size_bytes=size_bytes,
+                )
+            )
+        return changed[:_MAX_GENERATED_EVIDENCE], len(changed) > _MAX_GENERATED_EVIDENCE
+
+    def _snapshot_approved_files(self) -> dict[str, tuple[str, int]]:
+        """Hash safe regular files in the writable analysis directories."""
+
+        snapshot: dict[str, tuple[str, int]] = {}
+        root = self.workspace.root.resolve()
+        for directory_name in _APPROVED_GENERATED_DIRECTORIES:
+            directory = getattr(self.workspace, directory_name)
+            approved_root = directory.resolve()
+            for candidate in sorted(directory.rglob("*")):
+                if not candidate.is_file() or not self._safe_generated_path(
+                    candidate,
+                    root=root,
+                    approved_root=approved_root,
+                ):
+                    continue
+                relative_path = candidate.relative_to(root).as_posix()
+                snapshot[relative_path] = self._file_provenance(candidate)
+        return snapshot
+
+    @staticmethod
+    def _safe_generated_path(
+        candidate: Path,
+        *,
+        root: Path,
+        approved_root: Path,
+    ) -> bool:
+        """Check that a candidate has no symlink escape from its root."""
+
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            return False
+        current = root
+        for part in PurePosixPath(relative.as_posix()).parts:
+            current /= part
+            if current.is_symlink():
+                return False
+        try:
+            candidate.resolve(strict=True).relative_to(approved_root)
+        except (OSError, ValueError):
+            return False
+        return True
+
+    @staticmethod
+    def _file_provenance(path: Path) -> tuple[str, int]:
+        digest = sha256()
+        size_bytes = 0
+        with path.open("rb") as file_handle:
+            while chunk := file_handle.read(1024 * 1024):
+                digest.update(chunk)
+                size_bytes += len(chunk)
+        return digest.hexdigest(), size_bytes
 
     @staticmethod
     def _result_error(sandbox_result: SandboxExecutionResult) -> str | None:

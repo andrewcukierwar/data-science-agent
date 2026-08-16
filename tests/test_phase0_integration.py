@@ -138,7 +138,14 @@ print(json.dumps(summary, sort_keys=True))
     assert events["run_sql"].status is ToolEventStatus.SUCCEEDED
     assert events["run_python"].status is ToolEventStatus.SUCCEEDED
     assert events["run_sql"].artifact_refs == ["working/queries/Q-PHASE0.sql"]
-    assert events["run_python"].artifact_refs == ["working/scripts/P-PHASE0.py"]
+    assert events["run_python"].artifact_refs == [
+        "working/scripts/P-PHASE0.py",
+        "outputs/summary.json",
+    ]
+    assert events["run_python"].output is not None
+    assert events["run_python"].output["generated_evidence_refs"] == [
+        "outputs/summary.json"
+    ]
     assert events["run_sql"].output is not None
     assert events["run_sql"].output["truncated"] is False
     assert reloaded.budget.sql_executions == 1

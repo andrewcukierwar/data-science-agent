@@ -143,8 +143,8 @@ def test_statistician_persists_findings_and_artifacts(
     returned = asyncio.run(run_statistician(context))
     reloaded = AnalysisLedger(context.ledger.state_path)
 
-    assert returned == result
-    assert reloaded.findings == result.findings
+    assert returned.findings[0].id == "statistician:S001"
+    assert reloaded.findings == returned.findings
     assert reloaded.artifacts[0].path == "working/scripts/stats.py"
     assert reloaded.artifacts[0].kind.value == "script"
     assert context.ledger.budget.specialist_invocations == 1

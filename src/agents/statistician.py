@@ -10,7 +10,7 @@ from agents import Agent, Runner
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
-from schemas.findings import SpecialistResult
+from schemas.findings import SpecialistResult, canonicalize_specialist_result
 from schemas.run_state import ArtifactKind
 from tools.artifacts import ArtifactManager
 
@@ -85,8 +85,9 @@ Required workflow:
   claim that a channel, campaign, or intervention caused an outcome without an
   appropriate causal design.
 - Attach every quantitative Finding to an executed Python script, tool event,
-  or registered artifact in `evidence_refs`. Use exact relative workspace paths
-  returned by the tool; never invent evidence.
+  or registered artifact in `evidence_refs`. Copy exact references returned by
+  `run_python`, `save_artifact`, or another approved evidence tool; never
+  construct a path manually or invent evidence.
 - List only analysis artifacts that the executed script actually created under
   `working/` or `outputs/`.
 
@@ -173,15 +174,24 @@ def _artifact_id(path: str) -> str:
 
 def _persist_artifacts(
     result: SpecialistResult,
+    ledger: AnalysisLedger,
     artifact_manager: ArtifactManager,
 ) -> None:
-    """Register model-listed files after ArtifactManager safety checks."""
+    """Register model-listed files only when execution returned their refs."""
+
+    executed_refs = {
+        reference for event in ledger.tool_events for reference in event.artifact_refs
+    }
 
     for path in result.artifacts:
         if artifact_manager.ledger.get_artifact(path) is not None:
             continue
         if any(artifact.path == path for artifact in artifact_manager.ledger.artifacts):
             continue
+        if path not in executed_refs:
+            raise StatisticianArtifactError(
+                f"statistical artifact was not returned by an executed tool: {path}"
+            )
         try:
             artifact_manager.register(
                 path,
@@ -201,9 +211,17 @@ def persist_statistician_result(
 ) -> SpecialistResult:
     """Validate and persist statistical findings and claimed artifacts."""
 
-    _persist_artifacts(result, context.artifact_manager)
-    validate_statistician_result(result, context.ledger)
-    for finding in result.findings:
+    canonical_result = canonicalize_specialist_result(
+        result,
+        AgentRole.STATISTICIAN.value,
+    )
+    _persist_artifacts(
+        canonical_result,
+        context.ledger,
+        context.artifact_manager,
+    )
+    validate_statistician_result(canonical_result, context.ledger)
+    for finding in canonical_result.findings:
         existing = next(
             (
                 current
@@ -218,7 +236,7 @@ def persist_statistician_result(
             raise StatisticianEvidenceError(
                 f"finding id already exists with different content: {finding.id}"
             )
-    return result
+    return canonical_result
 
 
 async def run_statistician(

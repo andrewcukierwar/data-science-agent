@@ -25,7 +25,7 @@ from agents import (
     update_investigation_plan,
     validate_lead_result,
 )
-from agents.lead import Runner, _NestedSpecialistHooks
+from agents.lead import Runner, _canonical_specialist_output, _NestedSpecialistHooks
 from orchestration.budgets import BudgetExhaustedError
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
@@ -285,6 +285,28 @@ def test_run_lead_consumes_typed_output_and_persists_findings(
     assert reloaded.findings == result.findings
 
 
+def test_lead_specialist_tool_channel_returns_canonical_finding_ids() -> None:
+    result = SpecialistResult(
+        objective="Measure a bounded change.",
+        findings=[
+            Finding(
+                id="F1",
+                statement="The measured value changed.",
+                metric="change",
+                value=0.1,
+                evidence_refs=["tool-evidence"],
+                confidence=ConfidenceLevel.MEDIUM,
+            )
+        ],
+    )
+    extractor = _canonical_specialist_output(AgentRole.ANALYST)
+
+    returned = asyncio.run(extractor(SimpleNamespace(final_output=result)))
+    parsed = SpecialistResult.model_validate_json(returned)
+
+    assert parsed.findings[0].id == "analyst:F1"
+
+
 def test_nested_specialist_hook_enforces_budget_and_restores_lead_role(
     tmp_path: Path,
 ) -> None:
@@ -349,7 +371,8 @@ def test_nested_statistician_persists_artifacts_like_standalone_run(
 
     reloaded = AnalysisLedger(context.ledger.state_path)
     assert context.agent_role is AgentRole.LEAD
-    assert reloaded.findings == result.findings
+    assert reloaded.findings[0].id == "statistician:S-NESTED"
+    assert reloaded.findings[0].statement == result.findings[0].statement
     assert len(reloaded.artifacts) == 1
     assert reloaded.artifacts[0].path == "working/scripts/nested_stats.py"
     assert reloaded.specialist_results[0].agent_role == AgentRole.STATISTICIAN
