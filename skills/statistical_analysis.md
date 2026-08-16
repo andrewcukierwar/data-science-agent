@@ -15,11 +15,22 @@ Use this procedure for evidence-backed inferential analysis:
    p is below a threshold.
 5. Separate statistical significance from practical significance. Compare the
    effect and its uncertainty with the business-relevant threshold.
-6. Treat many tested metrics, segments, and periods as a multiple-testing risk.
+6. Identify the grain of every source before combining facts. Aggregate each
+   source to a common reporting grain before joining, especially when daily
+   spend is combined with customer- or order-level outcomes. Reconcile counts
+   and totals before relying on the result.
+7. For named reporting periods, use explicit date boundaries or explicit
+   quarter inclusion. Never classify every period that is not Q1 as Q2.
+   Reconcile derived cohort counts to the customers/acquisition table before
+   inference.
+8. Treat many tested metrics, segments, and periods as a multiple-testing risk.
    Pre-specify primary tests where possible and label exploratory results.
-7. Treat observational period and channel comparisons as associations. Do not
+9. Treat observational period and channel comparisons as associations. Do not
    claim causality without randomization or a defensible causal design.
-8. Use Python for reproducible calculations, save scripts and useful outputs in
+10. Return material period or segment comparisons as generic `MetricComparison`
+    objects as well as prose Findings. Preserve exact metric identity,
+    dimensions, periods, comparison type, unit, value, and evidence refs.
+11. Use Python for reproducible calculations, save scripts and useful outputs in
    approved workspace directories, and cite executed evidence in findings.
 
 For comparable period changes, use a stable metric identifier and set

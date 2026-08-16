@@ -28,6 +28,11 @@ from orchestration.ledger import AnalysisLedger
 from schemas.audit import AuditResult
 from schemas.findings import Finding, SpecialistResult, canonicalize_specialist_result
 from schemas.lead import LeadResult, SpecialistTask
+from schemas.metrics import (
+    MetricComparison,
+    deduplicate_metric_comparisons,
+    metric_comparison_identity,
+)
 from schemas.run_state import Hypothesis
 
 LEAD_OBJECTIVE = (
@@ -492,6 +497,25 @@ def _canonicalize_evidence_refs(
     return list(dict.fromkeys(resolved))
 
 
+def _reuse_specialist_metric_comparisons(
+    comparisons: list[MetricComparison],
+    ledger: AnalysisLedger,
+) -> list[MetricComparison]:
+    """Reuse exact specialist comparisons when Lead selects the same metric."""
+
+    specialist_index: dict[tuple[object, ...], MetricComparison] = {}
+    for record in ledger.specialist_results:
+        for comparison in record.result.metric_comparisons:
+            specialist_index.setdefault(
+                metric_comparison_identity(comparison), comparison
+            )
+    reused = [
+        specialist_index.get(metric_comparison_identity(comparison), comparison)
+        for comparison in comparisons
+    ]
+    return deduplicate_metric_comparisons(reused)
+
+
 def validate_lead_result(
     result: LeadResult,
     ledger: AnalysisLedger,
@@ -552,6 +576,10 @@ def validate_lead_result(
         )
         for comparison in result.metric_comparisons
     ]
+    canonical_metric_comparisons = _reuse_specialist_metric_comparisons(
+        canonical_metric_comparisons,
+        ledger,
+    )
     result = result.model_copy(
         update={
             "findings": canonical_findings,

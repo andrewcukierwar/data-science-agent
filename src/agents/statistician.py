@@ -16,6 +16,7 @@ from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import SpecialistResult, canonicalize_specialist_result
+from schemas.metrics import deduplicate_metric_comparisons
 from schemas.run_state import ArtifactKind
 from tools.artifacts import ArtifactManager
 
@@ -33,6 +34,14 @@ _FALLBACK_SKILL_GUIDANCE = """Statistical analysis procedure:
 3. Distinguish statistical significance from a business-relevant effect size.
 4. Treat multiple comparisons and observational differences cautiously; do not
    claim causality without an appropriate design.
+5. Use explicit date boundaries or explicit quarter inclusion for named periods;
+   never classify every period that is not Q1 as Q2. Reconcile cohort counts to
+   the customers acquisition table before inference.
+6. Identify source grain before combining facts, aggregate each source to a
+   common reporting grain before joining, and reconcile counts and totals after
+   material joins.
+7. Return material period/segment comparisons as generic MetricComparison
+   objects with exact values, units, periods, dimensions, and evidence refs.
 """
 
 _ARTIFACT_SUFFIXES: Final[dict[str, ArtifactKind]] = {
@@ -78,6 +87,12 @@ Required workflow:
   interpreting a metric.
 - State the unit of analysis, target population, estimand, null hypothesis,
   alternative hypothesis, and practical decision threshold.
+- For named periods such as Q1 and Q2, use explicit date boundaries or explicit
+  quarter inclusion. Never treat every period that is not Q1 as Q2, and
+  reconcile derived cohorts to the customers acquisition table.
+- Identify the grain of every input before combining facts. Aggregate to the
+  common reporting grain before joining, especially when spend is daily and
+  outcomes are customer- or order-level.
 - Select a test based on the outcome type, sample design, pairing, independence,
   distribution, and variance structure. Use Python for all calculations.
 - Check and report assumptions, sample-size limitations, missingness, outliers,
@@ -89,6 +104,10 @@ Required workflow:
 - Treat observational period or channel comparisons as associations. Do not
   claim that a channel, campaign, or intervention caused an outcome without an
   appropriate causal design.
+- Return material period/segment comparisons as generic `MetricComparison`
+  objects in addition to Findings, preserving exact computed values, units,
+  periods, dimensions, and evidence references. Do not reconstruct values from
+  prose or use scenario-specific metric IDs.
 - Attach every quantitative Finding to an executed Python script, tool event,
   or registered artifact in `evidence_refs`. Copy exact references returned by
   `run_python`, `save_artifact`, or another approved evidence tool; never
@@ -163,7 +182,22 @@ def validate_statistician_result(
                     }
                 )
                 for finding in result.findings
-            ]
+            ],
+            "metric_comparisons": [
+                comparison.model_copy(
+                    update={
+                        "evidence_refs": canonicalize_evidence_refs(
+                            comparison.evidence_refs,
+                            executed_refs=executed_refs,
+                            aliases=aliases,
+                        )
+                        or comparison.evidence_refs
+                    }
+                )
+                for comparison in deduplicate_metric_comparisons(
+                    result.metric_comparisons
+                )
+            ],
         }
     )
     invalid_findings = [
@@ -176,6 +210,16 @@ def validate_statistician_result(
         raise StatisticianEvidenceError(
             "statistical findings cite no executed evidence: "
             + ", ".join(invalid_findings)
+        )
+    invalid_comparisons = [
+        comparison.metric_key
+        for comparison in result.metric_comparisons
+        if not any(reference in executed_refs for reference in comparison.evidence_refs)
+    ]
+    if invalid_comparisons:
+        raise StatisticianEvidenceError(
+            "metric comparisons cite no executed evidence: "
+            + ", ".join(invalid_comparisons)
         )
     return result
 
@@ -264,6 +308,8 @@ def persist_statistician_result(
     canonical_result = validate_statistician_result(canonical_result, context.ledger)
     for finding in canonical_result.findings:
         context.ledger.upsert_finding(finding)
+    for comparison in canonical_result.metric_comparisons:
+        context.ledger.upsert_metric_comparison(comparison)
     return canonical_result
 
 

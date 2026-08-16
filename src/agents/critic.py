@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import isclose
 from pathlib import Path
 
 from agents import Agent, Runner
@@ -9,6 +10,7 @@ from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.budgets import BudgetResource
 from orchestration.ledger import AnalysisLedger
+from schemas.metrics import MetricComparison, metric_comparison_identity
 from schemas.validation import (
     CriticCandidate,
     ValidationIssue,
@@ -24,16 +26,21 @@ CRITIC_OBJECTIVE = (
 _FALLBACK_SKILL_GUIDANCE = """Validation procedure:
 
 1. Reproduce material numbers from the referenced query or script.
-2. Check definitions, denominators, joins, artifacts, and causal language.
-3. Check whether the candidate answered the objective, resolved material
+2. Check definitions, denominators, table grain, joins, artifacts, and causal
+   language. Confirm spend was aggregated before joining to lower-grain facts.
+3. For named periods, verify explicit boundaries and reconcile cohort counts to
+   the acquisition table; do not treat every non-Q1 period as Q2.
+4. Check whether the candidate answered the objective, resolved material
    follow-up questions, and investigated available upstream mechanisms.
-4. Return PASS only when the candidate is supported and complete; otherwise
+5. Return PASS only when the candidate is supported and complete; otherwise
    return REVISE with severity, evidence, and a concrete remediation.
 """
 
 
 def candidate_completeness_validation(
     candidate: CriticCandidate,
+    *,
+    context: AgentRunContext | None = None,
 ) -> ValidationResult | None:
     """Apply deterministic completeness gates before model-based review.
 
@@ -43,34 +50,235 @@ def candidate_completeness_validation(
     bounded runs that reach Critic after continuation capacity is exhausted.
     """
 
-    if not candidate.follow_up_analysis:
+    issues: list[ValidationIssue] = []
+    if candidate.follow_up_analysis:
+        question = (
+            candidate.follow_up_rationale
+            or (candidate.open_questions[0] if candidate.open_questions else None)
+            or "The candidate requests additional analysis."
+        )
+        issues.append(
+            ValidationIssue(
+                id="V-COMPLETENESS-FOLLOW-UP",
+                severity=ValidationSeverity.HIGH,
+                category="task_completeness",
+                message=(
+                    "The candidate explicitly leaves objective-critical follow-up "
+                    f"analysis unresolved: {question}"
+                ),
+                evidence_refs=candidate.evidence_refs,
+                recommendation=(
+                    "Complete the bounded follow-up with the appropriate specialist, "
+                    "or set follow_up_analysis=false only after documenting why the "
+                    "question is unanswerable or immaterial."
+                ),
+            )
+        )
+
+    if _profitability_requires_margin_review(candidate, context):
+        issues.append(
+            ValidationIssue(
+                id="V-COMPLETENESS-MARGIN",
+                severity=ValidationSeverity.HIGH,
+                category="task_completeness",
+                message=(
+                    "The profitability candidate does not address COGS or margin "
+                    "even though COGS data is available."
+                ),
+                recommendation=(
+                    "Assess COGS/margin and state whether it is a material driver "
+                    "or non-driver before finalizing the profitability explanation."
+                ),
+            )
+        )
+
+    if not issues:
         return None
 
-    question = (
-        candidate.follow_up_rationale
-        or (candidate.open_questions[0] if candidate.open_questions else None)
-        or "The candidate requests additional analysis."
-    )
-    issue = ValidationIssue(
-        id="V-COMPLETENESS-FOLLOW-UP",
-        severity=ValidationSeverity.HIGH,
-        category="task_completeness",
-        message=(
-            "The candidate explicitly leaves objective-critical follow-up "
-            f"analysis unresolved: {question}"
-        ),
-        evidence_refs=candidate.evidence_refs,
-        recommendation=(
-            "Complete the bounded follow-up with the appropriate specialist, "
-            "or set follow_up_analysis=false only after documenting why the "
-            "question is unanswerable or immaterial."
-        ),
-    )
     return ValidationResult(
         status=ValidationStatus.REVISE,
-        issues=[issue],
+        issues=issues,
         checked_finding_ids=[finding.id for finding in candidate.findings],
         summary="The candidate is not complete for the stated objective.",
+    )
+
+
+def _profitability_requires_margin_review(
+    candidate: CriticCandidate,
+    context: AgentRunContext | None,
+) -> bool:
+    """Require a COGS/margin discussion when the workspace exposes COGS."""
+
+    if context is None or not _workspace_has_cogs(context):
+        return False
+    objective_text = candidate.objective.lower()
+    if not any(term in objective_text for term in ("profit", "margin", "contribution")):
+        return False
+    candidate_text = " ".join(
+        [
+            candidate.answer,
+            *(
+                item.statement + " " + (item.metric or "")
+                for item in candidate.findings
+            ),
+            *(hypothesis.statement for hypothesis in candidate.hypotheses),
+            *candidate.recommendations,
+        ]
+    ).lower()
+    return not any(
+        term in candidate_text
+        for term in ("cogs", "margin", "contribution profit", "gross contribution")
+    )
+
+
+def _workspace_has_cogs(context: AgentRunContext) -> bool:
+    """Read only the approved orders schema without spending a SQL budget."""
+
+    input_relations = getattr(context.sql_service, "input_relations", {})
+    orders_path = input_relations.get("orders")
+    if orders_path is None:
+        return False
+    try:
+        if orders_path.suffix.lower() == ".parquet":
+            import pyarrow.parquet as parquet
+
+            return "cogs" in parquet.read_schema(orders_path).names
+        if orders_path.suffix.lower() == ".csv":
+            return "cogs" in orders_path.open(encoding="utf-8").readline().split(",")
+    except (OSError, ValueError, ImportError):
+        return False
+    return False
+
+
+def _events_for_evidence(
+    ledger: AnalysisLedger,
+    references: list[str],
+) -> list[object]:
+    """Resolve direct tool-event, path, and artifact evidence references."""
+
+    return [
+        event
+        for event in ledger.tool_events
+        if any(
+            reference
+            in {
+                event.id,
+                *event.artifact_refs,
+                *(
+                    value
+                    for value in event.arguments.values()
+                    if isinstance(value, str)
+                ),
+            }
+            for reference in references
+        )
+    ]
+
+
+def _event_metric_comparisons(event: object) -> list[MetricComparison]:
+    """Extract explicitly structured metric payloads retained by a tool event."""
+
+    output = getattr(event, "output", None)
+    if not isinstance(output, dict):
+        return []
+    payload = output.get("metric_comparisons", output.get("metric_comparison"))
+    if payload is None:
+        payload = output.get("metrics")
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list):
+        columns = output.get("columns")
+        rows = output.get("rows")
+        if isinstance(columns, list) and isinstance(rows, list):
+            payload = [
+                dict(zip(columns, row, strict=False))
+                for row in rows
+                if isinstance(row, list)
+            ]
+        else:
+            return []
+
+    comparisons: list[MetricComparison] = []
+    for item in payload:
+        if not isinstance(item, dict) or "metric_key" not in item:
+            continue
+        item = dict(item)
+        item.setdefault("evidence_refs", [event.id])
+        try:
+            comparisons.append(MetricComparison.model_validate(item))
+        except (TypeError, ValueError):
+            continue
+    return comparisons
+
+
+def validate_structured_metric_comparisons(
+    candidate: CriticCandidate,
+    ledger: AnalysisLedger,
+) -> ValidationResult | None:
+    """Detect structured metric identity or value conflicts in retained evidence."""
+
+    issues: list[ValidationIssue] = []
+    for index, comparison in enumerate(candidate.metric_comparisons, start=1):
+        evidence_comparisons = [
+            evidence_comparison
+            for event in _events_for_evidence(ledger, comparison.evidence_refs)
+            for evidence_comparison in _event_metric_comparisons(event)
+        ]
+        if not evidence_comparisons:
+            continue
+        identity = metric_comparison_identity(comparison)
+        matching = [
+            item
+            for item in evidence_comparisons
+            if metric_comparison_identity(item) == identity
+        ]
+        issue_id = f"V-METRIC-{index}"
+        if not matching:
+            issues.append(
+                ValidationIssue(
+                    id=issue_id,
+                    severity=ValidationSeverity.HIGH,
+                    category="structured_metric",
+                    message=(
+                        f"Structured metric '{comparison.metric_key}' does not match "
+                        "the metric identity, dimensions, periods, comparison type, "
+                        "or unit in its cited evidence."
+                    ),
+                    evidence_refs=comparison.evidence_refs,
+                    recommendation=(
+                        "Reuse the exact structured comparison emitted by the "
+                        "executed evidence."
+                    ),
+                )
+            )
+            continue
+        if not any(
+            item.unit == comparison.unit
+            and isclose(item.value, comparison.value, rel_tol=1e-6, abs_tol=1e-9)
+            for item in matching
+        ):
+            issues.append(
+                ValidationIssue(
+                    id=issue_id,
+                    severity=ValidationSeverity.HIGH,
+                    category="structured_metric",
+                    message=(
+                        f"Structured metric '{comparison.metric_key}' value "
+                        "is inconsistent with its cited evidence."
+                    ),
+                    evidence_refs=comparison.evidence_refs,
+                    recommendation=(
+                        "Copy the exact value and unit from the executed metric "
+                        "evidence."
+                    ),
+                )
+            )
+    if not issues:
+        return None
+    return ValidationResult(
+        status=ValidationStatus.REVISE,
+        issues=issues,
+        summary="One or more structured metric comparisons conflict with evidence.",
     )
 
 
@@ -111,6 +319,11 @@ Required review procedure:
   cited evidence rather than trusting labels or prose.
 - Check joins for accidental row multiplication, duplicate keys, unresolved
   foreign keys, and mismatched grains.
+- For profitability questions, check that the candidate addressed net revenue,
+  COGS/margin, contribution before marketing, marketing spend/acquisition
+  efficiency, the largest relevant segment, and material downstream customer
+  value. Require material non-drivers to be stated explicitly when the data is
+  available.
 - Compare findings with the actual query/script outputs and registered artifact
   contents. Flag inconsistencies, contradictions, or artifacts that do not
   support the claim.
@@ -237,10 +450,20 @@ async def run_critic(
     # specialist work. Its hard limit is the separate critic-loop budget.
     context.consume_budget(BudgetResource.CRITIC_LOOPS)
 
-    completeness = candidate_completeness_validation(candidate)
+    completeness = candidate_completeness_validation(candidate, context=context)
     if completeness is not None:
         return persist_validation_result(
             completeness,
+            context.ledger,
+            allow_issue_updates=True,
+        )
+    metric_validation = validate_structured_metric_comparisons(
+        candidate,
+        context.ledger,
+    )
+    if metric_validation is not None:
+        return persist_validation_result(
+            metric_validation,
             context.ledger,
             allow_issue_updates=True,
         )
@@ -272,6 +495,7 @@ __all__ = [
     "CRITIC_OBJECTIVE",
     "CriticPersistenceError",
     "candidate_completeness_validation",
+    "validate_structured_metric_comparisons",
     "VALIDATOR_INSTRUCTIONS",
     "VALIDATOR_OBJECTIVE",
     "build_critic_agent",

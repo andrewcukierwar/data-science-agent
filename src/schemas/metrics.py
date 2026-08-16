@@ -5,7 +5,7 @@ from math import isfinite
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from schemas.findings import NonEmptyString
+from schemas.common import NonEmptyString
 
 
 class MetricComparisonType(StrEnum):
@@ -58,4 +58,46 @@ class MetricComparison(BaseModel):
         return value
 
 
-__all__ = ["MetricComparison", "MetricComparisonType", "MetricObservation"]
+def metric_comparison_identity(
+    comparison: MetricComparison,
+) -> tuple[object, ...]:
+    """Return the stable identity of a metric comparison, excluding its value."""
+
+    return (
+        comparison.metric_key.strip().lower(),
+        tuple(
+            sorted(
+                (key.strip().lower(), value.strip().lower())
+                for key, value in comparison.dimensions.items()
+            )
+        ),
+        comparison.baseline_period.strip().lower(),
+        comparison.comparison_period.strip().lower(),
+        comparison.comparison_type.value,
+        comparison.unit.strip().lower(),
+    )
+
+
+def deduplicate_metric_comparisons(
+    comparisons: list[MetricComparison],
+) -> list[MetricComparison]:
+    """Keep the first comparison for each deterministic generic identity."""
+
+    deduplicated: list[MetricComparison] = []
+    seen: set[tuple[object, ...]] = set()
+    for comparison in comparisons:
+        identity = metric_comparison_identity(comparison)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduplicated.append(comparison)
+    return deduplicated
+
+
+__all__ = [
+    "MetricComparison",
+    "MetricComparisonType",
+    "MetricObservation",
+    "deduplicate_metric_comparisons",
+    "metric_comparison_identity",
+]

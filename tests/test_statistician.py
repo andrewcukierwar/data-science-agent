@@ -20,6 +20,7 @@ from agents import (
 from agents.statistician import Runner, persist_statistician_result
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
+from schemas.metrics import MetricComparison
 from schemas.run_state import ToolEvent, ToolEventStatus
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
@@ -100,6 +101,18 @@ def _result() -> SpecialistResult:
                 confidence=ConfidenceLevel.HIGH,
             )
         ],
+        metric_comparisons=[
+            MetricComparison(
+                metric_key="mean_difference",
+                dimensions={"segment": "treatment"},
+                baseline_period="baseline",
+                comparison_period="treatment",
+                comparison_type="absolute_difference",
+                value=0.8,
+                unit="currency",
+                evidence_refs=["working/scripts/stats.py"],
+            )
+        ],
         artifacts=["working/scripts/stats.py"],
         methods_used=["Welch t-test", "95% confidence interval"],
     )
@@ -146,6 +159,7 @@ def test_statistician_persists_findings_and_artifacts(
 
     assert returned.findings[0].id == "statistician:S001"
     assert reloaded.findings == returned.findings
+    assert reloaded.metric_comparisons == returned.metric_comparisons
     assert reloaded.artifacts[0].path == "working/scripts/stats.py"
     assert reloaded.artifacts[0].kind.value == "script"
     assert context.ledger.budget.specialist_invocations == 1

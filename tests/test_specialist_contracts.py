@@ -5,12 +5,15 @@ from pathlib import Path
 
 from agents import AgentRole, AgentRunConfig, AgentRunContext
 from agents.analyst import persist_analyst_result, validate_analyst_result
+from agents.lead import persist_lead_result
 from agents.statistician import (
     persist_statistician_result,
     validate_statistician_result,
 )
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
+from schemas.lead import LeadResult
+from schemas.metrics import MetricComparison
 from schemas.run_state import ToolEvent, ToolEventStatus
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
@@ -89,6 +92,83 @@ def test_analyst_and_statistician_local_f1_ids_are_namespaced(
         "analyst:F1",
         "statistician:F1",
     ]
+
+
+def test_specialist_metric_comparisons_persist_and_lead_reuses_exact_value(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(
+        "run-specialist-comparisons"
+    )
+    evidence_path = workspace.working / "scripts" / "comparison.py"
+    evidence_path.write_text("print('comparison')\n", encoding="utf-8")
+    ledger = AnalysisLedger(workspace, objective="Preserve metric comparisons.")
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    ledger.append_tool_event(
+        ToolEvent(
+            id="tool-comparison",
+            tool_name="run_python",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=timestamp,
+            completed_at=timestamp,
+            artifact_refs=["working/scripts/comparison.py"],
+        )
+    )
+    analyst_context = AgentRunContext(
+        workspace=workspace,
+        ledger=ledger,
+        sql_service=DuckDBExecutionService(workspace, ledger),
+        python_service=PythonExecutionService(workspace, ledger),
+        artifact_manager=ArtifactManager(workspace, ledger),
+        run_config=AgentRunConfig(
+            run_id="run-specialist-comparisons",
+            agent_role=AgentRole.ANALYST,
+            model="test-model",
+        ),
+    )
+    comparison = MetricComparison(
+        metric_key="cac",
+        dimensions={"channel": "Paid"},
+        baseline_period="Q1 2025",
+        comparison_period="Q2 2025",
+        comparison_type="relative_change",
+        value=0.3,
+        unit="relative_change_fraction",
+        evidence_refs=["working/scripts/comparison.py"],
+    )
+    specialist_result = SpecialistResult(
+        objective="Measure acquisition efficiency.",
+        metric_comparisons=[comparison],
+    )
+    persisted_specialist = persist_analyst_result(specialist_result, analyst_context)
+    ledger.record_specialist_result(AgentRole.ANALYST.value, persisted_specialist)
+
+    lead_context = AgentRunContext(
+        workspace=workspace,
+        ledger=ledger,
+        sql_service=DuckDBExecutionService(workspace, ledger),
+        python_service=PythonExecutionService(workspace, ledger),
+        artifact_manager=ArtifactManager(workspace, ledger),
+        run_config=AgentRunConfig(
+            run_id="run-specialist-comparisons",
+            agent_role=AgentRole.LEAD,
+            model="test-model",
+        ),
+    )
+    reconstructed = comparison.model_copy(update={"value": 0.99})
+    lead_result = persist_lead_result(
+        LeadResult(
+            objective="Explain acquisition efficiency.",
+            answer="The specialist comparison supports the conclusion.",
+            metric_comparisons=[reconstructed, reconstructed],
+        ),
+        lead_context,
+    )
+    reloaded = AnalysisLedger(ledger.state_path)
+
+    assert lead_result.metric_comparisons == [comparison]
+    assert reloaded.metric_comparisons == [comparison]
+    assert reloaded.specialist_results[0].result.metric_comparisons == [comparison]
 
 
 def test_specialist_finding_reference_is_resolved_to_executed_evidence(

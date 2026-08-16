@@ -1,9 +1,11 @@
 """Deterministic construction, candidate, and persistence tests."""
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from agents import (
@@ -17,7 +19,8 @@ from agents import (
 from agents.critic import Runner
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding
-from schemas.run_state import RunBudget
+from schemas.metrics import MetricComparison
+from schemas.run_state import RunBudget, ToolEvent, ToolEventStatus
 from schemas.validation import (
     CriticCandidate,
     ValidationIssue,
@@ -218,3 +221,84 @@ def test_critic_allows_complete_candidate_to_reach_model_review(
     returned = asyncio.run(run_critic(context, candidate))
 
     assert returned.status is ValidationStatus.PASS
+
+
+def test_critic_revises_structured_metric_inconsistent_with_evidence(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    evidence = MetricComparison(
+        metric_key="cac",
+        dimensions={"channel": "Paid"},
+        baseline_period="Q1 2025",
+        comparison_period="Q2 2025",
+        comparison_type="relative_change",
+        value=0.2,
+        unit="relative_change_fraction",
+        evidence_refs=["tool-metric"],
+    )
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-metric",
+            tool_name="run_sql",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=timestamp,
+            completed_at=timestamp,
+            output={"metric_comparisons": [evidence.model_dump(mode="json")]},
+        )
+    )
+    candidate = CriticCandidate(
+        objective="Explain the profitability change.",
+        answer="The structured comparison supports the answer.",
+        metric_comparisons=[evidence.model_copy(update={"value": 0.3})],
+    )
+
+    result = asyncio.run(run_critic(context, candidate))
+
+    assert result.status is ValidationStatus.REVISE
+    assert result.issues[0].category == "structured_metric"
+    assert "inconsistent" in result.issues[0].message
+
+
+def test_critic_requires_cogs_or_margin_when_profitability_data_has_cogs(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    pd.DataFrame(
+        {
+            "order_id": ["O1"],
+            "customer_id": ["C1"],
+            "order_date": ["2025-01-01"],
+            "net_revenue": [100.0],
+            "cogs": [40.0],
+        }
+    ).to_parquet(source / "orders.parquet", index=False)
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(
+        "run-critic-margin",
+        inputs_source=source,
+    )
+    ledger = AnalysisLedger(workspace, objective="Why did profitability change?")
+    context = AgentRunContext(
+        workspace=workspace,
+        ledger=ledger,
+        sql_service=DuckDBExecutionService(workspace, ledger),
+        python_service=PythonExecutionService(workspace, ledger),
+        artifact_manager=ArtifactManager(workspace, ledger),
+        run_config=AgentRunConfig(
+            run_id="run-critic-margin",
+            agent_role=AgentRole.CRITIC,
+            model="test-model",
+        ),
+    )
+    candidate = CriticCandidate(
+        objective="Why did profitability change?",
+        answer="Marketing spend changed and explains the result.",
+    )
+
+    result = asyncio.run(run_critic(context, candidate))
+
+    assert result.status is ValidationStatus.REVISE
+    assert result.issues[0].id == "V-COMPLETENESS-MARGIN"
+    assert "COGS" in result.issues[0].message

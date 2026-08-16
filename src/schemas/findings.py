@@ -1,11 +1,14 @@
 """Schemas for specialist findings and structured specialist results."""
 
 from enum import StrEnum
-from typing import Annotated
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
-NonEmptyString = Annotated[str, Field(min_length=1)]
+from schemas.common import NonEmptyString
+
+if TYPE_CHECKING:
+    from schemas.metrics import MetricComparison
 
 
 class ConfidenceLevel(StrEnum):
@@ -38,10 +41,19 @@ class SpecialistResult(BaseModel):
 
     objective: NonEmptyString
     findings: list[Finding] = Field(default_factory=list)
+    metric_comparisons: list["MetricComparison"] = Field(default_factory=list)
     artifacts: list[NonEmptyString] = Field(default_factory=list)
     methods_used: list[NonEmptyString] = Field(default_factory=list)
     follow_up_questions: list[NonEmptyString] = Field(default_factory=list)
     caveats: list[NonEmptyString] = Field(default_factory=list)
+
+
+# ``schemas.metrics`` uses the shared primitive rather than importing this
+# module, so resolving the typed forward reference here does not create a
+# circular import.
+from schemas.metrics import MetricComparison  # noqa: E402
+
+SpecialistResult.model_rebuild(_types_namespace={"MetricComparison": MetricComparison})
 
 
 def canonicalize_specialist_result(
