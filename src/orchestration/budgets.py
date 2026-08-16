@@ -60,9 +60,10 @@ class RunBudgetManager:
         """Return current usage, limit, and remaining capacity."""
 
         resource = BudgetResource(resource)
-        budget = self.ledger.budget
-        used = getattr(budget, resource.value)
-        limit = getattr(budget, _LIMIT_FIELDS[resource])
+        with self.ledger.budget_lock:
+            budget = self.ledger.budget
+            used = getattr(budget, resource.value)
+            limit = getattr(budget, _LIMIT_FIELDS[resource])
         return BudgetSnapshot(
             resource=resource,
             used=used,
@@ -79,12 +80,21 @@ class RunBudgetManager:
         return snapshot
 
     def consume(self, resource: BudgetResource | str) -> BudgetSnapshot:
-        """Consume one unit and return the resulting budget snapshot."""
+        """Atomically reserve one unit and return the resulting snapshot."""
 
         resource = BudgetResource(resource)
-        self.check(resource)
-        self.ledger.increment_budget(**{resource.value: 1})
+        self.ledger.reserve_budget(resource.value)
         return self.snapshot(resource)
+
+    def consume_many(
+        self,
+        *resources: BudgetResource | str,
+    ) -> tuple[BudgetSnapshot, ...]:
+        """Atomically reserve several resource units as one operation."""
+
+        normalized = tuple(BudgetResource(resource) for resource in resources)
+        self.ledger.reserve_budgets(resource.value for resource in normalized)
+        return tuple(self.snapshot(resource) for resource in normalized)
 
 
 # A descriptive alias keeps the boundary easy to discover for callers that

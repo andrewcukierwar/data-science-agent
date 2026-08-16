@@ -168,12 +168,12 @@ async def run_critic(
     if context.agent_role is not AgentRole.CRITIC:
         raise ValueError("run_critic requires a Critic context")
 
-    # Check both limits before consuming either one so an exhausted critic loop
-    # cannot leave a misleading specialist-invocation increment behind.
-    context.check_budget(BudgetResource.SPECIALIST_INVOCATIONS)
-    context.check_budget(BudgetResource.CRITIC_LOOPS)
-    context.consume_budget(BudgetResource.SPECIALIST_INVOCATIONS)
-    context.consume_budget(BudgetResource.CRITIC_LOOPS)
+    # Reserve both resources together so an exhausted critic loop cannot leave
+    # a misleading specialist-invocation increment behind.
+    context.consume_budgets(
+        BudgetResource.SPECIALIST_INVOCATIONS,
+        BudgetResource.CRITIC_LOOPS,
+    )
 
     selected_agent = agent or build_critic_agent(context.run_config)
     result = await Runner.run(

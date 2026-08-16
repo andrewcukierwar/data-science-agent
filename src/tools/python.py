@@ -106,6 +106,7 @@ class PythonExecutionService:
         self._validate_script_id(script_id)
         relative_path = f"working/scripts/{script_id}.py"
         script_path = self.workspace.root / relative_path
+        self._reserve_execution_budget()
         try:
             with script_path.open("x", encoding="utf-8") as script_file:
                 script_file.write(source)
@@ -208,6 +209,14 @@ class PythonExecutionService:
     def _record(self, event: ToolEvent) -> None:
         if self.ledger is not None:
             self.ledger.append_tool_event(event)
+
+    def _reserve_execution_budget(self) -> None:
+        if self.ledger is None:
+            return
+        reserve = getattr(self.ledger, "reserve_budget", None)
+        if callable(reserve):
+            reserve("python_executions")
+        else:
             self.ledger.increment_budget(python_executions=1)
 
     def _truncate_event_text(self, value: str) -> tuple[str, bool]:

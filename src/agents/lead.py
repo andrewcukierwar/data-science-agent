@@ -220,6 +220,7 @@ class _NestedSpecialistHooks(RunHooks[AgentRunContext]):
             )
         finally:
             runtime_context.exit_nested_role(self.role)
+            runtime_context.assert_base_role(AgentRole.LEAD)
 
 
 def _nested_objective(context: Any) -> str | None:
@@ -255,6 +256,7 @@ def _specialist_tool(
         runtime_context = context.context
         if runtime_context.agent_role is role:
             runtime_context.exit_nested_role(role)
+        runtime_context.assert_base_role(AgentRole.LEAD)
         runtime_context.ledger.record_agent_event(
             agent_name=specialist.name,
             agent_role=role.value,

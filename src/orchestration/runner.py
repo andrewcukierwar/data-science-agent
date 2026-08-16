@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from agents import Agent
+from agents import Agent, MaxTurnsExceeded
 from agents.auditor import build_data_auditor_agent, run_data_auditor
 from agents.critic import (
     build_critic_agent,
@@ -22,7 +22,7 @@ from agents.runtime import (
     AgentRunContext,
     normalize_agent_turn_limits,
 )
-from orchestration.budgets import BudgetResource
+from orchestration.budgets import BudgetExhaustedError, BudgetResource
 from orchestration.ledger import AnalysisLedger
 from schemas.audit import AuditResult, AuditStatus
 from schemas.lead import LeadResult
@@ -125,6 +125,7 @@ class AnalysisRunner:
         validation_result: ValidationResult | None = None
         report: Artifact | None = None
         constrained = False
+        constraint_reason: str | None = None
         active_agent: tuple[str, AgentRole, str] | None = None
         active_agent_recorded = False
 
@@ -156,6 +157,7 @@ class AnalysisRunner:
                 self._audit_prompt(business_context),
                 agent=audit_agent,
             )
+            audit_context.assert_base_role(AgentRole.DATA_AUDITOR)
             self._ensure_budget_increment(
                 audit_context,
                 BudgetResource.SPECIALIST_INVOCATIONS,
@@ -185,6 +187,7 @@ class AnalysisRunner:
                 audit=audit,
                 agent=lead_agent,
             )
+            lead_context.assert_base_role(AgentRole.LEAD)
             if not isinstance(lead_result, LeadResult):
                 lead_result = LeadResult.model_validate(lead_result)
             self._record_agent_success(ledger, active_agent, LeadResult)
@@ -214,6 +217,7 @@ class AnalysisRunner:
                     candidate,
                     agent=critic_agent,
                 )
+                critic_context.assert_base_role(AgentRole.CRITIC)
                 self._ensure_budget_increment(
                     critic_context,
                     BudgetResource.SPECIALIST_INVOCATIONS,
@@ -242,6 +246,10 @@ class AnalysisRunner:
 
                 if critic_attempts >= available_critic_loops:
                     constrained = True
+                    constraint_reason = (
+                        "Critic returned REVISE and the configured maximum of "
+                        f"{available_critic_loops} critic loop(s) was reached."
+                    )
                     break
 
                 remediation_prompt = self._remediation_prompt(
@@ -251,18 +259,41 @@ class AnalysisRunner:
                 )
                 active_agent = (lead_agent.name, AgentRole.LEAD, remediation_prompt)
                 active_agent_recorded = False
-                lead_result = await self.lead_runner(
-                    lead_context,
-                    remediation_prompt,
-                    business_context=business_context,
-                    audit=audit,
-                    agent=lead_agent,
-                )
-                if not isinstance(lead_result, LeadResult):
-                    lead_result = LeadResult.model_validate(lead_result)
-                self._record_agent_success(ledger, active_agent, LeadResult)
-                active_agent_recorded = True
-                persist_lead_result(lead_result, lead_context)
+                try:
+                    remediated_lead_result = await self.lead_runner(
+                        lead_context,
+                        remediation_prompt,
+                        business_context=business_context,
+                        audit=audit,
+                        agent=lead_agent,
+                    )
+                    lead_context.assert_base_role(AgentRole.LEAD)
+                    if not isinstance(remediated_lead_result, LeadResult):
+                        remediated_lead_result = LeadResult.model_validate(
+                            remediated_lead_result
+                        )
+                    self._record_agent_success(ledger, active_agent, LeadResult)
+                    active_agent_recorded = True
+                    persist_lead_result(remediated_lead_result, lead_context)
+                    lead_result = remediated_lead_result
+                except Exception as error:
+                    # A usable candidate and Critic result already exist. Keep
+                    # them and produce a constrained report when bounded
+                    # remediation cannot complete, including its stop reason.
+                    constrained = True
+                    constraint_reason = self._remediation_failure_reason(error)
+                    if active_agent is not None and not active_agent_recorded:
+                        agent_name, role, agent_objective = active_agent
+                        ledger.record_agent_event(
+                            agent_name=agent_name,
+                            agent_role=role.value,
+                            status=AgentEventStatus.FAILED,
+                            model=self.model,
+                            objective=agent_objective,
+                            error=constraint_reason,
+                        )
+                        active_agent_recorded = True
+                    break
 
             report = self._write_report(
                 run_workspace,
@@ -272,6 +303,7 @@ class AnalysisRunner:
                 lead_result,
                 validation_result,
                 constrained=constrained,
+                constraint_reason=constraint_reason,
             )
             if constrained:
                 ledger.set_status(RunStatus.BLOCKED)
@@ -344,6 +376,16 @@ class AnalysisRunner:
             objective=objective,
             output_type=output_type.__name__,
         )
+
+    @staticmethod
+    def _remediation_failure_reason(error: Exception) -> str:
+        """Describe why an existing candidate could not be remediated."""
+
+        if isinstance(error, BudgetExhaustedError):
+            return f"Remediation stopped by budget exhaustion: {error}"
+        if isinstance(error, MaxTurnsExceeded):
+            return f"Remediation stopped by the Lead turn limit: {error}"
+        return f"Remediation stopped by a bounded execution failure: {error}"
 
     @staticmethod
     def _ensure_budget_increment(
@@ -506,6 +548,7 @@ class AnalysisRunner:
         validation: ValidationResult | None,
         *,
         constrained: bool,
+        constraint_reason: str | None,
     ) -> Artifact:
         """Render a concise deterministic Markdown report and register it."""
 
@@ -517,6 +560,7 @@ class AnalysisRunner:
                 lead_result,
                 validation,
                 constrained=constrained,
+                constraint_reason=constraint_reason,
                 ledger=ledger,
             ),
             encoding="utf-8",
@@ -544,6 +588,7 @@ class AnalysisRunner:
         validation: ValidationResult | None,
         *,
         constrained: bool,
+        constraint_reason: str | None,
         ledger: AnalysisLedger,
     ) -> str:
         title = "Constrained Analysis Report" if constrained else "Analysis Report"
@@ -603,6 +648,9 @@ class AnalysisRunner:
         if constrained:
             lines.extend(
                 [
+                    "",
+                    "> Remediation stop: "
+                    f"{constraint_reason or 'no further remediation was available.'}",
                     "",
                     "> This report is constrained because validation issues remained "
                     "after the configured remediation limit. Treat recommendations "

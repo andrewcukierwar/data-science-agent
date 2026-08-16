@@ -210,6 +210,123 @@ def test_runner_returns_constrained_report_after_critic_limit(
     assert "Constrained Analysis Report" in report_text
     assert "V001" in report_text
     assert "provisional" in report_text
+    assert "Remediation stop:" in report_text
+
+
+def test_runner_preserves_candidate_when_sql_budget_stops_remediation(
+    tmp_path: Path,
+) -> None:
+    lead_calls = 0
+    issue = ValidationIssue(
+        id="V-SQL",
+        severity=ValidationSeverity.HIGH,
+        message="Reproduce the candidate's SQL evidence.",
+    )
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def fake_lead(
+        context,
+        objective,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        if lead_calls == 2:
+            context.sql_service.execute("SELECT 1", query_id="Q-REMEDIATION")
+        return LeadResult(
+            objective="Explain profitability.",
+            answer="The initial candidate remains the best available explanation.",
+        )
+
+    async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
+        context.consume_budget("specialist_invocations")
+        context.consume_budget("critic_loops")
+        return ValidationResult(status=ValidationStatus.REVISE, issues=[issue])
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        budget=RunBudget(max_sql_executions=0, max_critic_loops=2),
+        auditor_runner=fake_auditor,
+        lead_runner=fake_lead,
+        critic_runner=fake_critic,
+    )
+    result = asyncio.run(runner.run("run-sql-remediation", "Explain profitability."))
+
+    assert result.status is RunStatus.BLOCKED
+    assert result.constrained is True
+    assert result.lead_result is not None
+    assert result.lead_result.answer.startswith("The initial candidate")
+    assert result.validation_result is not None
+    assert result.validation_result.status is ValidationStatus.REVISE
+    assert result.ledger is not None
+    assert result.ledger.state.error is None
+    assert result.ledger.budget.sql_executions == 0
+    report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
+    assert "Remediation stopped by budget exhaustion" in report_text
+    assert "sql_executions" in report_text
+    assert "V-SQL" in report_text
+    assert result.ledger.agent_events[-1].status.value == "failed"
+
+
+def test_runner_preserves_candidate_when_lead_turns_stop_remediation(
+    tmp_path: Path,
+) -> None:
+    lead_calls = 0
+    issue = ValidationIssue(
+        id="V-TURNS",
+        severity=ValidationSeverity.MEDIUM,
+        message="The candidate needs a bounded follow-up.",
+    )
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def fake_lead(
+        context,
+        objective,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        if lead_calls == 2:
+            raise MaxTurnsExceeded("Lead exceeded its 16-turn limit during remediation")
+        return LeadResult(
+            objective="Explain profitability.",
+            answer="Candidate answer retained with explicit validation caveats.",
+        )
+
+    async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
+        context.consume_budget("specialist_invocations")
+        context.consume_budget("critic_loops")
+        return ValidationResult(status=ValidationStatus.REVISE, issues=[issue])
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        budget=RunBudget(max_critic_loops=2),
+        auditor_runner=fake_auditor,
+        lead_runner=fake_lead,
+        critic_runner=fake_critic,
+    )
+    result = asyncio.run(runner.run("run-turn-remediation", "Explain profitability."))
+
+    assert result.status is RunStatus.BLOCKED
+    assert result.constrained is True
+    assert result.lead_result is not None
+    assert result.validation_result is not None
+    assert result.validation_result.status is ValidationStatus.REVISE
+    assert result.ledger is not None
+    assert result.ledger.state.error is None
+    report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
+    assert "Remediation stopped by the Lead turn limit" in report_text
+    assert "V-TURNS" in report_text
 
 
 def test_runner_observes_lead_turn_limit_failure_and_marks_run_failed(

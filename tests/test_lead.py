@@ -354,10 +354,14 @@ def test_nested_specialist_hook_enforces_budget_and_restores_lead_role(
     hooks = _NestedSpecialistHooks(AgentRole.ANALYST)
     hook_context = SimpleNamespace(context=context)
 
-    asyncio.run(hooks.on_agent_start(hook_context, Agent(name="Analyst")))
-    assert context.agent_role is AgentRole.ANALYST
-    assert context.ledger.budget.specialist_invocations == 1
-    asyncio.run(hooks.on_agent_end(hook_context, Agent(name="Analyst"), {}))
+    async def exercise_hook() -> None:
+        await hooks.on_agent_start(hook_context, Agent(name="Analyst"))
+        assert context.agent_role is AgentRole.ANALYST
+        assert context.ledger.budget.specialist_invocations == 1
+        await hooks.on_agent_end(hook_context, Agent(name="Analyst"), {})
+        assert context.agent_role is AgentRole.LEAD
+
+    asyncio.run(exercise_hook())
     assert context.agent_role is AgentRole.LEAD
 
     context.ledger.update_budget(

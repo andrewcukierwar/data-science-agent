@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import RLock
 from typing import Any, Protocol
 
 from pydantic import ValidationError
@@ -37,6 +38,13 @@ _USAGE_FIELDS = frozenset(
         "charts_created",
     }
 )
+_BUDGET_LIMIT_FIELDS = {
+    "specialist_invocations": "max_specialist_invocations",
+    "sql_executions": "max_sql_executions",
+    "python_executions": "max_python_executions",
+    "critic_loops": "max_critic_loops",
+    "charts_created": "max_charts",
+}
 
 
 class ToolEventLedger(Protocol):
@@ -74,6 +82,7 @@ class AnalysisLedger(ToolEventLedger):
         business_context: str | None = None,
     ) -> None:
         self.state_path = self._resolve_state_path(workspace_or_state_path)
+        self._budget_lock = RLock()
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         if self.state_path.exists():
             self._state = self._load_from_disk()
@@ -171,18 +180,27 @@ class AnalysisLedger(ToolEventLedger):
     def save(self) -> None:
         """Atomically persist the current typed state to JSON."""
 
-        self._state.updated_at = datetime.now(UTC)
-        temporary_path = self.state_path.with_name(
-            f".{self.state_path.name}.{uuid.uuid4().hex}.tmp"
-        )
-        try:
-            temporary_path.write_text(
-                self._state.model_dump_json(indent=2), encoding="utf-8"
+        with self._budget_lock:
+            self._state.updated_at = datetime.now(UTC)
+            temporary_path = self.state_path.with_name(
+                f".{self.state_path.name}.{uuid.uuid4().hex}.tmp"
             )
-            os.replace(temporary_path, self.state_path)
-        except OSError as exc:
-            temporary_path.unlink(missing_ok=True)
-            raise LedgerError(f"could not persist ledger: {self.state_path}") from exc
+            try:
+                temporary_path.write_text(
+                    self._state.model_dump_json(indent=2), encoding="utf-8"
+                )
+                os.replace(temporary_path, self.state_path)
+            except OSError as exc:
+                temporary_path.unlink(missing_ok=True)
+                raise LedgerError(
+                    f"could not persist ledger: {self.state_path}"
+                ) from exc
+
+    @property
+    def budget_lock(self) -> RLock:
+        """Return the run-level lock coordinating counted reservations."""
+
+        return self._budget_lock
 
     def refresh(self) -> AnalysisRunState:
         """Reload and return the typed state from disk."""
@@ -516,7 +534,7 @@ class AnalysisLedger(ToolEventLedger):
         return budget
 
     def increment_budget(self, **usage: int) -> RunBudget:
-        """Increment observed usage counters without changing configured limits."""
+        """Increment usage while preserving every configured hard limit."""
 
         unknown_fields = set(usage) - _USAGE_FIELDS
         if unknown_fields:
@@ -524,10 +542,69 @@ class AnalysisLedger(ToolEventLedger):
         if any(not isinstance(amount, int) or amount < 0 for amount in usage.values()):
             raise ValueError("budget increments must be non-negative integers")
 
-        updates = self.budget.model_dump()
-        for field_name, amount in usage.items():
-            updates[field_name] += amount
-        return self.update_budget(RunBudget.model_validate(updates))
+        with self._budget_lock:
+            updates = self.budget.model_dump()
+            for field_name, amount in usage.items():
+                self._validate_budget_increment(updates, field_name, amount)
+                updates[field_name] += amount
+            self._state.run_budget = RunBudget.model_validate(updates)
+            self.save()
+            return self.budget
+
+    def reserve_budget(self, resource: str) -> RunBudget:
+        """Atomically reserve one unit of a counted run resource."""
+
+        return self.reserve_budgets([resource])
+
+    def reserve_budgets(self, resources: Iterable[str]) -> RunBudget:
+        """Atomically reserve one unit for each requested resource.
+
+        All capacity checks happen before any usage is persisted, so a grouped
+        reservation such as Critic specialist invocation plus loop count cannot
+        partially consume the run budget.
+        """
+
+        normalized = [
+            resource.value if hasattr(resource, "value") else str(resource)
+            for resource in resources
+        ]
+        unknown_fields = set(normalized) - _USAGE_FIELDS
+        if unknown_fields:
+            raise ValueError(f"unknown budget resources: {sorted(unknown_fields)}")
+
+        with self._budget_lock:
+            updates = self.budget.model_dump()
+            counts: dict[str, int] = {}
+            for resource in normalized:
+                counts[resource] = counts.get(resource, 0) + 1
+            for field_name, amount in counts.items():
+                self._validate_budget_increment(updates, field_name, amount)
+            for field_name, amount in counts.items():
+                updates[field_name] += amount
+            self._state.run_budget = RunBudget.model_validate(updates)
+            self.save()
+            return self.budget
+
+    @staticmethod
+    def _validate_budget_increment(
+        budget_values: dict[str, Any],
+        field_name: str,
+        amount: int,
+    ) -> None:
+        limit_field = _BUDGET_LIMIT_FIELDS[field_name]
+        current = budget_values[field_name]
+        limit = budget_values[limit_field]
+        if current + amount <= limit:
+            return
+        from orchestration.budgets import BudgetExhaustedError, BudgetSnapshot
+
+        snapshot = BudgetSnapshot(
+            resource=field_name,
+            used=current,
+            limit=limit,
+            remaining=max(limit - current, 0),
+        )
+        raise BudgetExhaustedError(snapshot)
 
     # Descriptive aliases keep ledger operations easy to discover at call sites.
     record_finding = add_finding

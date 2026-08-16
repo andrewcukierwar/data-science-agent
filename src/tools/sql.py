@@ -123,6 +123,7 @@ class DuckDBExecutionService:
         started_at = datetime.now(UTC)
         event_id = f"tool-inspect-relations-{uuid.uuid4().hex}"
         try:
+            self._reserve_execution_budget()
             result = self._inspect_relations(include_row_counts=include_row_counts)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
@@ -174,6 +175,7 @@ class DuckDBExecutionService:
         query_path = self.workspace.working / "queries" / f"{query_id}.sql"
         if query_path.exists():
             raise FileExistsError(f"query artifact already exists: {query_path}")
+        self._reserve_execution_budget()
         query_path.write_text(sql, encoding="utf-8")
 
         started_at = datetime.now(UTC)
@@ -325,6 +327,16 @@ class DuckDBExecutionService:
     def _emit_event(self, event: ToolEvent) -> None:
         if self.ledger is not None:
             self.ledger.append_tool_event(event)
+
+    def _reserve_execution_budget(self) -> None:
+        if self.ledger is None:
+            return
+        reserve = getattr(self.ledger, "reserve_budget", None)
+        if callable(reserve):
+            reserve("sql_executions")
+        else:
+            # Preserve compatibility with small Phase 0 test doubles that do
+            # not expose the persistent ledger reservation API.
             self.ledger.increment_budget(sql_executions=1)
 
     def _validate_workspace_layout(self) -> None:

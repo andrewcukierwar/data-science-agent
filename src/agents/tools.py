@@ -311,7 +311,6 @@ def inspect_relations(
     try:
         context = _context(ctx)
         context.require_permission(tool_name)
-        context.check_budget(BudgetResource.SQL_EXECUTIONS)
         result: RelationInspectionResult = context.sql_service.inspect_relations()
         return _sdk_response(ToolResponse.ok(tool_name, result.model_dump(mode="json")))
     except (PermissionDeniedError, ValueError, OSError) as error:
@@ -485,7 +484,6 @@ def run_sql(
     try:
         context = _context(ctx)
         context.require_permission(tool_name)
-        context.check_budget(BudgetResource.SQL_EXECUTIONS)
         result = context.sql_service.execute(sql, query_id=query_id)
         rows = result.rows[: context.run_config.max_result_rows]
         data = {
@@ -547,7 +545,6 @@ def run_python(
     try:
         context = _context(ctx)
         context.require_permission(tool_name)
-        context.check_budget(BudgetResource.PYTHON_EXECUTIONS)
         result = context.python_service.run_python(
             source,
             script_id=script_id,
@@ -620,7 +617,7 @@ def save_artifact(
         context.require_permission(tool_name)
         kind = ArtifactKind(kind)
         if kind is ArtifactKind.CHART:
-            context.check_budget(BudgetResource.CHARTS_CREATED)
+            context.consume_budget(BudgetResource.CHARTS_CREATED)
         artifact = context.artifact_manager.register(
             path,
             artifact_id=artifact_id,
@@ -628,8 +625,6 @@ def save_artifact(
             media_type=media_type,
             description=description,
         )
-        if kind is ArtifactKind.CHART:
-            context.consume_budget(BudgetResource.CHARTS_CREATED)
         return _sdk_response(
             ToolResponse.ok(tool_name, artifact.model_dump(mode="json"))
         )

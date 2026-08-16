@@ -197,4 +197,6 @@ def test_analysis_run_state_round_trips_nested_models() -> None:
     restored = AnalysisRunState.model_validate_json(state.model_dump_json())
 
     assert restored == state
+    assert restored.run_budget.max_sql_executions == 30
+    assert restored.run_budget.max_python_executions == 20
     assert restored.run_budget.max_critic_loops == 2

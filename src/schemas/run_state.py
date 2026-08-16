@@ -180,8 +180,8 @@ class RunBudget(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_specialist_invocations: int = Field(default=12, ge=0)
-    max_sql_executions: int = Field(default=20, ge=0)
-    max_python_executions: int = Field(default=15, ge=0)
+    max_sql_executions: int = Field(default=30, ge=0)
+    max_python_executions: int = Field(default=20, ge=0)
     max_critic_loops: int = Field(default=2, ge=0)
     max_charts: int = Field(default=4, ge=0)
     specialist_invocations: int = Field(default=0, ge=0)

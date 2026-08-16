@@ -25,7 +25,7 @@ from agents import (
     save_artifact,
     tools_for_role,
 )
-from orchestration.budgets import BudgetExhaustedError
+from orchestration.budgets import BudgetExhaustedError, BudgetResource
 from orchestration.ledger import AnalysisLedger
 from sandbox.executor import SandboxExecutionResult
 from schemas.run_state import ArtifactKind, RunBudget, ToolEvent, ToolEventStatus
@@ -461,3 +461,138 @@ def test_context_rejects_services_bound_to_another_run(tmp_path: Path) -> None:
             artifact_manager=first.artifact_manager,
             run_config=first.run_config,
         )
+
+
+def test_nested_roles_are_task_local_and_restore_the_parent_after_failure(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path, AgentRole.LEAD)
+
+    async def nested(role: AgentRole, delay: float, should_fail: bool = False):
+        context.enter_nested_role(role)
+        try:
+            await asyncio.sleep(delay)
+            observed = (context.agent_role, context.allowed_tools())
+            if should_fail:
+                raise RuntimeError(f"{role.value} failed")
+            return observed
+        finally:
+            context.exit_nested_role(role)
+
+    async def run_overlapping():
+        return await asyncio.gather(
+            nested(AgentRole.ANALYST, 0.02),
+            nested(AgentRole.STATISTICIAN, 0.0, should_fail=True),
+            return_exceptions=True,
+        )
+
+    results = asyncio.run(run_overlapping())
+
+    assert results[0][0] is AgentRole.ANALYST
+    assert "run_sql" in results[0][1]
+    assert isinstance(results[1], RuntimeError)
+    context.assert_base_role(AgentRole.LEAD)
+    assert context.agent_role is AgentRole.LEAD
+
+
+@pytest.mark.parametrize(
+    ("resource", "limit_field", "usage_field"),
+    [
+        (
+            BudgetResource.SPECIALIST_INVOCATIONS,
+            "max_specialist_invocations",
+            "specialist_invocations",
+        ),
+        (BudgetResource.SQL_EXECUTIONS, "max_sql_executions", "sql_executions"),
+        (
+            BudgetResource.PYTHON_EXECUTIONS,
+            "max_python_executions",
+            "python_executions",
+        ),
+        (BudgetResource.CRITIC_LOOPS, "max_critic_loops", "critic_loops"),
+        (BudgetResource.CHARTS_CREATED, "max_charts", "charts_created"),
+    ],
+)
+def test_shared_budget_reservation_is_atomic_under_concurrency(
+    tmp_path: Path,
+    resource: BudgetResource,
+    limit_field: str,
+    usage_field: str,
+) -> None:
+    context = _context(tmp_path, budget=RunBudget(**{limit_field: 1}))
+
+    async def reserve_many():
+        async def reserve_one():
+            try:
+                context.consume_budget(resource)
+                return True
+            except BudgetExhaustedError:
+                return False
+
+        return await asyncio.gather(*(reserve_one() for _ in range(20)))
+
+    results = asyncio.run(reserve_many())
+
+    assert sum(results) == 1
+    assert getattr(context.ledger.budget, usage_field) == 1
+
+
+def test_grouped_budget_reservation_does_not_partially_consume(
+    tmp_path: Path,
+) -> None:
+    context = _context(
+        tmp_path,
+        budget=RunBudget(max_specialist_invocations=1, max_critic_loops=0),
+    )
+
+    with pytest.raises(BudgetExhaustedError, match="critic_loops"):
+        context.consume_budgets(
+            BudgetResource.SPECIALIST_INVOCATIONS,
+            BudgetResource.CRITIC_LOOPS,
+        )
+
+    assert context.ledger.budget.specialist_invocations == 0
+    assert context.ledger.budget.critic_loops == 0
+
+
+def test_direct_sql_and_python_services_share_atomic_reservations(
+    tmp_path: Path,
+) -> None:
+    context = _context(
+        tmp_path,
+        budget=RunBudget(max_sql_executions=3, max_python_executions=2),
+    )
+
+    async def execute_sql():
+        return await asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    context.sql_service.execute,
+                    "SELECT 1 AS value",
+                    query_id=f"Q-CONCURRENT-{index}",
+                )
+                for index in range(10)
+            ),
+            return_exceptions=True,
+        )
+
+    async def execute_python():
+        return await asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    context.python_service.run_python,
+                    "pass",
+                    script_id=f"P-CONCURRENT-{index}",
+                )
+                for index in range(8)
+            ),
+            return_exceptions=True,
+        )
+
+    sql_results = asyncio.run(execute_sql())
+    python_results = asyncio.run(execute_python())
+
+    assert sum(not isinstance(result, Exception) for result in sql_results) == 3
+    assert sum(not isinstance(result, Exception) for result in python_results) == 2
+    assert context.ledger.budget.sql_executions == 3
+    assert context.ledger.budget.python_executions == 2
