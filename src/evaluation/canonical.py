@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import re
 import stat
+from collections.abc import Iterable
 from dataclasses import dataclass
 from math import isfinite
 
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunResult
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
-from schemas.findings import Finding
+from schemas.lead import LeadResult
+from schemas.metrics import MetricComparison
 from schemas.run_state import AgentEventStatus, ArtifactKind, RunStatus
 from schemas.validation import ValidationStatus
 from tools.artifacts import ArtifactManager
@@ -26,27 +28,102 @@ class CanonicalAcceptanceError(AssertionError):
 
 
 def _normalized_metric_identifier(metric: str) -> str:
-    """Normalize punctuation while preserving the metric's semantic tokens."""
+    """Normalize a generic metric key for evaluator-only identity matching."""
 
-    return re.sub(r"[^a-z0-9]+", "_", metric.lower()).strip("_")
+    normalized = re.sub(r"[^a-z0-9]+", "_", metric.lower()).strip("_")
+    aliases = {
+        "conversion": "conversion_rate",
+        "session_conversion": "conversion_rate",
+        "session_conversion_rate": "conversion_rate",
+        "new_customers": "acquired_customers",
+        "customer_count": "acquired_customers",
+        "spend": "marketing_spend",
+        "customer_acquisition_cost": "cac",
+        "ltv_90d": "ltv",
+        "ltv_90_day": "ltv",
+        "90_day_ltv": "ltv",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalized_period(period: str) -> str:
+    """Normalize common quarter labels without accepting scenario IDs."""
+
+    normalized = re.sub(r"\s+", " ", period.strip().lower())
+    match = re.fullmatch(r"(?:q([1-4])\s*(\d{4})|(\d{4})\s*q([1-4]))", normalized)
+    if match:
+        quarter = match.group(1) or match.group(4)
+        year = match.group(2) or match.group(3)
+        return f"q{quarter} {year}"
+    return normalized
+
+
+def _normalized_dimensions(
+    dimensions: dict[str, str],
+) -> dict[str, str]:
+    """Normalize generic dimension names and values for identity matching."""
+
+    key_aliases = {
+        "acquisition_channel": "channel",
+        "channel_name": "channel",
+        "segment_name": "segment",
+    }
+    return {
+        key_aliases.get(
+            _normalized_metric_identifier(key), key.lower().strip()
+        ): value.strip().lower()
+        for key, value in dimensions.items()
+    }
+
+
+def _metric_identity_matches(
+    comparison: MetricComparison,
+    expected: object,
+) -> bool:
+    """Match only generic metric identity, never evaluator-specific IDs."""
+
+    expected_dimensions = _normalized_dimensions(expected.dimensions)
+    actual_dimensions = _normalized_dimensions(comparison.dimensions)
+    return (
+        _normalized_metric_identifier(comparison.metric_key)
+        == _normalized_metric_identifier(expected.metric_key)
+        and all(
+            actual_dimensions.get(key) == value
+            for key, value in expected_dimensions.items()
+        )
+        and _normalized_period(comparison.baseline_period)
+        == _normalized_period(expected.baseline_period)
+        and _normalized_period(comparison.comparison_period)
+        == _normalized_period(expected.comparison_period)
+        and comparison.comparison_type is expected.comparison_type
+        and comparison.unit.strip().lower() == expected.value_unit.strip().lower()
+    )
+
+
+def _metric_comparisons_from_input(
+    values: Iterable[MetricComparison] | LeadResult,
+) -> list[MetricComparison]:
+    """Accept a typed LeadResult or comparisons for focused evaluator tests."""
+
+    if isinstance(values, LeadResult):
+        return values.metric_comparisons
+    return list(values)
 
 
 def _canonical_numeric_ground_truth_failures(
-    findings: list[Finding],
+    values: Iterable[MetricComparison] | LeadResult,
 ) -> list[str]:
-    """Compare canonical structured relative changes against evaluator metadata."""
+    """Compare generic structured metric identity and values to ground truth."""
 
     failures: list[str] = []
-    indexed_findings: dict[str, list[Finding]] = {}
-    for finding in findings:
-        if finding.metric is None:
-            continue
-        normalized_metric = _normalized_metric_identifier(finding.metric)
-        indexed_findings.setdefault(normalized_metric, []).append(finding)
+    comparisons = _metric_comparisons_from_input(values)
 
     for metric in CANONICAL_PROFITABILITY_SCENARIO.ground_truth:
-        metric_id = _normalized_metric_identifier(metric.id)
-        matching = indexed_findings.get(metric_id, [])
+        matching = [
+            comparison
+            for comparison in comparisons
+            if _metric_identity_matches(comparison, metric)
+        ]
         if not matching:
             failures.append(f"missing numeric ground-truth finding: {metric.id}")
             continue
@@ -54,22 +131,106 @@ def _canonical_numeric_ground_truth_failures(
             failures.append(f"multiple numeric findings for metric: {metric.id}")
             continue
 
-        finding = matching[0]
-        if finding.value is None:
-            failures.append(f"numeric finding has no value: {metric.id}")
-            continue
-        if not isfinite(finding.value):
+        comparison = matching[0]
+        if not isfinite(comparison.value):
             failures.append(f"numeric finding is not finite: {metric.id}")
             continue
-        if finding.value_unit != metric.value_unit:
-            failures.append(f"{metric.id} must use value_unit={metric.value_unit!r}")
-            continue
-        if abs(finding.value - metric.expected_relative_change) > metric.tolerance:
+        if abs(comparison.value - metric.expected_relative_change) > metric.tolerance:
             failures.append(
-                f"{metric.id}={finding.value} is outside "
+                f"{metric.id}={comparison.value} is outside "
                 f"{metric.expected_relative_change} +/- {metric.tolerance}"
             )
     return failures
+
+
+def _analysis_sentences(text: str) -> list[str]:
+    """Split report prose into bounded units for semantic acceptance checks."""
+
+    return [
+        sentence.strip() for sentence in re.split(r"[.!?\n]+", text) if sentence.strip()
+    ]
+
+
+def _has_asserted_primary_driver(text: str) -> bool:
+    """Require an asserted conversion mechanism, not a speculative mention."""
+
+    change_terms = r"declin|fell|drop|down|deteriorat|lower|decreas|reduc|worsen"
+    causal_terms = (
+        r"drove|drives|explain|caused|cause|led to|resulted in|"
+        r"primary|main|largest|responsible|accounted for|mechanism"
+    )
+    uncertainty_terms = (
+        r"may be worth|might|could|possible|possibly|uncertain|unclear|"
+        r"unknown|question|investigat"
+    )
+    for sentence in _analysis_sentences(text):
+        lowered = sentence.lower()
+        if "meta" not in lowered or "conversion" not in lowered:
+            continue
+        if re.search(uncertainty_terms, lowered):
+            continue
+        if not re.search(change_terms, lowered):
+            continue
+        if re.search(causal_terms, lowered):
+            return True
+    return False
+
+
+def _has_primary_channel_contribution(text: str) -> bool:
+    """Require the answer to identify Meta as a material profitability driver."""
+
+    terms = r"largest|primary|main|material|major|biggest"
+    for sentence in _analysis_sentences(text):
+        lowered = sentence.lower()
+        if (
+            "meta" in lowered
+            and re.search(terms, lowered)
+            and ("profit" in lowered or "decline" in lowered or "driver" in lowered)
+        ):
+            return True
+    return False
+
+
+def _has_acquisition_efficiency_decomposition(text: str) -> bool:
+    """Require the relevant acquisition path to be discussed as a mechanism."""
+
+    concept_patterns = (
+        r"marketing[_ ]spend|spend",
+        r"conversion",
+        r"acquired[_ ]customers|new customers|customer volume",
+        r"\bcac\b|customer[_ ]acquisition[_ ]cost",
+        r"\bltv\b|lifetime value|customer value",
+    )
+    return all(re.search(pattern, text) for pattern in concept_patterns)
+
+
+def _has_stable_ltv_statement(text: str) -> bool:
+    """Require stable LTV to be stated as a conclusion rather than a mention."""
+
+    stable_terms = r"stable|unchanged|approximately flat|effectively identical|held"
+    for sentence in _analysis_sentences(text):
+        lowered = sentence.lower()
+        if re.search(r"\bltv\b|lifetime value|customer value", lowered) and re.search(
+            stable_terms, lowered
+        ):
+            return True
+    return False
+
+
+def _has_margin_non_driver_statement(text: str) -> bool:
+    """Require broad COGS/margin deterioration to be ruled out explicitly."""
+
+    non_driver_terms = (
+        r"stable|unchanged|no broad|not .*driver|did not|didn't|"
+        r"not explain|not the cause|not responsible|consistent"
+    )
+    for sentence in _analysis_sentences(text):
+        lowered = sentence.lower()
+        if ("cogs" in lowered or "margin" in lowered) and re.search(
+            non_driver_terms, lowered
+        ):
+            return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,12 +360,14 @@ def evaluate_canonical_run(
     ]
     require(bool(chart_artifacts), "no chart artifact was registered")
     require(bool(state.findings), "no findings were persisted")
-    numeric_findings = (
-        result.lead_result.findings
-        if result.lead_result is not None
-        else state.findings
+    numeric_comparisons = (
+        result.lead_result.metric_comparisons if result.lead_result is not None else []
     )
-    failures.extend(_canonical_numeric_ground_truth_failures(numeric_findings))
+    failures.extend(_canonical_numeric_ground_truth_failures(numeric_comparisons))
+    require(
+        bool(state.metric_comparisons),
+        "structured metric comparisons were not persisted",
+    )
     require(
         result.lead_result is not None and bool(result.lead_result.findings),
         "Lead did not return final findings",
@@ -245,6 +408,17 @@ def evaluate_canonical_run(
                     for reference in recommendation.evidence_refs
                 ),
                 f"recommendation cites no executed evidence: {recommendation.id}",
+            )
+        for comparison in result.lead_result.metric_comparisons:
+            require(
+                bool(comparison.evidence_refs),
+                f"metric comparison has no evidence_refs: {comparison.metric_key}",
+            )
+            require(
+                all(
+                    reference in evidence_refs for reference in comparison.evidence_refs
+                ),
+                f"metric comparison cites unexecuted evidence: {comparison.metric_key}",
             )
 
     specialist_roles = {record.agent_role for record in state.specialist_results}
@@ -305,29 +479,35 @@ def evaluate_canonical_run(
             *[finding.statement for finding in state.findings],
         ]
     ).lower()
-    expected_primary = CANONICAL_PROFITABILITY_SCENARIO.expected_primary_driver.lower()
-    expected_primary_terms = tuple(
-        term for term in ("meta", "conversion") if term in expected_primary
+    require(
+        _has_primary_channel_contribution(analysis_text),
+        "final analysis does not identify Meta as the largest material driver",
     )
     require(
-        all(term in analysis_text for term in expected_primary_terms),
-        "final analysis does not identify Meta conversion deterioration",
+        _has_asserted_primary_driver(analysis_text),
+        "final analysis does not assert that Meta conversion deterioration explains "
+        "the acquisition decline",
     )
-    require("cac" in analysis_text, "final analysis does not discuss CAC")
     require(
-        "ltv" in analysis_text
-        and bool(
-            re.search(r"ltv.{0,80}(stable|unchanged|approximately)", analysis_text)
-        ),
+        _has_acquisition_efficiency_decomposition(analysis_text),
+        "final analysis does not cover the relevant acquisition-efficiency path",
+    )
+    require(
+        _has_stable_ltv_statement(analysis_text),
         "final analysis does not characterize acquired-customer LTV as stable",
     )
-    # The evaluator may inspect the known scenario conclusion; it is never
-    # included in the agent prompts. Keep this check tolerant of paraphrase.
     require(
-        any(term in analysis_text for term in ("efficiency", "conversion"))
-        and bool(expected_primary_terms),
-        "canonical primary-driver evaluation could not be applied",
+        _has_margin_non_driver_statement(analysis_text),
+        "final analysis does not rule out broad COGS or margin deterioration",
     )
+    if state.audit is not None:
+        require(
+            not any(
+                issue.severity.value in {"medium", "high"}
+                for issue in state.audit.issues
+            ),
+            "audit reports a material data-quality defect",
+        )
 
     if failures:
         raise CanonicalAcceptanceError("; ".join(failures))
@@ -347,8 +527,8 @@ def evaluate_canonical_run(
             "critic",
             "final_report",
             "trace_and_usage",
-            "numeric_ground_truth",
-            "canonical_ground_truth",
+            "structured_metric_comparisons",
+            "semantic_root_cause_and_non_drivers",
         ),
         sql_events=len(successful_sql),
         python_events=len(successful_python),

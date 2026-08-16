@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from schemas.findings import Finding
 from schemas.hypotheses import Hypothesis
+from schemas.metrics import MetricComparison
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
 
@@ -47,6 +48,7 @@ class CriticCandidate(BaseModel):
     objective: NonEmptyString
     answer: NonEmptyString
     findings: list[Finding] = Field(default_factory=list)
+    metric_comparisons: list[MetricComparison] = Field(default_factory=list)
     recommendations: list[NonEmptyString] = Field(default_factory=list)
     hypotheses: list[Hypothesis] = Field(default_factory=list)
     open_questions: list[NonEmptyString] = Field(default_factory=list)

@@ -6,17 +6,19 @@ from types import SimpleNamespace
 
 from agents import MaxTurnsExceeded
 from agents.runtime import AgentRole
+from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
 from schemas.audit import AuditResult, AuditStatus
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.lead import LeadResult
-from schemas.run_state import Hypothesis, RunBudget, RunStatus
+from schemas.run_state import ArtifactKind, Hypothesis, RunBudget, RunStatus
 from schemas.validation import (
     ValidationIssue,
     ValidationResult,
     ValidationSeverity,
     ValidationStatus,
 )
+from tools.artifacts import ArtifactManager
 from tools.workspace import WorkspaceManager
 
 
@@ -114,6 +116,8 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
         model="test-model",
         model_provider="test-provider",
         budget=RunBudget(max_critic_loops=2),
+        input_cost_per_1k_tokens=1.0,
+        output_cost_per_1k_tokens=2.0,
         auditor_runner=fake_auditor,
         lead_runner=fake_lead,
         critic_runner=fake_critic,
@@ -155,9 +159,43 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
     assert result.ledger.usage.total_tokens == 70
     assert result.ledger.state.elapsed_seconds is not None
     assert result.ledger.state.cost_estimation_note is not None
-    assert "The remediated candidate is reproducible." in (
-        result.workspace.outputs / "report.md"
-    ).read_text(encoding="utf-8")
+    report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
+    assert "The remediated candidate is reproducible." in report_text
+    assert "Estimated model cost (USD): **0.090000**" in report_text
+    assert "- Elapsed seconds: **" in report_text
+
+
+def test_report_lists_lead_chart_artifacts_in_supporting_visualizations(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace("run-report")
+    ledger = AnalysisLedger(workspace, objective="Explain the change.")
+    chart_path = workspace.outputs / "driver.png"
+    chart_path.write_bytes(b"chart")
+    chart = ArtifactManager(workspace, ledger).register(
+        "outputs/driver.png",
+        artifact_id="driver-chart",
+        kind=ArtifactKind.CHART,
+        media_type="image/png",
+        description="Profitability driver comparison.",
+    )
+    report = AnalysisRunner._render_report(
+        "Explain the change.",
+        _audit(),
+        LeadResult(
+            objective="Explain the change.",
+            answer="The answer is supported.",
+            artifacts=[chart.id],
+        ),
+        ValidationResult(status=ValidationStatus.PASS),
+        constrained=False,
+        constraint_reason=None,
+        ledger=ledger,
+    )
+
+    assert "## Supporting Visualizations" in report
+    assert "[driver-chart](outputs/driver.png)" in report
+    assert "Profitability driver comparison." in report
 
 
 def test_runner_must_complete_objective_critical_lead_follow_up_before_critic(

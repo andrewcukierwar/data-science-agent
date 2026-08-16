@@ -89,7 +89,13 @@ Required investigation behavior:
    associations from unsupported causal claims, preserve caveats, and never invent
    evidence or scenario ground truth. For comparable period changes, use a stable
    metric identifier, set value_unit to relative_change_fraction, and report the
-   relative change as a decimal fraction (0.10 means +10%).
+   relative change as a decimal fraction (0.10 means +10%). Important quantitative
+   period or segment comparisons supporting the answer should also be represented
+   in LeadResult.metric_comparisons with generic metric keys, dimensions, periods,
+   comparison type, unit, value, and exact evidence_refs. Do not use evaluator,
+   scenario, or prompt-specific identifiers for those metric keys.
+   State material non-drivers and data-quality limitations explicitly so the
+   answer distinguishes the supported mechanism from plausible alternatives.
    Specialist finding IDs such as analyst:F1 or statistician:H1 are intermediate
    labels, not executed evidence references. Copy the exact evidence_refs from the
    specialist finding when citing its result; do not use a local finding ID as a
@@ -538,11 +544,25 @@ def validate_lead_result(
         )
         for hypothesis in result.hypotheses
     ]
+    canonical_metric_comparisons = [
+        comparison.model_copy(
+            update={
+                "evidence_refs": _canonicalize_evidence_refs(
+                    comparison.evidence_refs,
+                    executed_refs=executed_refs,
+                    aliases=aliases,
+                )
+                or comparison.evidence_refs
+            }
+        )
+        for comparison in result.metric_comparisons
+    ]
     result = result.model_copy(
         update={
             "findings": canonical_findings,
             "recommendations": canonical_recommendations,
             "hypotheses": canonical_hypotheses,
+            "metric_comparisons": canonical_metric_comparisons,
         }
     )
     invalid_findings = [
@@ -566,11 +586,22 @@ def validate_lead_result(
             reference in executed_refs for reference in hypothesis.evidence_refs
         )
     ]
-    if invalid_findings or invalid_recommendations or invalid_hypotheses:
+    invalid_metric_comparisons = [
+        comparison.metric_key
+        for comparison in result.metric_comparisons
+        if not any(reference in executed_refs for reference in comparison.evidence_refs)
+    ]
+    if (
+        invalid_findings
+        or invalid_recommendations
+        or invalid_hypotheses
+        or invalid_metric_comparisons
+    ):
         details = [
             *[f"finding:{item}" for item in invalid_findings],
             *[f"recommendation:{item}" for item in invalid_recommendations],
             *[f"hypothesis:{item}" for item in invalid_hypotheses],
+            *[f"metric_comparison:{item}" for item in invalid_metric_comparisons],
         ]
         raise LeadEvidenceError(
             "lead outputs cite no executed evidence: " + ", ".join(details)
@@ -588,6 +619,8 @@ def _persist_result(result: LeadResult, context: AgentRunContext) -> LeadResult:
         context.ledger.add_open_question(question)
     for finding in result.findings:
         context.ledger.upsert_finding(finding)
+    for comparison in result.metric_comparisons:
+        context.ledger.upsert_metric_comparison(comparison)
     return result
 
 

@@ -129,6 +129,7 @@ class AnalysisRunner:
         constraint_reason: str | None = None
         active_agent: tuple[str, AgentRole, str] | None = None
         active_agent_recorded = False
+        runtime_metadata_finalized = False
 
         try:
             run_workspace = run_workspace or self._open_or_create_workspace(
@@ -358,6 +359,8 @@ class AnalysisRunner:
                         active_agent_recorded = True
                     break
 
+            self._finalize_runtime_metadata(ledger, started)
+            runtime_metadata_finalized = True
             report = self._write_report(
                 run_workspace,
                 ledger,
@@ -408,17 +411,26 @@ class AnalysisRunner:
                 error=message,
             )
         finally:
-            if ledger is not None:
+            if ledger is not None and not runtime_metadata_finalized:
                 try:
-                    ledger.record_cost_estimate(
-                        input_cost_per_1k_tokens=self.input_cost_per_1k_tokens,
-                        output_cost_per_1k_tokens=self.output_cost_per_1k_tokens,
-                    )
-                    ledger.record_elapsed(time.perf_counter() - started)
+                    self._finalize_runtime_metadata(ledger, started)
                 except Exception:
                     # Do not mask a primary lifecycle or persistence error with a
                     # final metadata-write failure.
                     pass
+
+    def _finalize_runtime_metadata(
+        self,
+        ledger: AnalysisLedger,
+        started: float,
+    ) -> None:
+        """Persist final usage/cost and elapsed time before report rendering."""
+
+        ledger.record_cost_estimate(
+            input_cost_per_1k_tokens=self.input_cost_per_1k_tokens,
+            output_cost_per_1k_tokens=self.output_cost_per_1k_tokens,
+        )
+        ledger.record_elapsed(time.perf_counter() - started)
 
     def _record_agent_success(
         self,
@@ -585,10 +597,13 @@ class AnalysisRunner:
             evidence_refs.extend(recommendation.evidence_refs)
         for hypothesis in result.hypotheses:
             evidence_refs.extend(hypothesis.evidence_refs)
+        for comparison in result.metric_comparisons:
+            evidence_refs.extend(comparison.evidence_refs)
         return CriticCandidate(
             objective=objective,
             answer=result.answer,
             findings=result.findings,
+            metric_comparisons=result.metric_comparisons,
             recommendations=recommendations,
             hypotheses=result.hypotheses,
             open_questions=result.open_questions,
@@ -730,6 +745,45 @@ class AnalysisRunner:
             )
         else:
             lines.append("- No recommendations were returned.")
+        lines.extend(["", "## Key Metric Comparisons", ""])
+        if lead_result.metric_comparisons:
+            lines.extend(
+                "- **{metric}:** {value} {unit} ({baseline} to {comparison}; "
+                "{comparison_type}; {dimensions}; evidence: {evidence})".format(
+                    metric=item.metric_key,
+                    value=item.value,
+                    unit=item.unit,
+                    baseline=item.baseline_period,
+                    comparison=item.comparison_period,
+                    comparison_type=item.comparison_type.value,
+                    dimensions=(
+                        ", ".join(
+                            f"{key}={value}" for key, value in item.dimensions.items()
+                        )
+                        or "all segments"
+                    ),
+                    evidence=", ".join(item.evidence_refs),
+                )
+                for item in lead_result.metric_comparisons
+            )
+        else:
+            lines.append("- No structured metric comparisons were returned.")
+        listed_chart_refs = set(lead_result.artifacts)
+        listed_charts = [
+            artifact
+            for artifact in ledger.artifacts
+            if artifact.kind is ArtifactKind.CHART
+            and (artifact.id in listed_chart_refs or artifact.path in listed_chart_refs)
+        ]
+        lines.extend(["", "## Supporting Visualizations", ""])
+        if listed_charts:
+            lines.extend(
+                f"- [{artifact.id}]({artifact.path})"
+                + (f" — {artifact.description}" if artifact.description else "")
+                for artifact in listed_charts
+            )
+        else:
+            lines.append("- No Lead-listed chart artifacts.")
         lines.extend(
             [
                 "",

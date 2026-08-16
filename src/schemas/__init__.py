@@ -17,6 +17,7 @@ from schemas.findings import (
     canonicalize_specialist_result,
 )
 from schemas.lead import LeadRecommendation, LeadResult, SpecialistTask
+from schemas.metrics import MetricComparison, MetricComparisonType, MetricObservation
 from schemas.run_state import (
     AgentEvent,
     AgentEventStatus,
@@ -63,6 +64,9 @@ __all__ = [
     "MissingnessObservation",
     "LeadRecommendation",
     "LeadResult",
+    "MetricComparison",
+    "MetricComparisonType",
+    "MetricObservation",
     "ModelUsage",
     "RunBudget",
     "RunStatus",

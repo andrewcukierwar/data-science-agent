@@ -13,6 +13,7 @@ from schemas.audit import (
     TableAudit,
 )
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
+from schemas.metrics import MetricComparison, MetricComparisonType, MetricObservation
 from schemas.run_state import (
     AgentEvent,
     AgentEventStatus,
@@ -59,6 +60,42 @@ def test_finding_requires_at_least_one_evidence_reference() -> None:
             statement="A claim without provenance.",
             evidence_refs=[],
             confidence="low",
+        )
+
+
+def test_metric_observation_and_comparison_are_generic_and_typed() -> None:
+    observation = MetricObservation(
+        metric_key="conversion_rate",
+        dimensions={"channel": "Meta"},
+        period="Q1 2025",
+        value=0.12,
+        unit="fraction",
+        evidence_refs=["tool-sql-1"],
+    )
+    comparison = MetricComparison(
+        metric_key="cac",
+        dimensions={"channel": "Meta"},
+        baseline_period="Q1 2025",
+        comparison_period="Q2 2025",
+        comparison_type=MetricComparisonType.RELATIVE_CHANGE,
+        value=0.30,
+        unit="relative_change_fraction",
+        evidence_refs=["tool-sql-2"],
+    )
+
+    assert observation.dimensions == {"channel": "Meta"}
+    assert comparison.comparison_type is MetricComparisonType.RELATIVE_CHANGE
+
+    with pytest.raises(ValidationError):
+        MetricComparison(
+            metric_key=comparison.metric_key,
+            dimensions=comparison.dimensions,
+            baseline_period=comparison.baseline_period,
+            comparison_period=comparison.comparison_period,
+            comparison_type=comparison.comparison_type,
+            value=float("nan"),
+            unit=comparison.unit,
+            evidence_refs=comparison.evidence_refs,
         )
 
 

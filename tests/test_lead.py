@@ -32,6 +32,7 @@ from orchestration.budgets import BudgetExhaustedError
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.lead import LeadRecommendation, LeadResult
+from schemas.metrics import MetricComparison
 from schemas.run_state import (
     Hypothesis,
     HypothesisStatus,
@@ -273,7 +274,6 @@ def test_lead_result_requires_evidence_for_recommendations_and_resolved_hypothes
         ],
     )
     assert validate_lead_result(result, context.ledger) == result
-
     invalid = result.model_copy(
         update={
             "recommendations": [
@@ -287,6 +287,38 @@ def test_lead_result_requires_evidence_for_recommendations_and_resolved_hypothes
         }
     )
     with pytest.raises(LeadEvidenceError, match="recommendation:R002"):
+        validate_lead_result(invalid, context.ledger)
+
+
+def test_lead_metric_comparisons_require_executed_evidence(tmp_path: Path) -> None:
+    context = _evidence_context(tmp_path)
+    comparison = MetricComparison(
+        metric_key="cac",
+        dimensions={"channel": "Meta"},
+        baseline_period="Q1 2025",
+        comparison_period="Q2 2025",
+        comparison_type="relative_change",
+        value=0.3,
+        unit="relative_change_fraction",
+        evidence_refs=["tool-Q001"],
+    )
+    result = LeadResult(
+        objective="Explain the change.",
+        answer="The structured comparison is supported.",
+        metric_comparisons=[comparison],
+    )
+
+    assert validate_lead_result(result, context.ledger) == result
+    persist_lead_result(result, context)
+    assert context.ledger.metric_comparisons == [comparison]
+    invalid = result.model_copy(
+        update={
+            "metric_comparisons": [
+                comparison.model_copy(update={"evidence_refs": ["not-executed"]})
+            ]
+        }
+    )
+    with pytest.raises(LeadEvidenceError, match="metric_comparison:cac"):
         validate_lead_result(invalid, context.ledger)
 
 

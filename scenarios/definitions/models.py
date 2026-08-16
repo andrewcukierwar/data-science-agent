@@ -4,6 +4,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from schemas.metrics import MetricComparisonType
+
 NonEmptyString = Annotated[str, Field(min_length=1)]
 
 
@@ -19,13 +21,18 @@ class InjectedCondition(BaseModel):
 
 
 class GroundTruthMetric(BaseModel):
-    """Expected relative change and tolerance for an evaluator metric."""
+    """Evaluator-only expected value and generic metric identity."""
 
     model_config = ConfigDict(extra="forbid")
 
     id: NonEmptyString
     description: NonEmptyString
     comparison: NonEmptyString
+    metric_key: NonEmptyString
+    dimensions: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
+    baseline_period: NonEmptyString
+    comparison_period: NonEmptyString
+    comparison_type: MetricComparisonType
     value_unit: NonEmptyString = "relative_change_fraction"
     expected_relative_change: float
     tolerance: float = Field(ge=0)

@@ -7,6 +7,7 @@ import pytest
 
 from orchestration.ledger import AnalysisLedger, LedgerConflictError
 from schemas.findings import ConfidenceLevel, Finding
+from schemas.metrics import MetricComparison
 from schemas.run_state import (
     Artifact,
     ArtifactKind,
@@ -110,6 +111,27 @@ def test_identical_hypothesis_updates_are_idempotent(tmp_path: Path) -> None:
     assert ledger.upsert_hypothesis(hypothesis) == hypothesis
     assert len(ledger.hypothesis_history) == history_length
     assert len(AnalysisLedger(ledger.state_path).hypothesis_history) == 1
+
+
+def test_ledger_persists_and_upserts_metric_comparisons(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    comparison = MetricComparison(
+        metric_key="cac",
+        dimensions={"channel": "Meta"},
+        baseline_period="Q1 2025",
+        comparison_period="Q2 2025",
+        comparison_type="relative_change",
+        value=0.30,
+        unit="relative_change_fraction",
+        evidence_refs=["tool-sql"],
+    )
+
+    ledger.upsert_metric_comparison(comparison)
+    ledger.upsert_metric_comparison(comparison.model_copy(update={"value": 0.31}))
+    reloaded = AnalysisLedger(ledger.state_path)
+
+    assert len(reloaded.metric_comparisons) == 1
+    assert reloaded.metric_comparisons[0].value == 0.31
 
 
 def test_duplicate_ids_are_rejected_without_overwriting_disk_state(

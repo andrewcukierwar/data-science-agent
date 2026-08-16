@@ -14,6 +14,7 @@ from schemas.hypotheses import (  # noqa: F401
     HypothesisStatus,
     NonEmptyString,
 )
+from schemas.metrics import MetricComparison
 from schemas.validation import ValidationIssue, ValidationResult
 
 
@@ -204,6 +205,7 @@ class AnalysisRunState(BaseModel):
     hypothesis_history: list[Hypothesis] = Field(default_factory=list)
     rejected_hypotheses: list[NonEmptyString] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
+    metric_comparisons: list[MetricComparison] = Field(default_factory=list)
     open_questions: list[NonEmptyString] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
     validation_issues: list[ValidationIssue] = Field(default_factory=list)

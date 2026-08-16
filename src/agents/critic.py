@@ -106,6 +106,9 @@ Required review procedure:
   rules, and reporting conventions match the documented business definitions.
 - Check denominators, especially CAC/new-customer denominators, rates, cohort
   sizes, and contribution-profit components.
+- Validate each structured metric comparison's generic identity, periods, unit,
+  value, and exact evidence_refs; reproduce important comparisons from the
+  cited evidence rather than trusting labels or prose.
 - Check joins for accidental row multiplication, duplicate keys, unresolved
   foreign keys, and mismatched grains.
 - Compare findings with the actual query/script outputs and registered artifact
