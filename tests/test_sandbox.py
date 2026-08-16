@@ -48,6 +48,7 @@ def test_build_command_uses_only_constrained_workspace_mounts(
     assert command[command.index("--memory") + 1] == "256m"
     assert command[command.index("--cpus") + 1] == "0.5"
     assert command[command.index("--pids-limit") + 1] == "64"
+    assert "MPLCONFIGDIR=/tmp/matplotlib" in command
     assert (
         f"type=bind,src={workspace.inputs.resolve()},dst=/workspace/inputs,readonly"
         in command

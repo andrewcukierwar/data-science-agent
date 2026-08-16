@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,7 +16,12 @@ from agents.critic import (
     run_critic,
 )
 from agents.lead import build_lead_agent, persist_lead_result, run_lead
-from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
+from agents.runtime import (
+    AgentRole,
+    AgentRunConfig,
+    AgentRunContext,
+    normalize_agent_turn_limits,
+)
 from orchestration.budgets import BudgetResource
 from orchestration.ledger import AnalysisLedger
 from schemas.audit import AuditResult, AuditStatus
@@ -73,7 +78,7 @@ class AnalysisRunner:
         model_provider: str = "openai",
         docker_image: str = "data-science-agent-python:latest",
         budget: RunBudget | None = None,
-        max_agent_turns: int = 10,
+        agent_turn_limits: Mapping[AgentRole | str, int] | None = None,
         input_cost_per_1k_tokens: float | None = None,
         output_cost_per_1k_tokens: float | None = None,
         auditor_runner: AuditorRunner | None = None,
@@ -91,7 +96,7 @@ class AnalysisRunner:
         self.model_provider = model_provider
         self.docker_image = docker_image
         self.budget = budget
-        self.max_agent_turns = max_agent_turns
+        self.agent_turn_limits = normalize_agent_turn_limits(agent_turn_limits)
         if (input_cost_per_1k_tokens is None) != (output_cost_per_1k_tokens is None):
             raise ValueError("input and output cost rates must be provided together")
         self.input_cost_per_1k_tokens = input_cost_per_1k_tokens
@@ -416,7 +421,7 @@ class AnalysisRunner:
             agent_role=role,
             model=self.model,
             model_provider=self.model_provider,
-            max_agent_turns=self.max_agent_turns,
+            agent_turn_limits=self.agent_turn_limits,
         )
         context = AgentRunContext(
             workspace=workspace,

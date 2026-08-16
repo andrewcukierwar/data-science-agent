@@ -119,7 +119,7 @@ async def run_data_auditor(
         selected_agent,
         objective,
         context=context,
-        max_turns=context.run_config.max_agent_turns,
+        max_turns=context.run_config.turn_limit,
     )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)

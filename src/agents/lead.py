@@ -15,6 +15,7 @@ from agents import (
     function_tool,
 )
 from agents.runtime import (
+    DEFAULT_AGENT_TURN_LIMITS,
     AgentRole,
     AgentRunConfig,
     AgentRunContext,
@@ -321,7 +322,11 @@ def build_lead_agent(
     if config is not None and config.agent_role is not AgentRole.LEAD:
         raise ValueError("Lead requires an AgentRunConfig with lead role")
     selected_model = model or (config.model if config is not None else None)
-    delegation_turns = config.max_agent_turns if config is not None else 10
+
+    def specialist_turns(role: AgentRole) -> int:
+        if config is not None:
+            return config.turn_limit_for(role)
+        return DEFAULT_AGENT_TURN_LIMITS[role]
 
     if analyst is None:
         from agents.analyst import build_analyst_agent
@@ -347,7 +352,7 @@ def build_lead_agent(
             role=AgentRole.DATA_AUDITOR,
             tool_name="delegate_to_data_auditor",
             description="Delegate a bounded data-quality or relationship audit.",
-            max_turns=delegation_turns,
+            max_turns=specialist_turns(AgentRole.DATA_AUDITOR),
         ),
         _specialist_tool(
             analyst,
@@ -356,14 +361,14 @@ def build_lead_agent(
             description=(
                 "Delegate bounded SQL/Python business analytics and decomposition."
             ),
-            max_turns=delegation_turns,
+            max_turns=specialist_turns(AgentRole.ANALYST),
         ),
         _specialist_tool(
             statistician,
             role=AgentRole.STATISTICIAN,
             tool_name="delegate_to_statistician",
             description="Delegate a bounded inferential or statistical question.",
-            max_turns=delegation_turns,
+            max_turns=specialist_turns(AgentRole.STATISTICIAN),
         ),
     ]
     return Agent[AgentRunContext](
@@ -502,7 +507,7 @@ async def run_lead(
             audit=audit,
         ),
         context=context,
-        max_turns=context.run_config.max_agent_turns,
+        max_turns=context.run_config.turn_limit,
     )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)

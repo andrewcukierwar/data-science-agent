@@ -1,10 +1,12 @@
 """Typed local context and shared runtime contracts for analysis agents."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from orchestration.budgets import (
     BudgetResource,
@@ -26,6 +28,42 @@ class AgentRole(StrEnum):
     ANALYST = "analyst"
     STATISTICIAN = "statistician"
     CRITIC = "critic"
+
+
+DEFAULT_AGENT_TURN_LIMITS: Mapping[AgentRole, int] = MappingProxyType(
+    {
+        AgentRole.LEAD: 16,
+        AgentRole.DATA_AUDITOR: 8,
+        AgentRole.ANALYST: 10,
+        AgentRole.STATISTICIAN: 10,
+        AgentRole.CRITIC: 8,
+    }
+)
+
+
+def normalize_agent_turn_limits(
+    limits: Mapping[AgentRole | str, int] | None = None,
+) -> dict[AgentRole, int]:
+    """Merge and validate configurable role-specific turn limits."""
+
+    normalized = dict(DEFAULT_AGENT_TURN_LIMITS)
+    if limits is None:
+        return normalized
+    if not isinstance(limits, Mapping):
+        raise ValueError("agent_turn_limits must be a mapping by agent role")
+    for role, limit in limits.items():
+        normalized_role = AgentRole(role)
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= 50
+        ):
+            raise ValueError(
+                f"turn limit for {normalized_role.value} must be an integer "
+                "between 1 and 50"
+            )
+        normalized[normalized_role] = limit
+    return normalized
 
 
 _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
@@ -83,7 +121,30 @@ class AgentRunConfig(BaseModel):
     max_result_rows: int = Field(default=100, ge=1, le=1_000)
     max_text_chars: int = Field(default=4_000, ge=256, le=100_000)
     max_document_chars: int = Field(default=16_000, ge=256, le=1_000_000)
-    max_agent_turns: int = Field(default=10, ge=1, le=50)
+    agent_turn_limits: dict[AgentRole, int] = Field(
+        default_factory=lambda: dict(DEFAULT_AGENT_TURN_LIMITS)
+    )
+
+    @field_validator("agent_turn_limits", mode="before")
+    @classmethod
+    def validate_agent_turn_limits(
+        cls,
+        value: Mapping[AgentRole | str, int] | None,
+    ) -> dict[AgentRole, int]:
+        """Accept partial overrides while retaining safe role defaults."""
+
+        return normalize_agent_turn_limits(value)
+
+    def turn_limit_for(self, role: AgentRole | str) -> int:
+        """Return the configured SDK turn limit for one agent role."""
+
+        return self.agent_turn_limits[AgentRole(role)]
+
+    @property
+    def turn_limit(self) -> int:
+        """Return this context's role-specific SDK turn limit."""
+
+        return self.turn_limit_for(self.agent_role)
 
 
 class PermissionDeniedError(PermissionError):

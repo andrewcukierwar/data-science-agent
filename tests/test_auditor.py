@@ -115,6 +115,7 @@ def test_data_auditor_persists_typed_result_in_ledger(
         assert agent.output_type is AuditResult
         assert objective == DATA_AUDITOR_OBJECTIVE
         assert context is not None
+        assert kwargs["max_turns"] == 8
         return SimpleNamespace(final_output=audit)
 
     monkeypatch.setattr(Runner, "run", fake_run)

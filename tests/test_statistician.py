@@ -136,6 +136,7 @@ def test_statistician_persists_findings_and_artifacts(
         assert agent.output_type is SpecialistResult
         assert objective == STATISTICIAN_OBJECTIVE
         assert context is not None
+        assert kwargs["max_turns"] == 10
         return SimpleNamespace(final_output=result)
 
     monkeypatch.setattr(Runner, "run", fake_run)

@@ -150,6 +150,7 @@ def test_critic_persists_validation_result_and_issues(
         assert "CANDIDATE_ANALYSIS_JSON" in prompt
         assert candidate.objective in prompt
         assert context is not None
+        assert kwargs["max_turns"] == 8
         return SimpleNamespace(final_output=validation)
 
     monkeypatch.setattr(Runner, "run", fake_run)

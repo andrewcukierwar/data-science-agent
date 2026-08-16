@@ -1,20 +1,28 @@
 """Deterministic construction and evidence-contract tests for the Analyst."""
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from agents import (
     AgentRole,
     AgentRunConfig,
+    AgentRunContext,
     AnalystEvidenceError,
     build_analyst_agent,
+    run_analyst,
     validate_analyst_result,
 )
+from agents.analyst import Runner
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.run_state import ToolEvent, ToolEventStatus
+from tools.artifacts import ArtifactManager
+from tools.python import PythonExecutionService
+from tools.sql import DuckDBExecutionService
 from tools.workspace import WorkspaceManager
 
 
@@ -112,6 +120,38 @@ def test_material_finding_evidence_must_match_ledger_execution(
     invalid = _quantitative_result("working/queries/not-executed.sql")
     with pytest.raises(AnalystEvidenceError, match="F001"):
         validate_analyst_result(invalid, ledger)
+
+
+def test_analyst_runner_uses_the_role_specific_turn_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ledger = _ledger(tmp_path)
+    workspace = WorkspaceManager(tmp_path / "workspaces").open_workspace("run-analyst")
+    context = AgentRunContext(
+        workspace=workspace,
+        ledger=ledger,
+        sql_service=DuckDBExecutionService(workspace, ledger),
+        python_service=PythonExecutionService(workspace, ledger),
+        artifact_manager=ArtifactManager(workspace, ledger),
+        run_config=AgentRunConfig(
+            run_id="run-analyst",
+            agent_role=AgentRole.ANALYST,
+            model="test-model",
+        ),
+    )
+
+    async def fake_run(agent, objective, *, context, **kwargs):  # noqa: ANN001
+        assert kwargs["max_turns"] == 10
+        return SimpleNamespace(
+            final_output=_quantitative_result("working/queries/Q001.sql")
+        )
+
+    monkeypatch.setattr(Runner, "run", fake_run)
+
+    result = asyncio.run(run_analyst(context, "Compare the periods."))
+
+    assert result.findings[0].id == "analyst:F001"
 
 
 def test_specialist_result_requires_nonempty_finding_evidence_refs() -> None:

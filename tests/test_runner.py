@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+from agents import MaxTurnsExceeded
 from agents.runtime import AgentRole
 from orchestration.runner import AnalysisRunner
 from schemas.audit import AuditResult, AuditStatus
@@ -58,6 +59,7 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
         lead_calls += 1
         events.append("lead")
         assert context.agent_role is AgentRole.LEAD
+        assert context.run_config.turn_limit == 16
         assert audit.status is AuditStatus.COMPLETE
         if lead_calls == 1:
             context.ledger.update_investigation_plan(
@@ -86,6 +88,7 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
         critic_calls += 1
         events.append("critic")
         assert context.agent_role is AgentRole.CRITIC
+        assert context.run_config.turn_limit == 8
         context.consume_budget("specialist_invocations")
         context.consume_budget("critic_loops")
         context.record_sdk_usage(_usage())
@@ -207,6 +210,42 @@ def test_runner_returns_constrained_report_after_critic_limit(
     assert "Constrained Analysis Report" in report_text
     assert "V001" in report_text
     assert "provisional" in report_text
+
+
+def test_runner_observes_lead_turn_limit_failure_and_marks_run_failed(
+    tmp_path: Path,
+) -> None:
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def exhausted_lead(
+        context,
+        objective,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        assert context.run_config.turn_limit == 16
+        raise MaxTurnsExceeded("Lead exceeded its 16-turn limit")
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        auditor_runner=fake_auditor,
+        lead_runner=exhausted_lead,
+    )
+
+    result = asyncio.run(runner.run("run-turn-limit", "Explain profitability."))
+
+    assert result.status is RunStatus.FAILED
+    assert result.error is not None
+    assert "MaxTurnsExceeded" in result.error
+    assert "16-turn limit" in result.error
+    assert result.ledger is not None
+    assert result.ledger.state.status is RunStatus.FAILED
+    assert result.ledger.state.error == result.error
+    assert result.ledger.agent_events[-1].agent_role == AgentRole.LEAD.value
+    assert result.ledger.agent_events[-1].status.value == "failed"
 
 
 def test_runner_marks_failed_and_persists_error_state(tmp_path: Path) -> None:

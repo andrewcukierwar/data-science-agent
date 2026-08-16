@@ -9,6 +9,7 @@ import pytest
 from agents.tool_context import ToolContext
 
 from agents import (
+    DEFAULT_AGENT_TURN_LIMITS,
     AgentRole,
     AgentRunConfig,
     AgentRunContext,
@@ -31,6 +32,37 @@ from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService
 from tools.workspace import WorkspaceManager
+
+
+def test_agent_turn_limits_are_role_specific_and_configurable() -> None:
+    for role, expected in DEFAULT_AGENT_TURN_LIMITS.items():
+        config = AgentRunConfig(
+            run_id=f"run-{role.value}",
+            agent_role=role,
+            model="test-model",
+        )
+        assert config.turn_limit == expected
+        assert config.turn_limit_for(role) == expected
+
+    configured = AgentRunConfig(
+        run_id="run-custom-turns",
+        agent_role=AgentRole.LEAD,
+        model="test-model",
+        agent_turn_limits={
+            AgentRole.LEAD: 20,
+            AgentRole.CRITIC: 4,
+        },
+    )
+    assert configured.turn_limit == 20
+    assert configured.turn_limit_for(AgentRole.CRITIC) == 4
+    assert configured.turn_limit_for(AgentRole.ANALYST) == 10
+
+    with pytest.raises(ValueError):
+        AgentRunConfig(
+            run_id="run-invalid-turns",
+            agent_role=AgentRole.LEAD,
+            agent_turn_limits={AgentRole.LEAD: 0},
+        )
 
 
 class FakeExecutor:

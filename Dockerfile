@@ -16,6 +16,8 @@ RUN groupadd --gid 1000 analysis \
         scipy \
         statsmodels
 
+ENV MPLCONFIGDIR=/tmp/matplotlib
+
 WORKDIR /workspace
 USER analysis
 

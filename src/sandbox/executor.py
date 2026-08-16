@@ -176,6 +176,8 @@ class DockerSandboxExecutor:
             "PYTHONDONTWRITEBYTECODE=1",
             "--env",
             "PYTHONUNBUFFERED=1",
+            "--env",
+            "MPLCONFIGDIR=/tmp/matplotlib",
             "--workdir",
             "/workspace",
             self.image,

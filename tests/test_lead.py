@@ -22,6 +22,7 @@ from agents import (
     record_hypothesis,
     record_open_question,
     run_lead,
+    tools_for_role,
     update_investigation_plan,
     validate_lead_result,
 )
@@ -70,6 +71,44 @@ def test_lead_uses_manager_tools_and_has_no_computational_tools() -> None:
     for tool in agent.tools[-3:]:
         assert "objective" in tool.params_json_schema["properties"]
         assert "required_outputs" in tool.params_json_schema["properties"]
+
+
+def test_lead_uses_configured_turn_limits_for_nested_specialists() -> None:
+    captured: dict[str, int] = {}
+
+    class FakeSpecialist:
+        handoffs: list[Agent] = []
+        model = "test-model"
+        name = "Fake specialist"
+
+        def as_tool(self, **kwargs):  # noqa: ANN003
+            captured[kwargs["tool_name"]] = kwargs["max_turns"]
+            return tools_for_role(AgentRole.LEAD)[0]
+
+    config = AgentRunConfig(
+        run_id="run-lead-limits",
+        agent_role=AgentRole.LEAD,
+        model="test-model",
+        agent_turn_limits={
+            AgentRole.LEAD: 20,
+            AgentRole.DATA_AUDITOR: 3,
+            AgentRole.ANALYST: 4,
+            AgentRole.STATISTICIAN: 5,
+            AgentRole.CRITIC: 6,
+        },
+    )
+    build_lead_agent(
+        config,
+        data_auditor=FakeSpecialist(),
+        analyst=FakeSpecialist(),
+        statistician=FakeSpecialist(),
+    )
+
+    assert captured == {
+        "delegate_to_data_auditor": 3,
+        "delegate_to_analyst": 4,
+        "delegate_to_statistician": 5,
+    }
 
 
 def test_lead_requires_lead_context_and_specialists_cannot_delegate() -> None:
@@ -274,6 +313,7 @@ def test_run_lead_consumes_typed_output_and_persists_findings(
         assert agent.output_type is LeadResult
         assert prompt == "Explain the change."
         assert context.agent_role is AgentRole.LEAD
+        assert kwargs["max_turns"] == 16
         assert all(tool.name not in {"run_sql", "run_python"} for tool in agent.tools)
         return SimpleNamespace(final_output=result)
 
