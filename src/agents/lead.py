@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from agents import (
     Agent,
+    AgentOutputSchema,
     RunContextWrapper,
     RunHooks,
     Runner,
@@ -402,7 +403,11 @@ def build_lead_agent(
         model=selected_model,
         tools=[*tools_for_role(AgentRole.LEAD), *state_tools, *specialist_tools],
         handoffs=[],
-        output_type=LeadResult,
+        # Metric dimensions are intentionally open-ended (for example channel,
+        # cohort, or device). The SDK's strict schema mode rejects dynamic JSON
+        # object keys, so retain typed Pydantic validation while opting this
+        # structured output into the SDK's documented non-strict mode.
+        output_type=AgentOutputSchema(LeadResult, strict_json_schema=False),
     )
 
 

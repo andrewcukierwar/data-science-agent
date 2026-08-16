@@ -282,26 +282,48 @@ class AnalysisRunner:
                 candidate = self._candidate(objective, lead_result)
                 active_agent = (critic_agent.name, AgentRole.CRITIC, objective)
                 active_agent_recorded = False
-                critic_context.check_budget(BudgetResource.SPECIALIST_INVOCATIONS)
-                critic_context.check_budget(BudgetResource.CRITIC_LOOPS)
-                critic_specialist_usage = ledger.budget.specialist_invocations
-                critic_loop_usage = ledger.budget.critic_loops
-                validation_result = await self.critic_runner(
-                    critic_context,
-                    candidate,
-                    agent=critic_agent,
-                )
-                critic_context.assert_base_role(AgentRole.CRITIC)
-                self._ensure_budget_increment(
-                    critic_context,
-                    BudgetResource.SPECIALIST_INVOCATIONS,
-                    critic_specialist_usage,
-                )
-                self._ensure_budget_increment(
-                    critic_context,
-                    BudgetResource.CRITIC_LOOPS,
-                    critic_loop_usage,
-                )
+                try:
+                    critic_context.check_budget(BudgetResource.SPECIALIST_INVOCATIONS)
+                    critic_context.check_budget(BudgetResource.CRITIC_LOOPS)
+                    critic_specialist_usage = ledger.budget.specialist_invocations
+                    critic_loop_usage = ledger.budget.critic_loops
+                    validation_result = await self.critic_runner(
+                        critic_context,
+                        candidate,
+                        agent=critic_agent,
+                    )
+                    critic_context.assert_base_role(AgentRole.CRITIC)
+                    self._ensure_budget_increment(
+                        critic_context,
+                        BudgetResource.SPECIALIST_INVOCATIONS,
+                        critic_specialist_usage,
+                    )
+                    self._ensure_budget_increment(
+                        critic_context,
+                        BudgetResource.CRITIC_LOOPS,
+                        critic_loop_usage,
+                    )
+                except (BudgetExhaustedError, MaxTurnsExceeded) as error:
+                    # A prior Critic result is still the last valid review. If
+                    # a bounded re-review cannot start or finish, preserve it
+                    # and render a constrained report instead of converting a
+                    # recoverable remediation stop into a failed run.
+                    if validation_result is None:
+                        raise
+                    constrained = True
+                    constraint_reason = self._critic_failure_reason(error)
+                    if active_agent is not None and not active_agent_recorded:
+                        agent_name, role, agent_objective = active_agent
+                        ledger.record_agent_event(
+                            agent_name=agent_name,
+                            agent_role=role.value,
+                            status=AgentEventStatus.FAILED,
+                            model=self.model,
+                            objective=agent_objective,
+                            error=constraint_reason,
+                        )
+                        active_agent_recorded = True
+                    break
                 if not isinstance(validation_result, ValidationResult):
                     validation_result = ValidationResult.model_validate(
                         validation_result
@@ -461,6 +483,16 @@ class AnalysisRunner:
         if isinstance(error, MaxTurnsExceeded):
             return f"Remediation stopped by the Lead turn limit: {error}"
         return f"Remediation stopped by a bounded execution failure: {error}"
+
+    @staticmethod
+    def _critic_failure_reason(error: Exception) -> str:
+        """Describe why a later Critic review could not be completed."""
+
+        if isinstance(error, BudgetExhaustedError):
+            return f"Critic re-review stopped by budget exhaustion: {error}"
+        if isinstance(error, MaxTurnsExceeded):
+            return f"Critic re-review stopped by its turn limit: {error}"
+        return f"Critic re-review stopped by a bounded execution failure: {error}"
 
     @staticmethod
     def _follow_up_failure_reason(error: Exception) -> str:

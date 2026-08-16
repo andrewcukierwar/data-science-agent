@@ -558,6 +558,65 @@ def test_runner_preserves_candidate_when_lead_turns_stop_remediation(
     assert "V-TURNS" in report_text
 
 
+def test_runner_preserves_candidate_when_critic_rereview_budget_is_exhausted(
+    tmp_path: Path,
+) -> None:
+    issue = ValidationIssue(
+        id="V-CRITIC-BUDGET",
+        severity=ValidationSeverity.HIGH,
+        message="The candidate needs another bounded review.",
+    )
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def fake_lead(
+        context,
+        objective,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        return LeadResult(
+            objective="Explain profitability.",
+            answer="The initial candidate is retained with explicit caveats.",
+        )
+
+    async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
+        # The first review is valid and consumes the only specialist
+        # invocation. The runner must not turn the blocked re-review into a
+        # failed run.
+        context.consume_budget("specialist_invocations")
+        context.consume_budget("critic_loops")
+        return ValidationResult(
+            status=ValidationStatus.REVISE,
+            issues=[issue],
+            summary="The first review found an unresolved issue.",
+        )
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        budget=RunBudget(max_specialist_invocations=2, max_critic_loops=2),
+        auditor_runner=fake_auditor,
+        lead_runner=fake_lead,
+        critic_runner=fake_critic,
+    )
+    result = asyncio.run(runner.run("run-critic-budget", "Explain profitability."))
+
+    assert result.status is RunStatus.BLOCKED
+    assert result.constrained is True
+    assert result.error is None
+    assert result.validation_result is not None
+    assert result.validation_result.status is ValidationStatus.REVISE
+    assert result.ledger is not None
+    assert result.ledger.state.error is None
+    assert result.ledger.budget.specialist_invocations == 2
+    report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
+    assert "Critic re-review stopped by budget exhaustion" in report_text
+    assert "V-CRITIC-BUDGET" in report_text
+
+
 def test_runner_observes_lead_turn_limit_failure_and_marks_run_failed(
     tmp_path: Path,
 ) -> None:

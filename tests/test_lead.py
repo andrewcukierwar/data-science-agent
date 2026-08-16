@@ -52,7 +52,8 @@ def test_lead_uses_manager_tools_and_has_no_computational_tools() -> None:
 
     assert agent.name == "Lead Data Scientist"
     assert agent.model == "test-model"
-    assert agent.output_type is LeadResult
+    assert agent.output_type.output_type is LeadResult
+    assert agent.output_type.is_strict_json_schema() is False
     assert agent.handoffs == []
     assert names[:6] == [
         "inspect_workspace",
@@ -429,7 +430,7 @@ def test_run_lead_consumes_typed_output_and_persists_findings(
     )
 
     async def fake_run(agent, prompt, *, context, **kwargs):  # noqa: ANN001
-        assert agent.output_type is LeadResult
+        assert agent.output_type.output_type is LeadResult
         assert prompt == "Explain the change."
         assert context.agent_role is AgentRole.LEAD
         assert kwargs["max_turns"] == 16
