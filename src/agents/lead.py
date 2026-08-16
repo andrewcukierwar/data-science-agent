@@ -71,7 +71,18 @@ Required investigation behavior:
    evidence-bearing structured results, not as unverified prose.
 4. Record material open questions and decide explicitly whether each needs follow-up
    analysis. Do not pursue a follow-up merely because it is interesting; explain its
-   decision value and available evidence.
+   decision value and available evidence. When the objective asks why a major
+   driver changed, distinguish attribution from root cause and continue into
+   available upstream drivers until the mechanism is supported or the data
+   genuinely cannot discriminate. If acquisition efficiency or CAC materially
+   deteriorates, decompose spend, traffic/sessions, conversion, acquired
+   customers, CAC, and downstream LTV. When traffic, session, or funnel data
+   exists, investigate traffic volume and conversion before concluding why
+   customer acquisition changed. Examine downstream customer value as an
+   alternative explanation for acquisition quality deterioration. Do not
+   finalize while an open question is both necessary to answer the primary
+   objective and answerable with available data/tools within the remaining
+   budget.
 5. Construct concise candidate findings and recommendations. Every quantitative
    finding and every recommendation must include evidence_refs pointing to an
    executed tool event, artifact, or saved query/script path. Distinguish observed

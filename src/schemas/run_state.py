@@ -3,37 +3,18 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Annotated, Any
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from schemas.audit import AuditResult
 from schemas.findings import Finding, SpecialistResult
+from schemas.hypotheses import (  # noqa: F401
+    Hypothesis,
+    HypothesisStatus,
+    NonEmptyString,
+)
 from schemas.validation import ValidationIssue, ValidationResult
-
-NonEmptyString = Annotated[str, Field(min_length=1)]
-
-
-class HypothesisStatus(StrEnum):
-    """Current disposition of an investigation hypothesis."""
-
-    OPEN = "open"
-    SUPPORTED = "supported"
-    REJECTED = "rejected"
-    INCONCLUSIVE = "inconclusive"
-
-
-class Hypothesis(BaseModel):
-    """An explicit, testable explanation tracked by the Lead."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: NonEmptyString
-    statement: NonEmptyString
-    status: HypothesisStatus = HypothesisStatus.OPEN
-    evidence_refs: list[NonEmptyString] = Field(default_factory=list)
-    rationale: NonEmptyString | None = None
-    parent_id: NonEmptyString | None = None
 
 
 class SpecialistResultRecord(BaseModel):

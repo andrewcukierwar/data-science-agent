@@ -160,6 +160,7 @@ def _prepare_context(
 
     return context, CriticCandidate(
         objective=objective,
+        answer="The candidate analysis explains the observed change.",
         findings=[finding],
         recommendations=recommendations,
         artifacts=[evidence_path],

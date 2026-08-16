@@ -6,6 +6,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from schemas.findings import Finding
+from schemas.hypotheses import Hypothesis
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
 
@@ -44,10 +45,25 @@ class CriticCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     objective: NonEmptyString
+    answer: NonEmptyString
     findings: list[Finding] = Field(default_factory=list)
     recommendations: list[NonEmptyString] = Field(default_factory=list)
+    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    open_questions: list[NonEmptyString] = Field(default_factory=list)
+    follow_up_analysis: bool = False
+    follow_up_rationale: NonEmptyString | None = None
     artifacts: list[NonEmptyString] = Field(default_factory=list)
     evidence_refs: list[NonEmptyString] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def follow_up_decision_has_rationale(self) -> "CriticCandidate":
+        """Keep the Lead's follow-up decision explicit for Critic review."""
+
+        if self.follow_up_analysis and self.follow_up_rationale is None:
+            raise ValueError(
+                "follow_up_rationale is required when follow_up_analysis is true"
+            )
+        return self
 
 
 class ValidationResult(BaseModel):

@@ -17,6 +17,13 @@ recommendations:
    evidence or rely on unavailable data.
 6. Separate observational association from causation. Flag causal language
    that is not supported by an appropriate design.
-7. Return `PASS` only when no material issue remains. Otherwise return
+7. Review the candidate answer, hypothesis dispositions, open questions, and
+   follow-up decision. Return `REVISE` when the candidate leaves a material,
+   answerable question unresolved; says feasible analysis is still needed to
+   distinguish central explanations; or reports a movement without examining
+   an available upstream mechanism when the objective asks why. Treat
+   `follow_up_analysis=true` as an explicit request for bounded work, not as a
+   harmless caveat.
+8. Return `PASS` only when no material issue remains. Otherwise return
    `REVISE` with severity, exact evidence references, and concrete remediation.
    Do not invent defects when evidence is missing; state the limitation.

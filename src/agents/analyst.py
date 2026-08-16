@@ -35,13 +35,20 @@ _FALLBACK_SKILL_GUIDANCE = """Business analytics procedure:
 4. For acquisition, calculate CAC as spend divided by newly acquired customers;
    calculate LTV over an explicit post-acquisition window and reconcile both to
    the same cohort and channel.
-5. Use `inspect_relations` and the registered SQL relation names rather than
+5. When CAC or acquired-customer volume is materially changing and the required
+   data exists, decompose the acquisition path:
+   marketing spend -> traffic/sessions -> conversion -> acquired customers
+   -> CAC -> downstream LTV/value. Compare the relevant periods and segments,
+   reconcile the funnel to customer and order cohorts, and return evidence for
+   each material step. Do not run this full decomposition when acquisition
+   economics are not material to the assigned objective.
+6. Use `inspect_relations` and the registered SQL relation names rather than
    filesystem paths. Use SQL for bounded aggregation and Python for
    reproducible analysis or charts. Python runs separately from the SQL
    connection; read raw approved files under `/workspace/inputs` with pandas
    or PyArrow when needed. Save useful analysis artifacts and cite their
    executed evidence.
-6. Separate observations from explanations. Do not claim causality from a
+7. Separate observations from explanations. Do not claim causality from a
    period comparison alone; state limitations and propose a follow-up test.
 """
 

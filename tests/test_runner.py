@@ -160,6 +160,197 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
     ).read_text(encoding="utf-8")
 
 
+def test_runner_must_complete_objective_critical_lead_follow_up_before_critic(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    lead_calls = 0
+    critic_calls = 0
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        events.append("audit")
+        return _audit()
+
+    async def fake_lead(
+        context,
+        objective,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        events.append("lead")
+        assert context.agent_role is AgentRole.LEAD
+        if lead_calls == 1:
+            return LeadResult(
+                objective="Explain the KPI change.",
+                answer=(
+                    "A major component changed, but the upstream mechanism is "
+                    "unresolved."
+                ),
+                open_questions=["Compare the available upstream funnel periods."],
+                follow_up_analysis=True,
+                follow_up_rationale=(
+                    "The upstream funnel is material to answering why and is available."
+                ),
+            )
+        assert "FOLLOW_UP_CYCLE: 1/2" in objective
+        assert "Compare the available upstream funnel periods." in objective
+        assert "PREVIOUS_LEAD_RESULT_JSON" in objective
+        return LeadResult(
+            objective="Explain the KPI change.",
+            answer=(
+                "The upstream mechanism was investigated with the available evidence."
+            ),
+            open_questions=[],
+            follow_up_analysis=False,
+        )
+
+    async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
+        nonlocal critic_calls
+        critic_calls += 1
+        events.append("critic")
+        assert candidate.follow_up_analysis is False
+        assert candidate.follow_up_rationale is None
+        assert "upstream mechanism" in candidate.answer
+        context.consume_budget("specialist_invocations")
+        context.consume_budget("critic_loops")
+        return ValidationResult(
+            status=ValidationStatus.PASS,
+            summary="The required follow-up was completed before validation.",
+        )
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        auditor_runner=fake_auditor,
+        lead_runner=fake_lead,
+        critic_runner=fake_critic,
+    )
+    result = asyncio.run(runner.run("run-follow-up", "Explain the KPI change."))
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.constrained is False
+    assert events == ["audit", "lead", "lead", "critic"]
+    assert lead_calls == 2
+    assert critic_calls == 1
+    assert result.lead_result is not None
+    assert result.lead_result.follow_up_analysis is False
+
+
+def test_runner_allows_nonblocking_open_question_to_finalize(
+    tmp_path: Path,
+) -> None:
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def fake_lead(
+        context,
+        objective,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        return LeadResult(
+            objective="Explain the KPI change.",
+            answer=(
+                "The available evidence supports the answer for the stated objective."
+            ),
+            open_questions=["A lower-priority experiment may be useful later."],
+            follow_up_analysis=False,
+        )
+
+    async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
+        assert candidate.open_questions == [
+            "A lower-priority experiment may be useful later."
+        ]
+        assert candidate.follow_up_analysis is False
+        context.consume_budget("specialist_invocations")
+        context.consume_budget("critic_loops")
+        return ValidationResult(
+            status=ValidationStatus.PASS,
+            summary="The non-blocking question does not prevent completion.",
+        )
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        auditor_runner=fake_auditor,
+        lead_runner=fake_lead,
+        critic_runner=fake_critic,
+    )
+    result = asyncio.run(
+        runner.run("run-nonblocking-question", "Explain the KPI change.")
+    )
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.constrained is False
+    assert result.ledger is not None
+    assert result.ledger.state.open_questions == [
+        "A lower-priority experiment may be useful later."
+    ]
+
+
+def test_runner_constrains_when_lead_follow_up_reaches_continuation_limit(
+    tmp_path: Path,
+) -> None:
+    lead_calls = 0
+    issue = ValidationIssue(
+        id="V-FOLLOW-UP",
+        severity=ValidationSeverity.HIGH,
+        message="The candidate still needs its material follow-up.",
+    )
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def persistent_follow_up_lead(
+        context,
+        objective,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        return LeadResult(
+            objective="Explain the KPI change.",
+            answer="The candidate remains incomplete.",
+            open_questions=["The material upstream mechanism is unresolved."],
+            follow_up_analysis=True,
+            follow_up_rationale=(
+                "The unresolved mechanism is answerable with available data."
+            ),
+        )
+
+    async def bounded_critic(context, candidate, *, agent):  # noqa: ANN001
+        assert candidate.follow_up_analysis is True
+        context.consume_budget("specialist_invocations")
+        context.consume_budget("critic_loops")
+        return ValidationResult(status=ValidationStatus.REVISE, issues=[issue])
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        budget=RunBudget(max_critic_loops=1),
+        auditor_runner=fake_auditor,
+        lead_runner=persistent_follow_up_lead,
+        critic_runner=bounded_critic,
+    )
+    result = asyncio.run(runner.run("run-follow-up-limit", "Explain the KPI change."))
+
+    assert lead_calls == 3  # initial result plus the two allowed continuations
+    assert result.status is RunStatus.BLOCKED
+    assert result.constrained is True
+    assert result.validation_result is not None
+    assert result.lead_result is not None
+    assert result.lead_result.follow_up_analysis is True
+    report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
+    assert "maximum of 1 critic loop" in report_text
+    assert "V-FOLLOW-UP" in report_text
+
+
 def test_runner_returns_constrained_report_after_critic_limit(
     tmp_path: Path,
 ) -> None:

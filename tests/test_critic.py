@@ -83,6 +83,7 @@ def test_critic_instructions_cover_validation_procedure() -> None:
 def test_critic_candidate_round_trips_candidate_evidence() -> None:
     candidate = CriticCandidate(
         objective="Validate Meta CAC.",
+        answer="Meta CAC increased and should be investigated.",
         findings=[
             Finding(
                 id="F001",
@@ -94,6 +95,7 @@ def test_critic_candidate_round_trips_candidate_evidence() -> None:
             )
         ],
         recommendations=["Keep the current acquisition budget pending review."],
+        open_questions=["Would a longer cohort window change the LTV conclusion?"],
         artifacts=["working/queries/Q001.sql"],
         evidence_refs=["tool-Q001"],
     )
@@ -128,7 +130,10 @@ def test_critic_persists_validation_result_and_issues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    candidate = CriticCandidate(objective="Validate a candidate finding.")
+    candidate = CriticCandidate(
+        objective="Validate a candidate finding.",
+        answer="The candidate is ready for validation.",
+    )
     issue = ValidationIssue(
         id="V001",
         severity=ValidationSeverity.HIGH,
@@ -164,3 +169,52 @@ def test_critic_persists_validation_result_and_issues(
     assert reloaded.validation_issues == [issue]
     assert reloaded.budget.specialist_invocations == 1
     assert reloaded.budget.critic_loops == 1
+
+
+def test_critic_deterministically_revises_candidate_with_unresolved_follow_up(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    candidate = CriticCandidate(
+        objective="Explain why the KPI changed.",
+        answer="The largest channel declined, but the cause remains unknown.",
+        open_questions=["Determine whether the upstream funnel changed."],
+        follow_up_analysis=True,
+        follow_up_rationale=(
+            "The upstream funnel is material to answering why and is available."
+        ),
+    )
+
+    result = asyncio.run(run_critic(context, candidate))
+
+    assert result.status is ValidationStatus.REVISE
+    assert result.issues[0].category == "task_completeness"
+    assert "upstream funnel" in result.issues[0].message
+    assert context.ledger.validation_results == [result]
+
+
+def test_critic_allows_complete_candidate_to_reach_model_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context(tmp_path)
+    candidate = CriticCandidate(
+        objective="Explain why the KPI changed.",
+        answer="The available evidence supports the observed mechanism.",
+        open_questions=["A lower-priority experiment could be useful later."],
+        follow_up_analysis=False,
+    )
+    validation = ValidationResult(
+        status=ValidationStatus.PASS,
+        summary="The candidate is complete and supported.",
+    )
+
+    async def fake_run(agent, prompt, *, context, **kwargs):  # noqa: ANN001
+        assert "open_questions" in prompt
+        return SimpleNamespace(final_output=validation)
+
+    monkeypatch.setattr(Runner, "run", fake_run)
+
+    returned = asyncio.run(run_critic(context, candidate))
+
+    assert returned.status is ValidationStatus.PASS

@@ -9,7 +9,13 @@ from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.budgets import BudgetResource
 from orchestration.ledger import AnalysisLedger
-from schemas.validation import CriticCandidate, ValidationResult
+from schemas.validation import (
+    CriticCandidate,
+    ValidationIssue,
+    ValidationResult,
+    ValidationSeverity,
+    ValidationStatus,
+)
 
 CRITIC_OBJECTIVE = (
     "Validate the candidate analysis and recommendations against their evidence."
@@ -19,9 +25,53 @@ _FALLBACK_SKILL_GUIDANCE = """Validation procedure:
 
 1. Reproduce material numbers from the referenced query or script.
 2. Check definitions, denominators, joins, artifacts, and causal language.
-3. Return PASS only when the candidate is supported; otherwise return REVISE
-   with severity, evidence, and a concrete remediation.
+3. Check whether the candidate answered the objective, resolved material
+   follow-up questions, and investigated available upstream mechanisms.
+4. Return PASS only when the candidate is supported and complete; otherwise
+   return REVISE with severity, evidence, and a concrete remediation.
 """
+
+
+def candidate_completeness_validation(
+    candidate: CriticCandidate,
+) -> ValidationResult | None:
+    """Apply deterministic completeness gates before model-based review.
+
+    ``follow_up_analysis`` is an explicit Lead contract, rather than merely a
+    caveat for the final prose.  The runner normally resolves it before
+    invoking the Critic.  This guard also protects direct Critic callers and
+    bounded runs that reach Critic after continuation capacity is exhausted.
+    """
+
+    if not candidate.follow_up_analysis:
+        return None
+
+    question = (
+        candidate.follow_up_rationale
+        or (candidate.open_questions[0] if candidate.open_questions else None)
+        or "The candidate requests additional analysis."
+    )
+    issue = ValidationIssue(
+        id="V-COMPLETENESS-FOLLOW-UP",
+        severity=ValidationSeverity.HIGH,
+        category="task_completeness",
+        message=(
+            "The candidate explicitly leaves objective-critical follow-up "
+            f"analysis unresolved: {question}"
+        ),
+        evidence_refs=candidate.evidence_refs,
+        recommendation=(
+            "Complete the bounded follow-up with the appropriate specialist, "
+            "or set follow_up_analysis=false only after documenting why the "
+            "question is unanswerable or immaterial."
+        ),
+    )
+    return ValidationResult(
+        status=ValidationStatus.REVISE,
+        issues=[issue],
+        checked_finding_ids=[finding.id for finding in candidate.findings],
+        summary="The candidate is not complete for the stated objective.",
+    )
 
 
 def _skill_guidance() -> str:
@@ -69,6 +119,17 @@ Required review procedure:
 - Judge whether each recommendation is supported by the available evidence and
   is proportional to the uncertainty. Identify important alternative
   explanations when the evidence does not discriminate between them.
+- Check task completeness, not just evidence correctness. Review the candidate
+  answer, hypothesis dispositions, open questions, and follow-up decision.
+  Return REVISE when the candidate itself identifies an unresolved question that
+  is material to the objective and answerable with the available data/tools,
+  when it says a feasible analysis is still needed to distinguish central
+  explanations, or when it reports a metric movement but stops before examining
+  an available upstream mechanism even though the objective asks why.
+- Treat follow_up_analysis=true as an explicit request for more work, not as a
+  harmless caveat. It may pass only when the unresolved question is genuinely
+  unanswerable or immaterial to the objective; otherwise require the Lead to
+  complete the bounded follow-up.
 - Return PASS when no material issue remains. Return REVISE with one or more
   severity-based ValidationIssue objects when remediation is required. Each
   issue should include exact evidence_refs and a concrete recommendation when
@@ -122,7 +183,8 @@ def _candidate_prompt(candidate: CriticCandidate) -> str:
     return (
         "Validate this candidate analysis. The listed evidence references are "
         "workspace-relative paths, tool-event IDs, or registered artifact IDs. "
-        "Use the approved tools to inspect or reproduce them.\n\n"
+        "Use the approved tools to inspect or reproduce them. Check the "
+        "candidate completeness fields as well as its evidence.\n\n"
         "CANDIDATE_ANALYSIS_JSON:\n"
         f"{candidate.model_dump_json(indent=2)}"
     )
@@ -175,6 +237,14 @@ async def run_critic(
         BudgetResource.CRITIC_LOOPS,
     )
 
+    completeness = candidate_completeness_validation(candidate)
+    if completeness is not None:
+        return persist_validation_result(
+            completeness,
+            context.ledger,
+            allow_issue_updates=True,
+        )
+
     selected_agent = agent or build_critic_agent(context.run_config)
     result = await Runner.run(
         selected_agent,
@@ -201,6 +271,7 @@ __all__ = [
     "CRITIC_INSTRUCTIONS",
     "CRITIC_OBJECTIVE",
     "CriticPersistenceError",
+    "candidate_completeness_validation",
     "VALIDATOR_INSTRUCTIONS",
     "VALIDATOR_OBJECTIVE",
     "build_critic_agent",

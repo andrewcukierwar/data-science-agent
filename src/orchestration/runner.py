@@ -43,6 +43,7 @@ from tools.workspace import Workspace, WorkspaceManager
 AuditorRunner = Callable[..., Awaitable[AuditResult]]
 LeadRunner = Callable[..., Awaitable[LeadResult]]
 CriticRunner = Callable[..., Awaitable[ValidationResult]]
+MAX_LEAD_FOLLOW_UP_CYCLES = 2
 
 
 @dataclass(slots=True)
@@ -178,21 +179,93 @@ class AnalysisRunner:
                 ledger,
                 AgentRole.LEAD,
             )
-            active_agent = (lead_agent.name, AgentRole.LEAD, objective)
-            active_agent_recorded = False
-            lead_result = await self.lead_runner(
-                lead_context,
-                objective,
-                business_context=business_context,
-                audit=audit,
-                agent=lead_agent,
-            )
-            lead_context.assert_base_role(AgentRole.LEAD)
-            if not isinstance(lead_result, LeadResult):
-                lead_result = LeadResult.model_validate(lead_result)
-            self._record_agent_success(ledger, active_agent, LeadResult)
-            active_agent_recorded = True
-            lead_result = persist_lead_result(lead_result, lead_context)
+            lead_follow_up_cycles = 0
+
+            async def run_lead_candidate(
+                lead_objective: str,
+            ) -> tuple[LeadResult, str | None]:
+                """Run Lead and exhaust its bounded objective-critical follow-up."""
+
+                nonlocal active_agent
+                nonlocal active_agent_recorded
+                nonlocal lead_follow_up_cycles
+
+                active_agent = (lead_agent.name, AgentRole.LEAD, lead_objective)
+                active_agent_recorded = False
+                candidate = await self.lead_runner(
+                    lead_context,
+                    lead_objective,
+                    business_context=business_context,
+                    audit=audit,
+                    agent=lead_agent,
+                )
+                lead_context.assert_base_role(AgentRole.LEAD)
+                if not isinstance(candidate, LeadResult):
+                    candidate = LeadResult.model_validate(candidate)
+                self._record_agent_success(ledger, active_agent, LeadResult)
+                active_agent_recorded = True
+                candidate = persist_lead_result(candidate, lead_context)
+
+                while candidate.follow_up_analysis:
+                    if lead_follow_up_cycles >= MAX_LEAD_FOLLOW_UP_CYCLES:
+                        return (
+                            candidate,
+                            "Lead requested additional objective-critical "
+                            "analysis after the configured continuation limit.",
+                        )
+
+                    lead_follow_up_cycles += 1
+                    continuation_prompt = self._follow_up_prompt(
+                        objective,
+                        candidate,
+                        ledger,
+                        cycle=lead_follow_up_cycles,
+                    )
+                    active_agent = (
+                        lead_agent.name,
+                        AgentRole.LEAD,
+                        continuation_prompt,
+                    )
+                    active_agent_recorded = False
+                    try:
+                        continued = await self.lead_runner(
+                            lead_context,
+                            continuation_prompt,
+                            business_context=business_context,
+                            audit=audit,
+                            agent=lead_agent,
+                        )
+                        lead_context.assert_base_role(AgentRole.LEAD)
+                        if not isinstance(continued, LeadResult):
+                            continued = LeadResult.model_validate(continued)
+                        self._record_agent_success(
+                            ledger,
+                            active_agent,
+                            LeadResult,
+                        )
+                        active_agent_recorded = True
+                        candidate = persist_lead_result(continued, lead_context)
+                    except Exception as error:
+                        reason = self._follow_up_failure_reason(error)
+                        if active_agent is not None and not active_agent_recorded:
+                            agent_name, role, agent_objective = active_agent
+                            ledger.record_agent_event(
+                                agent_name=agent_name,
+                                agent_role=role.value,
+                                status=AgentEventStatus.FAILED,
+                                model=self.model,
+                                objective=agent_objective,
+                                error=reason,
+                            )
+                            active_agent_recorded = True
+                        return candidate, reason
+
+                return candidate, None
+
+            lead_result, follow_up_constraint = await run_lead_candidate(objective)
+            if follow_up_constraint is not None:
+                constrained = True
+                constraint_reason = follow_up_constraint
 
             critic_context, critic_agent = self._agent_context(
                 run_workspace,
@@ -257,27 +330,15 @@ class AnalysisRunner:
                     lead_result,
                     validation_result,
                 )
-                active_agent = (lead_agent.name, AgentRole.LEAD, remediation_prompt)
-                active_agent_recorded = False
                 try:
-                    remediated_lead_result = await self.lead_runner(
-                        lead_context,
-                        remediation_prompt,
-                        business_context=business_context,
-                        audit=audit,
-                        agent=lead_agent,
-                    )
-                    lead_context.assert_base_role(AgentRole.LEAD)
-                    if not isinstance(remediated_lead_result, LeadResult):
-                        remediated_lead_result = LeadResult.model_validate(
-                            remediated_lead_result
-                        )
-                    self._record_agent_success(ledger, active_agent, LeadResult)
-                    active_agent_recorded = True
-                    lead_result = persist_lead_result(
+                    (
                         remediated_lead_result,
-                        lead_context,
-                    )
+                        follow_up_constraint,
+                    ) = await run_lead_candidate(remediation_prompt)
+                    lead_result = remediated_lead_result
+                    if follow_up_constraint is not None:
+                        constrained = True
+                        constraint_reason = follow_up_constraint
                 except Exception as error:
                     # A usable candidate and Critic result already exist. Keep
                     # them and produce a constrained report when bounded
@@ -388,6 +449,16 @@ class AnalysisRunner:
         if isinstance(error, MaxTurnsExceeded):
             return f"Remediation stopped by the Lead turn limit: {error}"
         return f"Remediation stopped by a bounded execution failure: {error}"
+
+    @staticmethod
+    def _follow_up_failure_reason(error: Exception) -> str:
+        """Describe why an objective-critical Lead continuation stopped."""
+
+        if isinstance(error, BudgetExhaustedError):
+            return f"Lead follow-up stopped by budget exhaustion: {error}"
+        if isinstance(error, MaxTurnsExceeded):
+            return f"Lead follow-up stopped by the Lead turn limit: {error}"
+        return f"Lead follow-up stopped by a bounded execution failure: {error}"
 
     @staticmethod
     def _ensure_budget_increment(
@@ -516,10 +587,46 @@ class AnalysisRunner:
             evidence_refs.extend(hypothesis.evidence_refs)
         return CriticCandidate(
             objective=objective,
+            answer=result.answer,
             findings=result.findings,
             recommendations=recommendations,
+            hypotheses=result.hypotheses,
+            open_questions=result.open_questions,
+            follow_up_analysis=result.follow_up_analysis,
+            follow_up_rationale=result.follow_up_rationale,
             artifacts=result.artifacts,
             evidence_refs=list(dict.fromkeys(evidence_refs)),
+        )
+
+    @staticmethod
+    def _follow_up_prompt(
+        objective: str,
+        result: LeadResult,
+        ledger: AnalysisLedger,
+        *,
+        cycle: int,
+    ) -> str:
+        """Build a bounded continuation request for material open questions."""
+
+        questions = list(
+            dict.fromkeys([*result.open_questions, *ledger.state.open_questions])
+        )
+        return (
+            "Continue the investigation now before finalizing the candidate. You "
+            "previously marked follow_up_analysis=true because a material question "
+            "remains. Delegate the bounded analysis to the appropriate specialist "
+            "using the available data and tools, update hypotheses and evidence, "
+            "and return a complete replacement LeadResult. Do not merely restate "
+            "that more work would be useful. If the question is not answerable "
+            "from the available data, explain that limitation and set "
+            "follow_up_analysis=false; otherwise complete the analysis within "
+            "this bounded continuation.\n\n"
+            f"FOLLOW_UP_CYCLE: {cycle}/{MAX_LEAD_FOLLOW_UP_CYCLES}\n"
+            f"ORIGINAL_OBJECTIVE:\n{objective}\n\n"
+            "UNRESOLVED_QUESTIONS_JSON:\n"
+            f"{questions!r}\n\n"
+            "PREVIOUS_LEAD_RESULT_JSON:\n"
+            f"{result.model_dump_json(indent=2)}"
         )
 
     @staticmethod
@@ -639,7 +746,12 @@ class AnalysisRunner:
         if validation is None:
             lines.append("- Critic validation was not completed.")
         else:
-            lines.append(f"- Status: **{validation.status.value}**")
+            if constrained:
+                lines.append(
+                    "- Status: **constrained; candidate is not finally validated**"
+                )
+            else:
+                lines.append(f"- Status: **{validation.status.value}**")
             if validation.summary:
                 lines.append(f"- Summary: {validation.summary}")
             if validation.issues:
