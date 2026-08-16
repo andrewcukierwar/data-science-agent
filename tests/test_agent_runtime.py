@@ -495,6 +495,46 @@ def test_nested_roles_are_task_local_and_restore_the_parent_after_failure(
     assert context.agent_role is AgentRole.LEAD
 
 
+def test_nested_sdk_tool_context_binds_the_public_agent_role(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path, AgentRole.LEAD)
+
+    async def invoke_as(agent_name: str):
+        wrapper = ToolContext(
+            context,
+            tool_name=run_sql.name,
+            tool_call_id=f"call-{agent_name}",
+            tool_arguments=json.dumps({"sql": "SELECT 1", "query_id": agent_name}),
+            agent=build_agent(
+                agent_name,
+                AgentRole(agent_name.lower()),
+                model="test-model",
+            )
+            if agent_name in {"Analyst", "Statistician"}
+            else None,
+        )
+        result = await run_sql.on_invoke_tool(
+            wrapper,
+            json.dumps({"sql": "SELECT 1", "query_id": agent_name}),
+        )
+        return ToolResponse.model_validate_json(result.text)
+
+    async def run_both():
+        return await asyncio.gather(
+            invoke_as("Analyst"),
+            invoke_as("Statistician"),
+        )
+
+    analyst_result, statistician_result = asyncio.run(run_both())
+
+    assert analyst_result.success is True
+    assert statistician_result.success is False
+    assert statistician_result.error is not None
+    assert statistician_result.error.code == "permission_denied"
+    context.assert_base_role(AgentRole.LEAD)
+
+
 @pytest.mark.parametrize(
     ("resource", "limit_field", "usage_field"),
     [

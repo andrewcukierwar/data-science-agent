@@ -234,6 +234,11 @@ class AgentRunContext:
         init=False,
         repr=False,
     )
+    _tool_role: ContextVar[AgentRole | None] = field(
+        default_factory=lambda: ContextVar("agent_tool_role", default=None),
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """Reject cross-run dependencies that could break isolation."""
@@ -255,7 +260,32 @@ class AgentRunContext:
         """Role controlling this context's available tools."""
 
         stack = self._role_stack.get()
-        return stack[-1] if stack else self.run_config.agent_role
+        if stack:
+            return stack[-1]
+        return self._tool_role.get() or self.run_config.agent_role
+
+    def bind_tool_agent(self, agent: object | None) -> None:
+        """Bind a tool invocation task to the SDK agent executing it.
+
+        The Agents SDK invokes function tools in child tasks. Their context
+        variables inherit the parent task before nested-agent hooks run, so the
+        hook's role scope alone cannot identify the nested agent there. The SDK
+        supplies the active public agent on ``ToolContext``; binding its stable
+        application role keeps permissions correct without shared mutable role
+        state.
+        """
+
+        name = getattr(agent, "name", None)
+        role_by_name = {
+            "Lead Data Scientist": AgentRole.LEAD,
+            "Data Auditor": AgentRole.DATA_AUDITOR,
+            "Analyst": AgentRole.ANALYST,
+            "Statistician": AgentRole.STATISTICIAN,
+            "Critic": AgentRole.CRITIC,
+        }
+        role = role_by_name.get(name)
+        if role is not None:
+            self._tool_role.set(role)
 
     def enter_nested_role(self, role: AgentRole | str) -> None:
         """Activate a specialist permission boundary for a nested agent tool."""

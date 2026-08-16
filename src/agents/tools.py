@@ -89,7 +89,9 @@ class EvidenceInspection(BaseModel):
 def _context(wrapper: RunContextWrapper[AgentRunContext]) -> AgentRunContext:
     """Extract the application context from an SDK wrapper."""
 
-    return wrapper.context
+    context = wrapper.context
+    context.bind_tool_agent(getattr(wrapper, "agent", None))
+    return context
 
 
 def _sdk_response(response: ToolResponse) -> ToolOutputText:

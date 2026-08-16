@@ -95,7 +95,9 @@ def _sdk_response(response: ToolResponse) -> ToolOutputText:
 
 
 def _context(wrapper: RunContextWrapper[AgentRunContext]) -> AgentRunContext:
-    return wrapper.context
+    context = wrapper.context
+    context.bind_tool_agent(getattr(wrapper, "agent", None))
+    return context
 
 
 @function_tool
