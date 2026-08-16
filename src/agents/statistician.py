@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Final
 
 from agents import Agent, Runner
+from agents.evidence import (
+    canonicalize_evidence_refs,
+    executed_references,
+    finding_reference_aliases,
+)
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
@@ -133,13 +138,7 @@ create_statistician_agent = build_statistician_agent
 
 
 def _executed_references(ledger: AnalysisLedger) -> set[str]:
-    references = {event.id for event in ledger.tool_events}
-    references.update(
-        reference for event in ledger.tool_events for reference in event.artifact_refs
-    )
-    references.update(artifact.id for artifact in ledger.artifacts)
-    references.update(artifact.path for artifact in ledger.artifacts)
-    return references
+    return executed_references(ledger)
 
 
 def validate_statistician_result(
@@ -149,6 +148,24 @@ def validate_statistician_result(
     """Require every quantitative finding to cite executed evidence."""
 
     executed_refs = _executed_references(ledger)
+    aliases = finding_reference_aliases(ledger)
+    result = result.model_copy(
+        update={
+            "findings": [
+                finding.model_copy(
+                    update={
+                        "evidence_refs": canonicalize_evidence_refs(
+                            finding.evidence_refs,
+                            executed_refs=executed_refs,
+                            aliases=aliases,
+                        )
+                        or finding.evidence_refs
+                    }
+                )
+                for finding in result.findings
+            ]
+        }
+    )
     invalid_findings = [
         finding.id
         for finding in result.findings
@@ -186,7 +203,31 @@ def _persist_artifacts(
     for path in result.artifacts:
         if artifact_manager.ledger.get_artifact(path) is not None:
             continue
-        if any(artifact.path == path for artifact in artifact_manager.ledger.artifacts):
+        existing = next(
+            (
+                artifact
+                for artifact in artifact_manager.ledger.artifacts
+                if artifact.path == path
+            ),
+            None,
+        )
+        if existing is not None:
+            if path not in executed_refs:
+                raise StatisticianArtifactError(
+                    f"statistical artifact was not returned by an executed tool: {path}"
+                )
+            try:
+                artifact_manager.register(
+                    path,
+                    artifact_id=existing.id,
+                    kind=_artifact_kind(path),
+                    description="Statistician analysis artifact",
+                    overwrite=True,
+                )
+            except (OSError, ValueError) as exc:
+                raise StatisticianArtifactError(
+                    f"statistical artifact could not be refreshed: {path}: {exc}"
+                ) from exc
             continue
         if path not in executed_refs:
             raise StatisticianArtifactError(
@@ -220,22 +261,9 @@ def persist_statistician_result(
         context.ledger,
         context.artifact_manager,
     )
-    validate_statistician_result(canonical_result, context.ledger)
+    canonical_result = validate_statistician_result(canonical_result, context.ledger)
     for finding in canonical_result.findings:
-        existing = next(
-            (
-                current
-                for current in context.ledger.findings
-                if current.id == finding.id
-            ),
-            None,
-        )
-        if existing is None:
-            context.ledger.add_finding(finding)
-        elif existing != finding:
-            raise StatisticianEvidenceError(
-                f"finding id already exists with different content: {finding.id}"
-            )
+        context.ledger.upsert_finding(finding)
     return canonical_result
 
 

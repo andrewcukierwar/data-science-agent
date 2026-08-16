@@ -25,7 +25,7 @@ from agents.runtime import (
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
 from schemas.audit import AuditResult
-from schemas.findings import SpecialistResult, canonicalize_specialist_result
+from schemas.findings import Finding, SpecialistResult, canonicalize_specialist_result
 from schemas.lead import LeadResult, SpecialistTask
 from schemas.run_state import Hypothesis
 
@@ -79,6 +79,10 @@ Required investigation behavior:
    evidence or scenario ground truth. For comparable period changes, use a stable
    metric identifier, set value_unit to relative_change_fraction, and report the
    relative change as a decimal fraction (0.10 means +10%).
+   Specialist finding IDs such as analyst:F1 or statistician:H1 are intermediate
+   labels, not executed evidence references. Copy the exact evidence_refs from the
+   specialist finding when citing its result; do not use a local finding ID as a
+   substitute for its query, script, artifact, or tool-event reference.
 6. Return only a valid LeadResult. The answer is a candidate answer for the later
    validation/orchestration layer; do not implement or simulate the Critic feedback
    loop here.
@@ -390,21 +394,146 @@ create_lead_agent = build_lead_agent
 
 def _executed_references(ledger: AnalysisLedger) -> set[str]:
     references = {event.id for event in ledger.tool_events}
-    references.update(
-        reference for event in ledger.tool_events for reference in event.artifact_refs
-    )
+    for event in ledger.tool_events:
+        references.update(event.artifact_refs)
+        references.update(
+            value
+            for key in (
+                "query_id",
+                "query_path",
+                "script_id",
+                "script_path",
+            )
+            if isinstance(value := event.arguments.get(key), str)
+        )
+        if event.output is not None:
+            generated_refs = event.output.get("generated_evidence_refs", [])
+            if isinstance(generated_refs, list):
+                references.update(
+                    value for value in generated_refs if isinstance(value, str)
+                )
     references.update(artifact.id for artifact in ledger.artifacts)
     references.update(artifact.path for artifact in ledger.artifacts)
     return references
+
+
+def _finding_reference_aliases(ledger: AnalysisLedger) -> dict[str, list[Finding]]:
+    """Index persisted specialist findings by canonical and unique local IDs."""
+
+    aliases: dict[str, list[Finding]] = {}
+    for finding in ledger.findings:
+        aliases.setdefault(finding.id, []).append(finding)
+        if ":" in finding.id:
+            local_id = finding.id.rsplit(":", maxsplit=1)[1]
+            aliases.setdefault(local_id, []).append(finding)
+    return aliases
+
+
+def _resolve_evidence_reference(
+    reference: str,
+    *,
+    executed_refs: set[str],
+    aliases: dict[str, list[Finding]],
+    resolving: set[str] | None = None,
+) -> list[str]:
+    """Resolve a direct or uniquely aliased specialist finding reference."""
+
+    if reference in executed_refs:
+        return [reference]
+    candidates = aliases.get(reference, [])
+    if len(candidates) != 1:
+        return []
+    resolving = set() if resolving is None else resolving
+    if reference in resolving:
+        return []
+    resolving.add(reference)
+    resolved: list[str] = []
+    for nested_reference in candidates[0].evidence_refs:
+        resolved.extend(
+            _resolve_evidence_reference(
+                nested_reference,
+                executed_refs=executed_refs,
+                aliases=aliases,
+                resolving=resolving,
+            )
+        )
+    return list(dict.fromkeys(resolved))
+
+
+def _canonicalize_evidence_refs(
+    references: list[str],
+    *,
+    executed_refs: set[str],
+    aliases: dict[str, list[Finding]],
+) -> list[str]:
+    """Replace intermediate finding IDs with exact executed evidence refs."""
+
+    resolved: list[str] = []
+    for reference in references:
+        resolved.extend(
+            _resolve_evidence_reference(
+                reference,
+                executed_refs=executed_refs,
+                aliases=aliases,
+            )
+        )
+    return list(dict.fromkeys(resolved))
 
 
 def validate_lead_result(
     result: LeadResult,
     ledger: AnalysisLedger,
 ) -> LeadResult:
-    """Require findings, recommendations, and resolved hypotheses to cite evidence."""
+    """Require Lead outputs to cite exact executed evidence references."""
 
     executed_refs = _executed_references(ledger)
+    aliases = _finding_reference_aliases(ledger)
+    canonical_findings = [
+        finding.model_copy(
+            update={
+                "evidence_refs": _canonicalize_evidence_refs(
+                    finding.evidence_refs,
+                    executed_refs=executed_refs,
+                    aliases=aliases,
+                )
+                or finding.evidence_refs
+            }
+        )
+        for finding in result.findings
+    ]
+    canonical_recommendations = [
+        recommendation.model_copy(
+            update={
+                "evidence_refs": _canonicalize_evidence_refs(
+                    recommendation.evidence_refs,
+                    executed_refs=executed_refs,
+                    aliases=aliases,
+                )
+                or recommendation.evidence_refs
+            }
+        )
+        for recommendation in result.recommendations
+    ]
+    canonical_hypotheses = [
+        hypothesis.model_copy(
+            update={
+                "evidence_refs": _canonicalize_evidence_refs(
+                    hypothesis.evidence_refs,
+                    executed_refs=executed_refs,
+                    aliases=aliases,
+                )
+                or hypothesis.evidence_refs
+            }
+        )
+        for hypothesis in result.hypotheses
+    ]
+    result = result.model_copy(
+        update={
+            "findings": canonical_findings,
+            "recommendations": canonical_recommendations,
+            "hypotheses": canonical_hypotheses,
+        }
+    )
     invalid_findings = [
         finding.id
         for finding in result.findings
@@ -441,22 +570,13 @@ def validate_lead_result(
 def _persist_result(result: LeadResult, context: AgentRunContext) -> LeadResult:
     """Persist observable Lead conclusions without starting the later critic loop."""
 
-    validate_lead_result(result, context.ledger)
+    result = validate_lead_result(result, context.ledger)
     for hypothesis in result.hypotheses:
         context.ledger.upsert_hypothesis(hypothesis)
     for question in result.open_questions:
         context.ledger.add_open_question(question)
     for finding in result.findings:
-        existing = next(
-            (item for item in context.ledger.findings if item.id == finding.id),
-            None,
-        )
-        if existing is None:
-            context.ledger.add_finding(finding)
-        elif existing != finding:
-            raise LeadEvidenceError(
-                f"finding id already exists with different content: {finding.id}"
-            )
+        context.ledger.upsert_finding(finding)
     return result
 
 

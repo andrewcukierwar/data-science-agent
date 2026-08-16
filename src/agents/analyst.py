@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Final
 
 from agents import Agent, Runner
+from agents.evidence import (
+    canonicalize_evidence_refs,
+    executed_references,
+    finding_reference_aliases,
+)
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
@@ -143,12 +148,25 @@ def validate_analyst_result(
 ) -> SpecialistResult:
     """Ensure material findings reference executed tool or artifact evidence."""
 
-    executed_refs = {event.id for event in ledger.tool_events}
-    executed_refs.update(
-        reference for event in ledger.tool_events for reference in event.artifact_refs
+    executed_refs = executed_references(ledger)
+    aliases = finding_reference_aliases(ledger)
+    result = result.model_copy(
+        update={
+            "findings": [
+                finding.model_copy(
+                    update={
+                        "evidence_refs": canonicalize_evidence_refs(
+                            finding.evidence_refs,
+                            executed_refs=executed_refs,
+                            aliases=aliases,
+                        )
+                        or finding.evidence_refs
+                    }
+                )
+                for finding in result.findings
+            ]
+        }
     )
-    executed_refs.update(artifact.id for artifact in ledger.artifacts)
-    executed_refs.update(artifact.path for artifact in ledger.artifacts)
 
     invalid_refs: list[str] = []
     for finding in result.findings:
@@ -178,7 +196,33 @@ def _persist_analyst_artifacts(
     for path in result.artifacts:
         if artifact_manager.ledger.get_artifact(path) is not None:
             continue
-        if any(artifact.path == path for artifact in artifact_manager.ledger.artifacts):
+        existing = next(
+            (
+                artifact
+                for artifact in artifact_manager.ledger.artifacts
+                if artifact.path == path
+            ),
+            None,
+        )
+        if existing is not None:
+            if path not in executed_refs:
+                raise AnalystArtifactError(
+                    f"analyst artifact was not returned by an executed tool: {path}"
+                )
+            try:
+                artifact_manager.register(
+                    path,
+                    artifact_id=existing.id,
+                    kind=_ARTIFACT_SUFFIXES.get(
+                        Path(path).suffix.lower(), ArtifactKind.OTHER
+                    ),
+                    description="Analyst analysis artifact",
+                    overwrite=True,
+                )
+            except (OSError, ValueError) as exc:
+                raise AnalystArtifactError(
+                    f"analyst artifact could not be refreshed: {path}: {exc}"
+                ) from exc
             continue
         if path not in executed_refs:
             raise AnalystArtifactError(
@@ -214,16 +258,9 @@ def persist_analyst_result(
         context.ledger,
         context.artifact_manager,
     )
-    validate_analyst_result(canonical_result, context.ledger)
+    canonical_result = validate_analyst_result(canonical_result, context.ledger)
     for finding in canonical_result.findings:
-        existing = next(
-            (item for item in context.ledger.findings if item.id == finding.id),
-            None,
-        )
-        if existing is None:
-            context.ledger.add_finding(finding)
-        elif existing != finding:
-            raise AnalystEvidenceError(f"analyst finding id conflicts: {finding.id}")
+        context.ledger.upsert_finding(finding)
     return canonical_result
 
 

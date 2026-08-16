@@ -49,14 +49,9 @@ def test_build_command_uses_only_constrained_workspace_mounts(
     assert command[command.index("--cpus") + 1] == "0.5"
     assert command[command.index("--pids-limit") + 1] == "64"
     assert "MPLCONFIGDIR=/tmp/matplotlib" in command
-    assert (
-        f"type=bind,src={workspace.inputs.resolve()},dst=/workspace/inputs,readonly"
-        in command
-    )
-    assert (
-        f"type=bind,src={workspace.docs.resolve()},dst=/workspace/docs,readonly"
-        in command
-    )
+    root_path = workspace.root.resolve()
+    readonly_root_mount = f"type=bind,src={root_path}/,dst=/workspace,readonly"
+    assert readonly_root_mount in command
     assert (
         f"type=bind,src={workspace.working.resolve()},dst=/workspace/working" in command
     )
@@ -137,6 +132,35 @@ def test_execute_captures_success_without_running_host_python(
     assert result.duration_seconds >= 0
     assert captured["command"][0:2] == ["docker", "run"]
     assert captured["kwargs"]["timeout"] == 30.0
+
+
+def test_execute_retries_transient_bind_mount_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace(tmp_path)
+    _script(workspace)
+    executor = DockerSandboxExecutor(workspace)
+    attempts = 0
+
+    def fake_run(command, **kwargs):  # noqa: ANN001
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return SimpleNamespace(
+                returncode=125,
+                stdout="",
+                stderr="invalid mount config for type bind",
+            )
+        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = executor.execute("working/scripts/analysis.py")
+
+    assert result.success is True
+    assert result.stdout == "ok\n"
+    assert attempts == 2
 
 
 def test_execute_captures_timeout_and_attempts_container_cleanup(

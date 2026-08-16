@@ -192,7 +192,7 @@ class AnalysisRunner:
                 lead_result = LeadResult.model_validate(lead_result)
             self._record_agent_success(ledger, active_agent, LeadResult)
             active_agent_recorded = True
-            persist_lead_result(lead_result, lead_context)
+            lead_result = persist_lead_result(lead_result, lead_context)
 
             critic_context, critic_agent = self._agent_context(
                 run_workspace,
@@ -274,8 +274,10 @@ class AnalysisRunner:
                         )
                     self._record_agent_success(ledger, active_agent, LeadResult)
                     active_agent_recorded = True
-                    persist_lead_result(remediated_lead_result, lead_context)
-                    lead_result = remediated_lead_result
+                    lead_result = persist_lead_result(
+                        remediated_lead_result,
+                        lead_context,
+                    )
                 except Exception as error:
                     # A usable candidate and Critic result already exist. Keep
                     # them and produce a constrained report when bounded

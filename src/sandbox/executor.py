@@ -83,13 +83,7 @@ class DockerSandboxExecutor:
         started = time.monotonic()
 
         try:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout,
-            )
+            completed = self._run_with_mount_retry(command, timeout)
         except subprocess.TimeoutExpired as exc:
             self._remove_container(container_name)
             return SandboxExecutionResult(
@@ -128,6 +122,30 @@ class DockerSandboxExecutor:
             or f"Docker execution exited with code {completed.returncode}",
         )
 
+    def _run_with_mount_retry(
+        self,
+        command: list[str],
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        """Retry transient Docker Desktop bind propagation failures."""
+
+        for attempt in range(3):
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+            )
+            if (
+                completed.returncode != 125
+                or "invalid mount config" not in (completed.stderr or "").lower()
+                or attempt == 2
+            ):
+                return completed
+            time.sleep(0.1)
+        raise RuntimeError("unreachable Docker retry state")
+
     def build_command(
         self,
         script_path: str | Path,
@@ -165,9 +183,11 @@ class DockerSandboxExecutor:
             "--user",
             self.container_user,
             "--mount",
-            self._mount(self.workspace.inputs, "/workspace/inputs", "readonly"),
-            "--mount",
-            self._mount(self.workspace.docs, "/workspace/docs", "readonly"),
+            # Mount the run root read-only, then overlay only the two approved
+            # writable directories. This preserves /workspace/inputs and
+            # /workspace/docs while avoiding Docker Desktop's rejection of
+            # direct read-only binds for nested host directories.
+            self._mount(self.workspace.root, "/workspace", "readonly"),
             "--mount",
             self._mount(self.workspace.working, "/workspace/working", "rw"),
             "--mount",
@@ -298,9 +318,14 @@ class DockerSandboxExecutor:
     def _mount(directory: Path, destination: str, mode: str) -> str:
         # Docker's long-form --mount syntax accepts `readonly` as a flag, but
         # does not accept the short `rw` flag. Read-write is the default when
-        # no mode is supplied, so omit it for writable workspace mounts.
+        # no mode is supplied, so omit it for writable workspace mounts. The
+        # trailing source slash keeps Docker Desktop compatible with host
+        # directories that are themselves read-only.
         suffix = ",readonly" if mode == "readonly" else ""
-        return f"type=bind,src={directory.resolve()},dst={destination}{suffix}"
+        source = str(directory.resolve())
+        if mode == "readonly":
+            source += "/"
+        return f"type=bind,src={source},dst={destination}{suffix}"
 
     @staticmethod
     def _default_container_user() -> str:

@@ -130,6 +130,31 @@ def test_duplicate_ids_are_rejected_without_overwriting_disk_state(
     assert len(AnalysisLedger(ledger.state_path).findings) == 1
 
 
+def test_upsert_finding_replaces_latest_version_without_duplicate_history(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    original = Finding(
+        id="analyst:F1",
+        statement="Conversion declined.",
+        evidence_refs=["tool-1"],
+        confidence=ConfidenceLevel.MEDIUM,
+    )
+    revised = original.model_copy(
+        update={
+            "statement": "Meta conversion declined materially.",
+            "confidence": ConfidenceLevel.HIGH,
+        }
+    )
+
+    assert ledger.upsert_finding(original) == original
+    assert ledger.upsert_finding(original) == original
+    assert ledger.upsert_finding(revised) == revised
+
+    reloaded = AnalysisLedger(ledger.state_path)
+    assert reloaded.findings == [revised]
+
+
 def test_budget_usage_increments_preserve_limits(tmp_path: Path) -> None:
     ledger = _ledger(tmp_path)
     ledger.update_budget(RunBudget(max_sql_executions=5))

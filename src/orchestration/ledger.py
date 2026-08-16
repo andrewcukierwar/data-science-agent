@@ -384,6 +384,18 @@ class AnalysisLedger(ToolEventLedger):
         self.save()
         return finding
 
+    def upsert_finding(self, finding: Finding) -> Finding:
+        """Create a finding or replace its latest persisted version."""
+
+        for index, current in enumerate(self.findings):
+            if current.id == finding.id:
+                if current == finding:
+                    return current
+                self._state.findings[index] = finding
+                self.save()
+                return finding
+        return self.add_finding(finding)
+
     def add_artifact(self, artifact: Artifact) -> Artifact:
         """Append an artifact reference with a unique identifier."""
 

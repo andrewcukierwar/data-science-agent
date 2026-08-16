@@ -17,7 +17,7 @@ from agents import (
     run_statistician,
     validate_statistician_result,
 )
-from agents.statistician import Runner
+from agents.statistician import Runner, persist_statistician_result
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.run_state import ToolEvent, ToolEventStatus
@@ -149,3 +149,54 @@ def test_statistician_persists_findings_and_artifacts(
     assert reloaded.artifacts[0].path == "working/scripts/stats.py"
     assert reloaded.artifacts[0].kind.value == "script"
     assert context.ledger.budget.specialist_invocations == 1
+
+
+def test_statistician_refreshes_reused_artifact_path_provenance(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    script = context.workspace.working / "scripts" / "stats.py"
+    script.write_text("print('first')\n", encoding="utf-8")
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-stats-first",
+            tool_name="run_python",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=timestamp,
+            completed_at=timestamp,
+            artifact_refs=["working/scripts/stats.py"],
+        )
+    )
+    first = persist_statistician_result(_result(), context)
+    first_provenance = context.ledger.artifacts[0].model_copy()
+
+    script.write_text("print('second')\n", encoding="utf-8")
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-stats-second",
+            tool_name="run_python",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=timestamp,
+            completed_at=timestamp,
+            artifact_refs=["working/scripts/stats.py"],
+        )
+    )
+    second = persist_statistician_result(
+        first.model_copy(
+            update={
+                "findings": [
+                    first.findings[0].model_copy(
+                        update={"statement": "The revised estimate is significant."}
+                    )
+                ]
+            }
+        ),
+        context,
+    )
+
+    assert len(context.ledger.artifacts) == 1
+    assert context.ledger.artifacts[0].id == first_provenance.id
+    assert context.ledger.artifacts[0].sha256 != first_provenance.sha256
+    assert context.ledger.artifacts[0].size_bytes == script.stat().st_size
+    assert context.ledger.findings == second.findings

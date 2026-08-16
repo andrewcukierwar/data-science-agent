@@ -19,6 +19,7 @@ from agents import (
     ToolOutputText,
     ToolResponse,
     build_lead_agent,
+    persist_lead_result,
     record_hypothesis,
     record_open_question,
     run_lead,
@@ -287,6 +288,92 @@ def test_lead_result_requires_evidence_for_recommendations_and_resolved_hypothes
     )
     with pytest.raises(LeadEvidenceError, match="recommendation:R002"):
         validate_lead_result(invalid, context.ledger)
+
+
+def test_lead_resolves_specialist_finding_ids_to_executed_evidence(
+    tmp_path: Path,
+) -> None:
+    context = _evidence_context(tmp_path)
+    specialist_finding = Finding(
+        id="analyst:F1",
+        statement="The specialist measured the period change.",
+        metric="period_change",
+        value=0.3,
+        evidence_refs=["working/queries/Q001.sql"],
+        confidence=ConfidenceLevel.HIGH,
+    )
+    context.ledger.add_finding(specialist_finding)
+    result = LeadResult(
+        objective="Explain the change.",
+        answer="The candidate is supported by the specialist query.",
+        findings=[
+            Finding(
+                id="F1",
+                statement="The measured period change is material.",
+                metric="period_change",
+                value=0.3,
+                evidence_refs=["F1"],
+                confidence=ConfidenceLevel.HIGH,
+            )
+        ],
+        recommendations=[
+            LeadRecommendation(
+                id="R1",
+                statement="Investigate the measured change.",
+                evidence_refs=["analyst:F1"],
+                confidence=ConfidenceLevel.MEDIUM,
+            )
+        ],
+        hypotheses=[
+            Hypothesis(
+                id="H1",
+                statement="The measured change explains the objective.",
+                status=HypothesisStatus.SUPPORTED,
+                evidence_refs=["analyst:F1"],
+            )
+        ],
+    )
+
+    persisted = persist_lead_result(result, context)
+
+    assert persisted.findings[0].evidence_refs == ["working/queries/Q001.sql"]
+    assert persisted.recommendations[0].evidence_refs == ["working/queries/Q001.sql"]
+    assert persisted.hypotheses[0].evidence_refs == ["working/queries/Q001.sql"]
+    assert context.ledger.findings[-1].id == "F1"
+
+
+def test_lead_rejects_ambiguous_unscoped_specialist_finding_reference(
+    tmp_path: Path,
+) -> None:
+    context = _evidence_context(tmp_path)
+    for namespace in ("analyst", "statistician"):
+        context.ledger.add_finding(
+            Finding(
+                id=f"{namespace}:F1",
+                statement=f"{namespace} measured the change.",
+                metric="period_change",
+                value=0.3,
+                evidence_refs=["working/queries/Q001.sql"],
+                confidence=ConfidenceLevel.MEDIUM,
+            )
+        )
+    result = LeadResult(
+        objective="Explain the change.",
+        answer="The candidate is ambiguous.",
+        findings=[
+            Finding(
+                id="F1",
+                statement="An ambiguous specialist claim.",
+                metric="period_change",
+                value=0.3,
+                evidence_refs=["F1"],
+                confidence=ConfidenceLevel.LOW,
+            )
+        ],
+    )
+
+    with pytest.raises(LeadEvidenceError, match="finding:F1"):
+        validate_lead_result(result, context.ledger)
 
 
 def test_run_lead_consumes_typed_output_and_persists_findings(
