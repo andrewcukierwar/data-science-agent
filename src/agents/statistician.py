@@ -6,7 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
-from agents import Agent, Runner
+from agents import Agent, AgentOutputSchema, Runner
 from agents.evidence import (
     canonicalize_evidence_refs,
     executed_references,
@@ -149,7 +149,13 @@ def build_statistician_agent(
         model=selected_model,
         tools=tools_for_role(AgentRole.STATISTICIAN),
         handoffs=[],
-        output_type=SpecialistResult,
+        # Metric dimensions are intentionally open-ended (for example segment,
+        # cohort, or treatment). The SDK's strict schema mode rejects dynamic
+        # JSON object keys, so keep Pydantic validation in non-strict mode.
+        output_type=AgentOutputSchema(
+            SpecialistResult,
+            strict_json_schema=False,
+        ),
     )
 
 

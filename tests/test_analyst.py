@@ -31,7 +31,8 @@ def test_analyst_is_structured_and_cannot_delegate() -> None:
 
     assert agent.name == "Analyst"
     assert agent.model == "test-model"
-    assert agent.output_type is SpecialistResult
+    assert agent.output_type.output_type is SpecialistResult
+    assert agent.output_type.is_strict_json_schema() is False
     assert agent.handoffs == []
     assert [tool.name for tool in agent.tools] == [
         "inspect_workspace",
@@ -146,6 +147,8 @@ def test_analyst_runner_uses_the_role_specific_turn_limit(
     )
 
     async def fake_run(agent, objective, *, context, **kwargs):  # noqa: ANN001
+        assert agent.output_type.output_type is SpecialistResult
+        assert agent.output_type.is_strict_json_schema() is False
         assert kwargs["max_turns"] == 10
         return SimpleNamespace(
             final_output=_quantitative_result("working/queries/Q001.sql")
