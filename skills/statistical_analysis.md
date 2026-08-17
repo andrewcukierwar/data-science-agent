@@ -29,7 +29,9 @@ Use this procedure for evidence-backed inferential analysis:
    claim causality without randomization or a defensible causal design.
 10. Return material period or segment comparisons as generic `MetricComparison`
     objects as well as prose Findings. Preserve exact metric identity,
-    dimensions, periods, comparison type, unit, value, and evidence refs.
+    dimensions, periods, comparison type, unit, value, evidence refs, and
+    `definition_context` when population, date basis, observation window,
+    numerator, denominator, or definition reference distinguishes the estimand.
 11. Use Python for reproducible calculations, save scripts and useful outputs in
    approved workspace directories, and cite executed evidence in findings.
 

@@ -37,6 +37,19 @@ class MetricObservation(BaseModel):
         return value
 
 
+class MetricDefinitionContext(BaseModel):
+    """Scope needed to identify the estimand behind a metric value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    population: NonEmptyString | None = None
+    date_basis: NonEmptyString | None = None
+    observation_window: NonEmptyString | None = None
+    numerator: NonEmptyString | None = None
+    denominator: NonEmptyString | None = None
+    definition_ref: NonEmptyString | None = None
+
+
 class MetricComparison(BaseModel):
     """A reproducible period/segment comparison supporting a conclusion."""
 
@@ -50,6 +63,7 @@ class MetricComparison(BaseModel):
     value: float
     unit: NonEmptyString
     evidence_refs: list[NonEmptyString] = Field(min_length=1)
+    definition_context: MetricDefinitionContext | None = None
 
     @field_validator("value")
     @classmethod
@@ -161,12 +175,37 @@ def normalize_metric_unit(
     return normalized
 
 
+def normalize_metric_definition_context(
+    context: MetricDefinitionContext | None,
+) -> MetricDefinitionContext | None:
+    """Normalize scope labels without changing their analytical meaning."""
+
+    if context is None:
+        return None
+    normalized = context.model_copy(
+        update={
+            field_name: (
+                value.strip() if isinstance(value, str) and value.strip() else None
+            )
+            for field_name, value in context.model_dump().items()
+        }
+    )
+    return (
+        normalized
+        if any(value is not None for value in normalized.model_dump().values())
+        else None
+    )
+
+
 def normalize_metric_comparison(
     comparison: MetricComparison,
 ) -> MetricComparison:
     """Return the canonical application-boundary form of a comparison."""
 
     dimensions = normalize_metric_dimensions(comparison.dimensions)
+    definition_context = normalize_metric_definition_context(
+        comparison.definition_context
+    )
     return comparison.model_copy(
         update={
             "metric_key": normalize_metric_key(comparison.metric_key, dimensions),
@@ -174,14 +213,15 @@ def normalize_metric_comparison(
             "baseline_period": normalize_metric_period(comparison.baseline_period),
             "comparison_period": normalize_metric_period(comparison.comparison_period),
             "unit": normalize_metric_unit(comparison.unit, comparison.comparison_type),
+            "definition_context": definition_context,
         }
     )
 
 
-def metric_comparison_identity(
+def metric_comparison_scope_identity(
     comparison: MetricComparison,
 ) -> tuple[object, ...]:
-    """Return the stable identity of a metric comparison, excluding its value."""
+    """Return identity without definition context for scope-mismatch checks."""
 
     comparison = normalize_metric_comparison(comparison)
     return (
@@ -197,6 +237,27 @@ def metric_comparison_identity(
         comparison.comparison_type.value,
         comparison.unit,
     )
+
+
+def metric_comparison_identity(
+    comparison: MetricComparison,
+) -> tuple[object, ...]:
+    """Return the stable identity of a metric comparison, excluding its value."""
+
+    comparison = normalize_metric_comparison(comparison)
+    context = comparison.definition_context
+    context_identity = (
+        tuple(
+            sorted(
+                (key, value.strip().lower())
+                for key, value in context.model_dump().items()
+                if value is not None
+            )
+        )
+        if context is not None
+        else None
+    )
+    return (*metric_comparison_scope_identity(comparison), context_identity)
 
 
 def deduplicate_metric_comparisons(
@@ -219,9 +280,12 @@ def deduplicate_metric_comparisons(
 __all__ = [
     "MetricComparison",
     "MetricComparisonType",
+    "MetricDefinitionContext",
     "MetricObservation",
     "deduplicate_metric_comparisons",
     "metric_comparison_identity",
+    "metric_comparison_scope_identity",
+    "normalize_metric_definition_context",
     "normalize_metric_comparison",
     "normalize_metric_dimensions",
     "normalize_metric_key",

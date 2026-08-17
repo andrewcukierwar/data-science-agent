@@ -6,6 +6,7 @@ from math import isclose
 from pathlib import Path
 
 from agents import Agent, Runner
+from agents.evidence import has_source_lineage
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.budgets import BudgetResource
@@ -13,6 +14,7 @@ from orchestration.ledger import AnalysisLedger
 from schemas.metrics import (
     MetricComparison,
     metric_comparison_identity,
+    metric_comparison_scope_identity,
     normalize_metric_comparison,
 )
 from schemas.validation import (
@@ -122,6 +124,51 @@ def candidate_completeness_validation(
                         "acquired customers, CAC, and downstream LTV/value. "
                         "Separate observed relationships from unsupported causal "
                         "explanations for upstream changes."
+                    ),
+                )
+            )
+
+        if candidate.structured_metrics_required:
+            missing_metrics = _acquisition_metric_comparisons_missing(candidate)
+            if missing_metrics:
+                issues.append(
+                    ValidationIssue(
+                        id="V-COMPLETENESS-STRUCTURED-METRICS",
+                        severity=ValidationSeverity.HIGH,
+                        category="structured_metric_completeness",
+                        message=(
+                            "The candidate relies on a material acquisition-efficiency "
+                            "decomposition but is missing structured comparisons for: "
+                            + ", ".join(missing_metrics)
+                            + "."
+                        ),
+                        recommendation=(
+                            "Reuse the exact structured comparisons returned by the "
+                            "specialist evidence for each material funnel component."
+                        ),
+                    )
+                )
+
+        if (
+            candidate.visualization_requested
+            and context is not None
+            and context.ledger.budget.charts_created < context.ledger.budget.max_charts
+            and not any(
+                artifact.kind.value == "chart" for artifact in context.ledger.artifacts
+            )
+        ):
+            issues.append(
+                ValidationIssue(
+                    id="V-COMPLETENESS-CHART",
+                    severity=ValidationSeverity.MEDIUM,
+                    category="chart_completeness",
+                    message=(
+                        "The candidate contains a material multi-component "
+                        "decomposition but no useful registered chart artifact."
+                    ),
+                    recommendation=(
+                        "Delegate one bounded chart creation task to the Analyst and "
+                        "carry the returned chart artifact reference forward."
                     ),
                 )
             )
@@ -262,6 +309,28 @@ def _acquisition_closure_missing(candidate: CriticCandidate) -> list[str]:
     ]
 
 
+def _acquisition_metric_comparisons_missing(
+    candidate: CriticCandidate,
+) -> list[str]:
+    """Return material acquisition metrics absent from structured output."""
+
+    keys = {
+        normalize_metric_comparison(item).metric_key
+        for item in candidate.metric_comparisons
+    }
+    required = {
+        "marketing_spend": "marketing spend",
+        "sessions": "sessions/traffic",
+        "conversion_rate": "conversion",
+        "acquired_customers": "acquired customers",
+        "cac": "CAC",
+        "ltv": "downstream LTV/value",
+    }
+    aliases = {"traffic": "sessions", "session_count": "sessions"}
+    normalized_keys = {aliases.get(key, key) for key in keys}
+    return [label for key, label in required.items() if key not in normalized_keys]
+
+
 def _workspace_has_cogs(context: AgentRunContext) -> bool:
     """Read only the approved orders schema without spending a SQL budget."""
 
@@ -366,6 +435,45 @@ def validate_structured_metric_comparisons(
         ]
         issue_id = f"V-METRIC-{index}"
         if not matching:
+            scope_matches = [
+                item
+                for item in evidence_comparisons
+                if metric_comparison_scope_identity(item)
+                == metric_comparison_scope_identity(comparison)
+            ]
+            if scope_matches:
+                candidate_context = (
+                    comparison.definition_context.model_dump(exclude_none=True)
+                    if comparison.definition_context is not None
+                    else None
+                )
+                evidence_contexts = [
+                    item.definition_context.model_dump(exclude_none=True)
+                    if item.definition_context is not None
+                    else None
+                    for item in scope_matches
+                ]
+                issues.append(
+                    ValidationIssue(
+                        id=issue_id,
+                        severity=ValidationSeverity.HIGH,
+                        category="metric_definition",
+                        message=(
+                            f"Structured metric '{comparison.metric_key}' has a "
+                            "definition-scope mismatch: the candidate and cited "
+                            f"evidence use different populations/date bases/windows "
+                            f"({candidate_context} "
+                            f"vs {evidence_contexts})."
+                        ),
+                        evidence_refs=comparison.evidence_refs,
+                        recommendation=(
+                            "Keep the documented population, date basis, observation "
+                            "window, numerator, and denominator fixed, or label a "
+                            "different estimand as a separate comparison."
+                        ),
+                    )
+                )
+                continue
             issues.append(
                 ValidationIssue(
                     id=issue_id,
@@ -414,6 +522,49 @@ def validate_structured_metric_comparisons(
     )
 
 
+def validate_candidate_evidence_provenance(
+    candidate: CriticCandidate,
+    ledger: AnalysisLedger,
+) -> ValidationResult | None:
+    """Reject material claims whose sole SQL evidence is hard-coded output."""
+
+    invalid: list[str] = []
+    for finding in candidate.findings:
+        if (
+            finding.metric is not None or finding.value is not None
+        ) and not has_source_lineage(ledger, finding.evidence_refs):
+            invalid.append(f"finding:{finding.id}")
+    invalid.extend(
+        f"metric_comparison:{comparison.metric_key}"
+        for comparison in candidate.metric_comparisons
+        if not has_source_lineage(ledger, comparison.evidence_refs)
+    )
+    if not invalid:
+        return None
+    return ValidationResult(
+        status=ValidationStatus.REVISE,
+        issues=[
+            ValidationIssue(
+                id="V-EVIDENCE-SOURCE-LINEAGE",
+                severity=ValidationSeverity.HIGH,
+                category="evidence_provenance",
+                message=(
+                    "Material quantitative claims rely solely on analysis that does "
+                    "not visibly derive from an approved input relation: "
+                    + ", ".join(invalid)
+                ),
+                recommendation=(
+                    "Re-run the calculation from approved input relations or a "
+                    "source-derived evidence artifact; do not use VALUES-only SQL "
+                    "containing previously computed results."
+                ),
+            )
+        ],
+        checked_finding_ids=[finding.id for finding in candidate.findings],
+        summary="Material evidence provenance is not source-derived.",
+    )
+
+
 def _skill_guidance() -> str:
     """Load repository critic guidance with a safe fallback."""
 
@@ -447,8 +598,12 @@ Required review procedure:
 - Check denominators, especially CAC/new-customer denominators, rates, cohort
   sizes, and contribution-profit components.
 - Validate each structured metric comparison's generic identity, periods, unit,
-  value, and exact evidence_refs; reproduce important comparisons from the
-  cited evidence rather than trusting labels or prose.
+  value, exact evidence_refs, and definition_context; treat population, date
+  basis, observation window, numerator, and denominator as part of the estimand.
+  A cohort-window comparison and a calendar-event comparison with the same
+  metric key are distinct scopes, not an unexplained numerical contradiction.
+  Reproduce important comparisons from the cited evidence rather than trusting
+  labels or prose.
 - Check joins for accidental row multiplication, duplicate keys, unresolved
   foreign keys, and mismatched grains.
 - For profitability questions, check that the candidate addressed net revenue,
@@ -459,6 +614,9 @@ Required review procedure:
 - Compare findings with the actual query/script outputs and registered artifact
   contents. Flag inconsistencies, contradictions, or artifacts that do not
   support the claim.
+- Reject a material quantitative claim whose only inspectable SQL evidence is a
+  hard-coded VALUES result that does not read an approved input relation. A
+  source-derived summary is acceptable only when its lineage is retained.
 - Flag unsupported causal language in observational comparisons. Association,
   timing, or correlation is not proof that a campaign, channel, or intervention
   caused an outcome.
@@ -596,6 +754,16 @@ async def run_critic(
     if metric_validation is not None:
         return persist_validation_result(
             metric_validation,
+            context.ledger,
+            allow_issue_updates=True,
+        )
+    provenance_validation = validate_candidate_evidence_provenance(
+        candidate,
+        context.ledger,
+    )
+    if provenance_validation is not None:
+        return persist_validation_result(
+            provenance_validation,
             context.ledger,
             allow_issue_updates=True,
         )

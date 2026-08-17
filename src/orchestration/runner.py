@@ -12,6 +12,7 @@ from agents import Agent, MaxTurnsExceeded
 from agents.auditor import build_data_auditor_agent, run_data_auditor
 from agents.critic import (
     build_critic_agent,
+    candidate_completeness_validation,
     persist_validation_result,
     run_critic,
 )
@@ -213,6 +214,8 @@ class AnalysisRunner:
                 lead_objective: str,
                 *,
                 allow_follow_up: bool = True,
+                prior_result: LeadResult | None = None,
+                allow_definition_change: bool = False,
             ) -> tuple[LeadResult, str | None]:
                 """Run Lead and optionally exhaust objective-critical follow-up."""
 
@@ -234,7 +237,12 @@ class AnalysisRunner:
                     candidate = LeadResult.model_validate(candidate)
                 self._record_agent_success(ledger, active_agent, LeadResult)
                 active_agent_recorded = True
-                candidate = persist_lead_result(candidate, lead_context)
+                candidate = persist_lead_result(
+                    candidate,
+                    lead_context,
+                    prior_result=prior_result,
+                    allow_definition_change=allow_definition_change,
+                )
 
                 if not allow_follow_up:
                     return candidate, None
@@ -277,7 +285,11 @@ class AnalysisRunner:
                             LeadResult,
                         )
                         active_agent_recorded = True
-                        candidate = persist_lead_result(continued, lead_context)
+                        candidate = persist_lead_result(
+                            continued,
+                            lead_context,
+                            prior_result=candidate,
+                        )
                     except Exception as error:
                         reason = self._follow_up_failure_reason(error)
                         if active_agent is not None and not active_agent_recorded:
@@ -300,6 +312,39 @@ class AnalysisRunner:
                 constrained = True
                 constraint_reason = follow_up_constraint
 
+            completion_validation = None
+            if follow_up_constraint is None:
+                completion_candidate = self._candidate(
+                    objective,
+                    lead_result,
+                    require_visualization=True,
+                )
+                completion_validation = candidate_completeness_validation(
+                    completion_candidate,
+                    context=lead_context,
+                )
+            if completion_validation is not None:
+                completion_prompt = self._completion_prompt(
+                    objective,
+                    lead_result,
+                    completion_validation,
+                )
+                try:
+                    lead_result, completion_constraint = await run_lead_candidate(
+                        completion_prompt,
+                        allow_follow_up=False,
+                        prior_result=lead_result,
+                    )
+                    if completion_constraint is not None:
+                        constrained = True
+                        constraint_reason = completion_constraint
+                except Exception as error:
+                    constrained = True
+                    constraint_reason = (
+                        "Lead completion pass could not finish: "
+                        f"{type(error).__name__}: {error}"
+                    )
+
             critic_context, critic_agent = self._agent_context(
                 run_workspace,
                 ledger,
@@ -311,7 +356,11 @@ class AnalysisRunner:
             )
             critic_context.check_budget("critic_loops")
             while True:
-                candidate = self._candidate(objective, lead_result)
+                candidate = self._candidate(
+                    objective,
+                    lead_result,
+                    require_visualization=True,
+                )
                 active_agent = (critic_agent.name, AgentRole.CRITIC, objective)
                 active_agent_recorded = False
                 try:
@@ -377,6 +426,7 @@ class AnalysisRunner:
                     objective,
                     lead_result,
                     validation_result,
+                    business_context=business_context,
                 )
                 try:
                     (
@@ -385,6 +435,12 @@ class AnalysisRunner:
                     ) = await run_lead_candidate(
                         remediation_prompt,
                         allow_follow_up=False,
+                        prior_result=lead_result,
+                        allow_definition_change=any(
+                            issue.category
+                            in {"metric_definition_incorrect", "definition_error"}
+                            for issue in validation_result.issues
+                        ),
                     )
                     lead_result = remediated_lead_result
                     if follow_up_constraint is not None:
@@ -644,7 +700,12 @@ class AnalysisRunner:
         )
 
     @staticmethod
-    def _candidate(objective: str, result: LeadResult) -> CriticCandidate:
+    def _candidate(
+        objective: str,
+        result: LeadResult,
+        *,
+        require_visualization: bool = False,
+    ) -> CriticCandidate:
         recommendations = [
             f"{item.id}: {item.statement} "
             f"[evidence_refs: {', '.join(item.evidence_refs)}]"
@@ -659,6 +720,13 @@ class AnalysisRunner:
             evidence_refs.extend(hypothesis.evidence_refs)
         for comparison in result.metric_comparisons:
             evidence_refs.extend(comparison.evidence_refs)
+        structured_metrics_required = bool(
+            result.metric_comparisons
+            or any(
+                finding.metric is not None or finding.value is not None
+                for finding in result.findings
+            )
+        )
         return CriticCandidate(
             objective=objective,
             answer=result.answer,
@@ -671,6 +739,8 @@ class AnalysisRunner:
             follow_up_rationale=result.follow_up_rationale,
             artifacts=result.artifacts,
             evidence_refs=list(dict.fromkeys(evidence_refs)),
+            structured_metrics_required=structured_metrics_required,
+            visualization_requested=require_visualization,
         )
 
     @staticmethod
@@ -709,16 +779,57 @@ class AnalysisRunner:
         objective: str,
         result: LeadResult,
         validation: ValidationResult,
+        *,
+        business_context: str | None = None,
     ) -> str:
+        metric_contexts = [
+            item.definition_context.model_dump(exclude_none=True)
+            if item.definition_context is not None
+            else None
+            for item in result.metric_comparisons
+        ]
         return (
             "Remediate the candidate analysis for the original objective. Review "
             "each Critic issue, delegate bounded follow-up analysis when it is "
             "materially useful, update hypotheses and evidence, and return a "
-            "complete replacement LeadResult. Do not merely describe a fix.\n\n"
+            "complete replacement LeadResult. Do not merely describe a fix. "
+            "Preserve every existing metric population, date basis, observation "
+            "window, numerator, denominator, and definition reference unless the "
+            "Critic explicitly identifies the metric definition as incorrect. If "
+            "you compute a different valid estimand, retain it as a distinct "
+            "comparison with its own definition_context. Reuse exact specialist "
+            "MetricComparison objects rather than reconstructing values from prose.\n\n"
             f"ORIGINAL_OBJECTIVE:\n{objective}\n\n"
+            "BUSINESS_CONTEXT:\n"
+            f"{business_context or 'Read the approved business definitions.'}\n\n"
+            "EXISTING_METRIC_DEFINITION_CONTEXTS_JSON:\n"
+            f"{metric_contexts!r}\n\n"
             "CURRENT_CANDIDATE_JSON:\n"
             f"{result.model_dump_json(indent=2)}\n\n"
             "CRITIC_VALIDATION_JSON:\n"
+            f"{validation.model_dump_json(indent=2)}"
+        )
+
+    @staticmethod
+    def _completion_prompt(
+        objective: str,
+        result: LeadResult,
+        validation: ValidationResult,
+    ) -> str:
+        """Request one bounded completion pass before initial Critic review."""
+
+        return (
+            "Complete the candidate before it is sent to the Critic. Address the "
+            "specific completeness issues below using bounded specialist tasks. "
+            "Carry forward the exact structured MetricComparison objects and their "
+            "definition_context; do not reconstruct values from prose. If a chart "
+            "is requested, ask the Analyst to create and save one useful chart, "
+            "then copy the exact returned artifact reference. Return a complete "
+            "replacement LeadResult with follow_up_analysis=false.\n\n"
+            f"ORIGINAL_OBJECTIVE:\n{objective}\n\n"
+            "CURRENT_CANDIDATE_JSON:\n"
+            f"{result.model_dump_json(indent=2)}\n\n"
+            "COMPLETENESS_ISSUES_JSON:\n"
             f"{validation.model_dump_json(indent=2)}"
         )
 

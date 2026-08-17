@@ -15,6 +15,7 @@ from agents import (
     ToolOutputText,
     function_tool,
 )
+from agents.evidence import has_source_lineage
 from agents.runtime import (
     DEFAULT_AGENT_TURN_LIMITS,
     AgentRole,
@@ -32,7 +33,9 @@ from schemas.metrics import (
     MetricComparison,
     deduplicate_metric_comparisons,
     metric_comparison_identity,
+    metric_comparison_scope_identity,
     normalize_metric_comparison,
+    normalize_metric_key,
 )
 from schemas.run_state import Hypothesis
 
@@ -108,7 +111,9 @@ Required investigation behavior:
    relative change as a decimal fraction (0.10 means +10%). Important quantitative
    period or segment comparisons supporting the answer should also be represented
    in LeadResult.metric_comparisons with generic metric keys, dimensions, periods,
-   comparison type, unit, value, and exact evidence_refs. Do not use evaluator,
+   comparison type, unit, value, exact evidence_refs, and definition_context when
+   population, date basis, observation window, numerator, denominator, or a
+   definition reference distinguishes the estimand. Do not use evaluator,
    scenario, or prompt-specific identifiers for those metric keys.
    State material non-drivers and data-quality limitations explicitly so the
    answer distinguishes the supported mechanism from plausible alternatives.
@@ -508,27 +513,110 @@ def _canonicalize_evidence_refs(
 def _reuse_specialist_metric_comparisons(
     comparisons: list[MetricComparison],
     ledger: AnalysisLedger,
+    findings: list[Finding] | None = None,
 ) -> list[MetricComparison]:
-    """Reuse exact specialist comparisons when Lead selects the same metric."""
+    """Reuse exact specialist comparisons selected by Lead evidence."""
 
     specialist_index: dict[tuple[object, ...], MetricComparison] = {}
+    specialist_scope_index: dict[tuple[object, ...], list[MetricComparison]] = {}
     for record in ledger.specialist_results:
         for comparison in record.result.metric_comparisons:
             comparison = normalize_metric_comparison(comparison)
             specialist_index[metric_comparison_identity(comparison)] = comparison
-    reused = [
-        specialist_index.get(
-            metric_comparison_identity(comparison),
-            normalize_metric_comparison(comparison),
+            specialist_scope_index.setdefault(
+                metric_comparison_scope_identity(comparison), []
+            ).append(comparison)
+    reused: list[MetricComparison] = []
+    for comparison in comparisons:
+        normalized = normalize_metric_comparison(comparison)
+        exact = specialist_index.get(metric_comparison_identity(normalized))
+        if exact is not None:
+            reused.append(exact)
+            continue
+        scoped = specialist_scope_index.get(
+            metric_comparison_scope_identity(normalized), []
         )
-        for comparison in comparisons
-    ]
+        reused.append(scoped[0] if len(scoped) == 1 else normalized)
+    for finding in findings or []:
+        if finding.metric is None:
+            continue
+        for record in ledger.specialist_results:
+            for comparison in record.result.metric_comparisons:
+                comparison = normalize_metric_comparison(comparison)
+                if normalize_metric_key(
+                    finding.metric, comparison.dimensions
+                ) == comparison.metric_key and set(finding.evidence_refs).intersection(
+                    comparison.evidence_refs
+                ):
+                    reused.append(comparison)
     return deduplicate_metric_comparisons(reused)
+
+
+def _preserve_metric_definitions(
+    comparisons: list[MetricComparison],
+    prior_result: LeadResult,
+) -> list[MetricComparison]:
+    """Keep prior estimands stable across a Lead remediation replacement."""
+
+    current = [normalize_metric_comparison(item) for item in comparisons]
+    prior = [
+        normalize_metric_comparison(item) for item in prior_result.metric_comparisons
+    ]
+    consumed: set[int] = set()
+    merged: list[MetricComparison] = []
+    for previous in prior:
+        exact_index = next(
+            (
+                index
+                for index, item in enumerate(current)
+                if index not in consumed
+                and metric_comparison_identity(item)
+                == metric_comparison_identity(previous)
+            ),
+            None,
+        )
+        if exact_index is not None:
+            consumed.add(exact_index)
+            merged.append(current[exact_index])
+            continue
+
+        same_metric = [
+            (index, item)
+            for index, item in enumerate(current)
+            if index not in consumed
+            and metric_comparison_scope_identity(item)
+            == metric_comparison_scope_identity(previous)
+        ]
+        if same_metric:
+            for index, item in same_metric:
+                consumed.add(index)
+                if (
+                    item.definition_context is None
+                    and previous.definition_context is not None
+                ):
+                    merged.append(
+                        item.model_copy(
+                            update={"definition_context": previous.definition_context}
+                        )
+                    )
+                else:
+                    # A different context is a distinct estimand. Preserve the
+                    # original comparison and retain the newly scoped result.
+                    merged.append(previous)
+                    merged.append(item)
+            continue
+        merged.append(previous)
+
+    merged.extend(item for index, item in enumerate(current) if index not in consumed)
+    return deduplicate_metric_comparisons(merged)
 
 
 def validate_lead_result(
     result: LeadResult,
     ledger: AnalysisLedger,
+    *,
+    prior_result: LeadResult | None = None,
+    allow_definition_change: bool = False,
 ) -> LeadResult:
     """Require Lead outputs to cite exact executed evidence references."""
 
@@ -589,7 +677,13 @@ def validate_lead_result(
     canonical_metric_comparisons = _reuse_specialist_metric_comparisons(
         canonical_metric_comparisons,
         ledger,
+        canonical_findings,
     )
+    if prior_result is not None and not allow_definition_change:
+        canonical_metric_comparisons = _preserve_metric_definitions(
+            canonical_metric_comparisons,
+            prior_result,
+        )
     result = result.model_copy(
         update={
             "findings": canonical_findings,
@@ -624,17 +718,30 @@ def validate_lead_result(
         for comparison in result.metric_comparisons
         if not any(reference in executed_refs for reference in comparison.evidence_refs)
     ]
+    invalid_lineage = [
+        finding.id
+        for finding in result.findings
+        if (finding.metric is not None or finding.value is not None)
+        and not has_source_lineage(ledger, finding.evidence_refs)
+    ]
+    invalid_lineage.extend(
+        f"metric_comparison:{comparison.metric_key}"
+        for comparison in result.metric_comparisons
+        if not has_source_lineage(ledger, comparison.evidence_refs)
+    )
     if (
         invalid_findings
         or invalid_recommendations
         or invalid_hypotheses
         or invalid_metric_comparisons
+        or invalid_lineage
     ):
         details = [
             *[f"finding:{item}" for item in invalid_findings],
             *[f"recommendation:{item}" for item in invalid_recommendations],
             *[f"hypothesis:{item}" for item in invalid_hypotheses],
             *[f"metric_comparison:{item}" for item in invalid_metric_comparisons],
+            *[f"source_lineage:{item}" for item in invalid_lineage],
         ]
         raise LeadEvidenceError(
             "lead outputs cite no executed evidence: " + ", ".join(details)
@@ -642,10 +749,21 @@ def validate_lead_result(
     return result
 
 
-def _persist_result(result: LeadResult, context: AgentRunContext) -> LeadResult:
+def _persist_result(
+    result: LeadResult,
+    context: AgentRunContext,
+    *,
+    prior_result: LeadResult | None = None,
+    allow_definition_change: bool = False,
+) -> LeadResult:
     """Persist observable Lead conclusions without starting the later critic loop."""
 
-    result = validate_lead_result(result, context.ledger)
+    result = validate_lead_result(
+        result,
+        context.ledger,
+        prior_result=prior_result,
+        allow_definition_change=allow_definition_change,
+    )
     for hypothesis in result.hypotheses:
         context.ledger.upsert_hypothesis(hypothesis)
     for question in result.open_questions:
@@ -657,10 +775,21 @@ def _persist_result(result: LeadResult, context: AgentRunContext) -> LeadResult:
     return result
 
 
-def persist_lead_result(result: LeadResult, context: AgentRunContext) -> LeadResult:
+def persist_lead_result(
+    result: LeadResult,
+    context: AgentRunContext,
+    *,
+    prior_result: LeadResult | None = None,
+    allow_definition_change: bool = False,
+) -> LeadResult:
     """Persist a Lead result for callers that manage the SDK lifecycle."""
 
-    return _persist_result(result, context)
+    return _persist_result(
+        result,
+        context,
+        prior_result=prior_result,
+        allow_definition_change=allow_definition_change,
+    )
 
 
 def _lead_input(

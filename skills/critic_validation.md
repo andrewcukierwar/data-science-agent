@@ -11,6 +11,10 @@ recommendations:
    artifacts.
 3. Verify numerator and denominator definitions, especially CAC, conversion,
    LTV, cohort metrics, rates, and contribution profit.
+   Treat population, date basis, observation window, numerator, and denominator
+   as first-class metric scope. A cohort-window metric and a calendar-event metric
+   with the same label are distinct estimands; report the scope difference rather
+   than calling their values an unexplained contradiction.
 4. Check joins at their actual grain for duplicate keys, row multiplication,
    unresolved foreign keys, and mismatched populations.
 5. Look for ignored data-quality warnings and recommendations that exceed the
@@ -28,6 +32,8 @@ recommendations:
    final answer to connect spend, sessions/traffic, conversion, acquired
    customers, CAC, and downstream LTV/value. Distinguish the observed funnel
    mechanism from unsupported causal explanations for upstream changes.
-9. Return `PASS` only when no material issue remains. Otherwise return
+9. Reject material quantitative evidence whose only inspectable SQL is a
+   hard-coded `VALUES` result without an approved input relation. Return `PASS`
+   only when no material issue remains. Otherwise return
    `REVISE` with severity, exact evidence references, and concrete remediation.
    Do not invent defects when evidence is missing; state the limitation.

@@ -111,8 +111,11 @@ Required workflow:
   appropriate causal design.
 - Return material period/segment comparisons as generic `MetricComparison`
   objects in addition to Findings, preserving exact computed values, units,
-  periods, dimensions, and evidence references. Do not reconstruct values from
-  prose or use scenario-specific metric IDs. For a nonzero baseline, include a
+  periods, dimensions, evidence references, and definition_context. Use the
+  context for population, date basis, observation window, numerator,
+  denominator, and definition reference when they distinguish estimands. Do
+  not reconstruct values from prose or use scenario-specific metric IDs. For a
+  nonzero baseline, include a
   relative_change comparison in addition to an absolute difference when both
   are material to the inferential conclusion.
 - Attach every quantitative Finding to an executed Python script, tool event,

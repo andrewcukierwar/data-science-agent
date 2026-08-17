@@ -55,7 +55,11 @@ an evidence reference or report a number that cannot be reproduced.
 
 Return material period or segment comparisons as generic `MetricComparison`
 objects as well as prose Findings. Preserve their metric identity, dimensions,
-periods, comparison type, unit, value, and exact evidence references.
+periods, comparison type, unit, value, exact evidence references, and a
+`definition_context` when the population, date basis, observation window,
+numerator, denominator, or definition reference matters. Treat a different
+estimand as a distinct comparison rather than silently replacing the documented
+metric.
 
 For a material acquisition-efficiency explanation, close the observable path in
 the same answer: marketing spend -> sessions/traffic -> conversion -> acquired

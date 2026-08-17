@@ -56,6 +56,8 @@ class CriticCandidate(BaseModel):
     follow_up_rationale: NonEmptyString | None = None
     artifacts: list[NonEmptyString] = Field(default_factory=list)
     evidence_refs: list[NonEmptyString] = Field(default_factory=list)
+    structured_metrics_required: bool = False
+    visualization_requested: bool = False
 
     @model_validator(mode="after")
     def follow_up_decision_has_rationale(self) -> "CriticCandidate":

@@ -139,8 +139,10 @@ Required workflow:
   `follow_up_questions` so the Lead can decide whether to investigate it.
 - Return material period/segment comparisons as generic `MetricComparison`
   objects in addition to Findings. Reuse the exact computed value, identity,
-  periods, unit, and evidence references; never reconstruct a comparison from
-  prose or use evaluator-specific metric IDs.
+  periods, unit, evidence references, and definition_context; use the context
+  for population, date basis, observation window, numerator, denominator, and
+  definition reference when they distinguish estimands. Never reconstruct a
+  comparison from prose or use evaluator-specific metric IDs.
 
 Return only a valid SpecialistResult. Keep findings concise and decision-useful.
 
