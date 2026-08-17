@@ -1,10 +1,16 @@
 """Regression tests for specialist output identity and evidence contracts."""
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from agents import AgentRole, AgentRunConfig, AgentRunContext
 from agents.analyst import persist_analyst_result, validate_analyst_result
+from agents.critic import Runner as CriticRunner
+from agents.critic import run_critic
 from agents.lead import persist_lead_result
 from agents.statistician import (
     persist_statistician_result,
@@ -15,6 +21,7 @@ from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.lead import LeadResult
 from schemas.metrics import MetricComparison
 from schemas.run_state import ToolEvent, ToolEventStatus
+from schemas.validation import CriticCandidate, ValidationResult, ValidationStatus
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService
@@ -169,6 +176,131 @@ def test_specialist_metric_comparisons_persist_and_lead_reuses_exact_value(
     assert lead_result.metric_comparisons == [comparison]
     assert reloaded.metric_comparisons == [comparison]
     assert reloaded.specialist_results[0].result.metric_comparisons == [comparison]
+
+
+def test_acquisition_comparisons_survive_specialists_lead_and_critic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(
+        "run-acquisition-comparisons"
+    )
+    evidence_path = workspace.working / "scripts" / "funnel.py"
+    evidence_path.write_text("print('funnel')\n", encoding="utf-8")
+    ledger = AnalysisLedger(workspace, objective="Explain acquisition efficiency.")
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    raw_comparisons = [
+        MetricComparison(
+            metric_key=metric_key,
+            dimensions={"acquisition_channel": "Meta"},
+            baseline_period="2025 Q1",
+            comparison_period="Q2 2025",
+            comparison_type="relative_change",
+            value=value,
+            unit="fraction",
+            evidence_refs=["working/scripts/funnel.py"],
+        )
+        for metric_key, value in (
+            ("meta_conversion", -0.18),
+            ("meta_new_customers", -0.18),
+            ("meta_spend", 0.07),
+            ("meta_customer_acquisition_cost", 0.30),
+            ("meta_90_day_ltv", 0.0),
+        )
+    ]
+    ledger.append_tool_event(
+        ToolEvent(
+            id="tool-funnel",
+            tool_name="run_python",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=timestamp,
+            completed_at=timestamp,
+            output={
+                "metric_comparisons": [
+                    comparison.model_dump(mode="json") for comparison in raw_comparisons
+                ]
+            },
+            artifact_refs=["working/scripts/funnel.py"],
+        )
+    )
+
+    def context(role: AgentRole) -> AgentRunContext:
+        return AgentRunContext(
+            workspace=workspace,
+            ledger=ledger,
+            sql_service=DuckDBExecutionService(workspace, ledger),
+            python_service=PythonExecutionService(workspace, ledger),
+            artifact_manager=ArtifactManager(workspace, ledger),
+            run_config=AgentRunConfig(
+                run_id="run-acquisition-comparisons",
+                agent_role=role,
+                model="test-model",
+            ),
+        )
+
+    analyst_result = persist_analyst_result(
+        SpecialistResult(
+            objective="Measure the acquisition funnel.",
+            metric_comparisons=raw_comparisons[:3],
+        ),
+        context(AgentRole.ANALYST),
+    )
+    statistician_result = persist_statistician_result(
+        SpecialistResult(
+            objective="Assess downstream customer value.",
+            metric_comparisons=raw_comparisons[3:],
+        ),
+        context(AgentRole.STATISTICIAN),
+    )
+    ledger.record_specialist_result(AgentRole.ANALYST.value, analyst_result)
+    ledger.record_specialist_result(
+        AgentRole.STATISTICIAN.value,
+        statistician_result,
+    )
+
+    lead_result = persist_lead_result(
+        LeadResult(
+            objective="Explain acquisition efficiency.",
+            answer="The funnel comparisons support the observed acquisition change.",
+            metric_comparisons=[
+                comparison.model_copy(update={"value": comparison.value + 0.5})
+                for comparison in raw_comparisons
+            ],
+        ),
+        context(AgentRole.LEAD),
+    )
+
+    validation = ValidationResult(
+        status=ValidationStatus.PASS,
+        summary="Structured acquisition comparisons are supported.",
+    )
+
+    async def fake_run(agent, prompt, *, context, **kwargs):  # noqa: ANN001
+        return SimpleNamespace(final_output=validation)
+
+    monkeypatch.setattr(CriticRunner, "run", fake_run)
+    candidate = CriticCandidate(
+        objective="Explain acquisition efficiency.",
+        answer="The funnel comparisons support the observed acquisition change.",
+        metric_comparisons=lead_result.metric_comparisons,
+    )
+    critic_result = asyncio.run(run_critic(context(AgentRole.CRITIC), candidate))
+
+    assert critic_result.status is ValidationStatus.PASS
+    assert [item.metric_key for item in lead_result.metric_comparisons] == [
+        "conversion_rate",
+        "acquired_customers",
+        "marketing_spend",
+        "cac",
+        "ltv",
+    ]
+    assert all(
+        not item.metric_key.startswith("meta_")
+        for item in lead_result.metric_comparisons
+    )
+    assert [item.value for item in lead_result.metric_comparisons] == [
+        comparison.value for comparison in raw_comparisons
+    ]
 
 
 def test_specialist_finding_reference_is_resolved_to_executed_evidence(

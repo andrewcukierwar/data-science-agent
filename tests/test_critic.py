@@ -302,3 +302,120 @@ def test_critic_requires_cogs_or_margin_when_profitability_data_has_cogs(
     assert result.status is ValidationStatus.REVISE
     assert result.issues[0].id == "V-COMPLETENESS-MARGIN"
     assert "COGS" in result.issues[0].message
+
+
+def test_critic_requires_complete_acquisition_funnel_when_inputs_exist(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    pd.DataFrame({"customer_id": ["C1"]}).to_parquet(
+        source / "customers.parquet", index=False
+    )
+    pd.DataFrame({"session_id": ["S1"]}).to_parquet(
+        source / "sessions.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "order_id": ["O1"],
+            "customer_id": ["C1"],
+            "order_date": ["2025-01-01"],
+            "net_revenue": [100.0],
+            "cogs": [40.0],
+        }
+    ).to_parquet(source / "orders.parquet", index=False)
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(
+        "run-critic-funnel",
+        inputs_source=source,
+    )
+    ledger = AnalysisLedger(workspace, objective="Why did profitability change?")
+    context = AgentRunContext(
+        workspace=workspace,
+        ledger=ledger,
+        sql_service=DuckDBExecutionService(workspace, ledger),
+        python_service=PythonExecutionService(workspace, ledger),
+        artifact_manager=ArtifactManager(workspace, ledger),
+        run_config=AgentRunConfig(
+            run_id="run-critic-funnel",
+            agent_role=AgentRole.CRITIC,
+            model="test-model",
+        ),
+    )
+    candidate = CriticCandidate(
+        objective="Why did profitability change?",
+        answer=(
+            "Revenue, COGS, contribution before marketing, and contribution margin "
+            "were stable, so broad COGS/margin deterioration was not a driver. "
+            "Marketing spend increased, conversion declined, and CAC rose."
+        ),
+    )
+
+    result = asyncio.run(run_critic(context, candidate))
+
+    assert result.status is ValidationStatus.REVISE
+    assert result.issues[0].id == "V-COMPLETENESS-ACQUISITION"
+    assert "sessions/traffic" in result.issues[0].message
+    assert "downstream LTV/value" in result.issues[0].message
+
+
+def test_critic_allows_profitability_candidate_with_margin_and_funnel_closure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    pd.DataFrame({"customer_id": ["C1"]}).to_parquet(
+        source / "customers.parquet", index=False
+    )
+    pd.DataFrame({"session_id": ["S1"]}).to_parquet(
+        source / "sessions.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "order_id": ["O1"],
+            "customer_id": ["C1"],
+            "order_date": ["2025-01-01"],
+            "net_revenue": [100.0],
+            "cogs": [40.0],
+        }
+    ).to_parquet(source / "orders.parquet", index=False)
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(
+        "run-critic-complete",
+        inputs_source=source,
+    )
+    ledger = AnalysisLedger(workspace, objective="Why did profitability change?")
+    context = AgentRunContext(
+        workspace=workspace,
+        ledger=ledger,
+        sql_service=DuckDBExecutionService(workspace, ledger),
+        python_service=PythonExecutionService(workspace, ledger),
+        artifact_manager=ArtifactManager(workspace, ledger),
+        run_config=AgentRunConfig(
+            run_id="run-critic-complete",
+            agent_role=AgentRole.CRITIC,
+            model="test-model",
+        ),
+    )
+    candidate = CriticCandidate(
+        objective="Why did profitability change?",
+        answer=(
+            "Net revenue, COGS, contribution before marketing, and contribution "
+            "margin were compared across periods. The COGS/revenue ratio and broad "
+            "margin were stable and COGS was not a driver. The observed mechanism "
+            "was marketing spend to sessions/traffic to conversion to acquired "
+            "customers to CAC to downstream LTV/value; the data does not establish "
+            "why the upstream conversion changed."
+        ),
+    )
+    validation = ValidationResult(
+        status=ValidationStatus.PASS,
+        summary="The candidate is complete.",
+    )
+
+    async def fake_run(agent, prompt, *, context, **kwargs):  # noqa: ANN001
+        return SimpleNamespace(final_output=validation)
+
+    monkeypatch.setattr(Runner, "run", fake_run)
+    result = asyncio.run(run_critic(context, candidate))
+
+    assert result.status is ValidationStatus.PASS

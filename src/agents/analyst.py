@@ -16,7 +16,10 @@ from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import SpecialistResult, canonicalize_specialist_result
-from schemas.metrics import deduplicate_metric_comparisons
+from schemas.metrics import (
+    deduplicate_metric_comparisons,
+    normalize_metric_comparison,
+)
 from schemas.run_state import ArtifactKind
 from tools.artifacts import ArtifactManager
 
@@ -51,7 +54,9 @@ _FALLBACK_SKILL_GUIDANCE = """Business analytics procedure:
 7. For profitability, explicitly decompose net revenue, COGS, contribution
    before marketing, marketing spend, and reporting contribution profit. State
    whether revenue, COGS/margin, or marketing economics are material drivers or
-   non-drivers.
+   non-drivers. Compute and compare COGS, contribution before marketing, and
+   contribution margin or COGS/revenue ratio; state explicitly when broad margin
+   deterioration is not material.
 8. For named periods, use explicit date boundaries or explicit quarter
    inclusion. Never classify every period that is not Q1 as Q2. Reconcile
    derived cohort counts to the customers acquisition table before inference.
@@ -64,9 +69,17 @@ _FALLBACK_SKILL_GUIDANCE = """Business analytics procedure:
 10. Return material period/segment comparisons as generic `MetricComparison`
     objects in addition to prose Findings. Copy the exact metric identity,
     value, periods, unit, and evidence references from executed analysis; do not
-    use evaluator-specific or scenario-specific IDs.
-11. Separate observations from explanations. Do not claim causality from a
-   period comparison alone; state limitations and propose a follow-up test.
+    use evaluator-specific or scenario-specific IDs. For every material
+    nonzero-baseline period comparison, include a relative_change comparison in
+    addition to an absolute difference when both support the conclusion. Do not
+    reconstruct a comparison already returned by an executed specialist tool.
+11. When acquisition economics are material, close the observable path in the
+    final result: marketing spend -> sessions/traffic -> conversion -> acquired
+    customers -> CAC -> downstream LTV/value. Distinguish observed accounting or
+    funnel relationships from unsupported explanations for why an upstream
+    metric changed.
+12. Separate observations from explanations. Do not claim causality from a
+    period comparison alone; state limitations and propose a follow-up test.
 """
 
 
@@ -212,15 +225,17 @@ def validate_analyst_result(
                 for finding in result.findings
             ],
             "metric_comparisons": [
-                comparison.model_copy(
-                    update={
-                        "evidence_refs": canonicalize_evidence_refs(
-                            comparison.evidence_refs,
-                            executed_refs=executed_refs,
-                            aliases=aliases,
-                        )
-                        or comparison.evidence_refs
-                    }
+                normalize_metric_comparison(
+                    comparison.model_copy(
+                        update={
+                            "evidence_refs": canonicalize_evidence_refs(
+                                comparison.evidence_refs,
+                                executed_refs=executed_refs,
+                                aliases=aliases,
+                            )
+                            or comparison.evidence_refs
+                        }
+                    )
                 )
                 for comparison in deduplicate_metric_comparisons(
                     result.metric_comparisons

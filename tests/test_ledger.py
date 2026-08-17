@@ -134,6 +134,40 @@ def test_ledger_persists_and_upserts_metric_comparisons(tmp_path: Path) -> None:
     assert reloaded.metric_comparisons[0].value == 0.31
 
 
+def test_ledger_replaces_stale_alias_with_corrected_comparison(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    stale = MetricComparison(
+        metric_key="meta_cac",
+        dimensions={"acquisition_channel": "Meta"},
+        baseline_period="2025 Q1",
+        comparison_period="Q2 2025",
+        comparison_type="relative_change",
+        value=0.90,
+        unit="fraction",
+        evidence_refs=["stale"],
+    )
+    corrected = stale.model_copy(
+        update={
+            "metric_key": "cac",
+            "dimensions": {"channel": "Meta"},
+            "value": 0.30,
+            "unit": "relative_change_fraction",
+            "evidence_refs": ["corrected"],
+        }
+    )
+
+    ledger.upsert_metric_comparison(stale)
+    ledger.upsert_metric_comparison(corrected)
+    reloaded = AnalysisLedger(ledger.state_path)
+
+    assert len(reloaded.metric_comparisons) == 1
+    assert reloaded.metric_comparisons[0].metric_key == "cac"
+    assert reloaded.metric_comparisons[0].dimensions == {"channel": "Meta"}
+    assert reloaded.metric_comparisons[0].value == 0.30
+
+
 def test_duplicate_ids_are_rejected_without_overwriting_disk_state(
     tmp_path: Path,
 ) -> None:

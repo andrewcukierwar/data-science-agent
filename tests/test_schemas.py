@@ -13,7 +13,13 @@ from schemas.audit import (
     TableAudit,
 )
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
-from schemas.metrics import MetricComparison, MetricComparisonType, MetricObservation
+from schemas.metrics import (
+    MetricComparison,
+    MetricComparisonType,
+    MetricObservation,
+    deduplicate_metric_comparisons,
+    normalize_metric_comparison,
+)
 from schemas.run_state import (
     AgentEvent,
     AgentEventStatus,
@@ -97,6 +103,52 @@ def test_metric_observation_and_comparison_are_generic_and_typed() -> None:
             unit=comparison.unit,
             evidence_refs=comparison.evidence_refs,
         )
+
+
+def test_metric_comparison_normalization_keeps_segment_out_of_metric_key() -> None:
+    comparison = MetricComparison(
+        metric_key="meta_spend",
+        dimensions={"acquisition_channel": "Meta"},
+        baseline_period="2025-Q1",
+        comparison_period="Q2 2025",
+        comparison_type="relative_change",
+        value=0.07,
+        unit="fraction",
+        evidence_refs=["tool-1"],
+    )
+
+    normalized = normalize_metric_comparison(comparison)
+
+    assert normalized.metric_key == "marketing_spend"
+    assert normalized.dimensions == {"channel": "Meta"}
+    assert normalized.baseline_period == "Q1 2025"
+    assert normalized.unit == "relative_change_fraction"
+
+
+def test_equivalent_metric_comparisons_replace_stale_values() -> None:
+    stale = MetricComparison(
+        metric_key="meta_cac",
+        dimensions={"channel": "Meta"},
+        baseline_period="Q1 2025",
+        comparison_period="Q2 2025",
+        comparison_type="relative_change",
+        value=0.90,
+        unit="fraction",
+        evidence_refs=["stale"],
+    )
+    corrected = stale.model_copy(
+        update={
+            "metric_key": "customer acquisition cost",
+            "baseline_period": "2025 Q1",
+            "unit": "relative_change_fraction",
+            "value": 0.30,
+            "evidence_refs": ["corrected"],
+        }
+    )
+
+    deduplicated = deduplicate_metric_comparisons([stale, corrected])
+
+    assert deduplicated == [normalize_metric_comparison(corrected)]
 
 
 def test_audit_validates_date_ranges_and_rates() -> None:

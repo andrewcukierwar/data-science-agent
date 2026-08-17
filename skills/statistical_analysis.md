@@ -35,5 +35,7 @@ Use this procedure for evidence-backed inferential analysis:
 
 For comparable period changes, use a stable metric identifier and set
 value_unit to relative_change_fraction; report the relative change as a decimal
-fraction (0.10 means +10%, -0.25 means -25%). Keep absolute values in their
-documented business units instead of mixing percentages and decimals.
+fraction (0.10 means +10%, -0.25 means -25%). When a nonzero baseline is
+available, return the relative_change comparison in addition to an absolute
+difference when both are material to the conclusion. Keep absolute values in
+their documented business units instead of mixing percentages and decimals.

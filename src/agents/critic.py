@@ -10,7 +10,11 @@ from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.budgets import BudgetResource
 from orchestration.ledger import AnalysisLedger
-from schemas.metrics import MetricComparison, metric_comparison_identity
+from schemas.metrics import (
+    MetricComparison,
+    metric_comparison_identity,
+    normalize_metric_comparison,
+)
 from schemas.validation import (
     CriticCandidate,
     ValidationIssue,
@@ -32,7 +36,11 @@ _FALLBACK_SKILL_GUIDANCE = """Validation procedure:
    the acquisition table; do not treat every non-Q1 period as Q2.
 4. Check whether the candidate answered the objective, resolved material
    follow-up questions, and investigated available upstream mechanisms.
-5. Return PASS only when the candidate is supported and complete; otherwise
+5. When acquisition economics materially support the explanation, require the
+   final synthesis to close spend -> sessions/traffic -> conversion -> acquired
+   customers -> CAC -> downstream LTV/value, while distinguishing observed
+   relationships from unsupported upstream causal explanations.
+6. Return PASS only when the candidate is supported and complete; otherwise
    return REVISE with severity, evidence, and a concrete remediation.
 """
 
@@ -82,15 +90,41 @@ def candidate_completeness_validation(
                 severity=ValidationSeverity.HIGH,
                 category="task_completeness",
                 message=(
-                    "The profitability candidate does not address COGS or margin "
+                    "The profitability candidate does not complete the revenue, "
+                    "COGS, contribution-before-marketing, and margin comparison "
                     "even though COGS data is available."
                 ),
                 recommendation=(
-                    "Assess COGS/margin and state whether it is a material driver "
-                    "or non-driver before finalizing the profitability explanation."
+                    "Compare net revenue, COGS, contribution before marketing, and "
+                    "contribution margin or the COGS/revenue ratio. State whether "
+                    "broad margin is a material driver or non-driver before "
+                    "finalizing the profitability explanation."
                 ),
             )
         )
+
+    if _acquisition_closure_required(candidate, context):
+        missing = _acquisition_closure_missing(candidate)
+        if missing:
+            issues.append(
+                ValidationIssue(
+                    id="V-COMPLETENESS-ACQUISITION",
+                    severity=ValidationSeverity.HIGH,
+                    category="task_completeness",
+                    message=(
+                        "The candidate invokes an acquisition-efficiency explanation "
+                        "but does not close the observable funnel: missing "
+                        + ", ".join(missing)
+                        + "."
+                    ),
+                    recommendation=(
+                        "Explicitly connect spend, sessions/traffic, conversion, "
+                        "acquired customers, CAC, and downstream LTV/value. "
+                        "Separate observed relationships from unsupported causal "
+                        "explanations for upstream changes."
+                    ),
+                )
+            )
 
     if not issues:
         return None
@@ -125,10 +159,107 @@ def _profitability_requires_margin_review(
             *candidate.recommendations,
         ]
     ).lower()
-    return not any(
-        term in candidate_text
-        for term in ("cogs", "margin", "contribution profit", "gross contribution")
+    required_components = (
+        ("net revenue", "revenue"),
+        ("cogs",),
+        ("contribution before marketing", "gross contribution"),
+        ("margin", "cogs/revenue", "cogs to revenue"),
     )
+    has_components = all(
+        any(term in candidate_text for term in alternatives)
+        for alternatives in required_components
+    )
+    non_driver_terms = (
+        "not a driver",
+        "non-driver",
+        "non driver",
+        "did not drive",
+        "didn't drive",
+        "not material",
+        "no broad",
+        "stable margin",
+        "margin was stable",
+        "cogs was stable",
+        "cogs remained stable",
+    )
+    driver_terms = (
+        "margin driver",
+        "cogs driver",
+        "margin deteriorated",
+        "cogs deteriorated",
+        "margin increased",
+        "cogs increased",
+        "margin changed materially",
+        "cogs changed materially",
+    )
+    return not (
+        has_components
+        and any(term in candidate_text for term in (*non_driver_terms, *driver_terms))
+    )
+
+
+def _acquisition_closure_required(
+    candidate: CriticCandidate,
+    context: AgentRunContext | None,
+) -> bool:
+    """Detect material acquisition analysis that needs a complete funnel path."""
+
+    objective_text = candidate.objective.lower()
+    if not any(term in objective_text for term in ("profit", "acquisition", "cac")):
+        return False
+    candidate_text = " ".join(
+        [
+            candidate.answer,
+            *(finding.statement for finding in candidate.findings),
+            *(hypothesis.statement for hypothesis in candidate.hypotheses),
+            *candidate.recommendations,
+            *(comparison.metric_key for comparison in candidate.metric_comparisons),
+        ]
+    ).lower()
+    acquisition_terms = (
+        "spend",
+        "acquisition",
+        "cac",
+        "conversion",
+        "acquired customer",
+        "new customer",
+        "ltv",
+        "session",
+        "traffic",
+    )
+    if sum(term in candidate_text for term in acquisition_terms) < 2:
+        return False
+    if context is None:
+        return True
+    input_relations = getattr(context.sql_service, "input_relations", {})
+    return "sessions" in input_relations or "customers" in input_relations
+
+
+def _acquisition_closure_missing(candidate: CriticCandidate) -> list[str]:
+    """Return missing generic acquisition-funnel components."""
+
+    text = " ".join(
+        [
+            candidate.answer,
+            *(finding.statement for finding in candidate.findings),
+            *(hypothesis.statement for hypothesis in candidate.hypotheses),
+            *candidate.recommendations,
+            *(comparison.metric_key for comparison in candidate.metric_comparisons),
+        ]
+    ).lower()
+    checks = {
+        "marketing spend": ("marketing spend", "spend", "marketing"),
+        "sessions/traffic": ("session", "traffic"),
+        "conversion": ("conversion", "converted"),
+        "acquired customers": ("acquired customer", "new customer", "customer volume"),
+        "CAC": ("cac", "customer acquisition cost"),
+        "downstream LTV/value": ("ltv", "lifetime value", "customer value"),
+    }
+    return [
+        label
+        for label, terms in checks.items()
+        if not any(term in text for term in terms)
+    ]
 
 
 def _workspace_has_cogs(context: AgentRunContext) -> bool:
@@ -219,8 +350,9 @@ def validate_structured_metric_comparisons(
 
     issues: list[ValidationIssue] = []
     for index, comparison in enumerate(candidate.metric_comparisons, start=1):
+        comparison = normalize_metric_comparison(comparison)
         evidence_comparisons = [
-            evidence_comparison
+            normalize_metric_comparison(evidence_comparison)
             for event in _events_for_evidence(ledger, comparison.evidence_refs)
             for evidence_comparison in _event_metric_comparisons(event)
         ]

@@ -16,7 +16,10 @@ from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import SpecialistResult, canonicalize_specialist_result
-from schemas.metrics import deduplicate_metric_comparisons
+from schemas.metrics import (
+    deduplicate_metric_comparisons,
+    normalize_metric_comparison,
+)
 from schemas.run_state import ArtifactKind
 from tools.artifacts import ArtifactManager
 
@@ -41,7 +44,9 @@ _FALLBACK_SKILL_GUIDANCE = """Statistical analysis procedure:
    common reporting grain before joining, and reconcile counts and totals after
    material joins.
 7. Return material period/segment comparisons as generic MetricComparison
-   objects with exact values, units, periods, dimensions, and evidence refs.
+   objects with exact values, units, periods, dimensions, and evidence refs. For
+   nonzero baselines, include a relative_change comparison in addition to an
+   absolute difference when both are material to the conclusion.
 """
 
 _ARTIFACT_SUFFIXES: Final[dict[str, ArtifactKind]] = {
@@ -107,7 +112,9 @@ Required workflow:
 - Return material period/segment comparisons as generic `MetricComparison`
   objects in addition to Findings, preserving exact computed values, units,
   periods, dimensions, and evidence references. Do not reconstruct values from
-  prose or use scenario-specific metric IDs.
+  prose or use scenario-specific metric IDs. For a nonzero baseline, include a
+  relative_change comparison in addition to an absolute difference when both
+  are material to the inferential conclusion.
 - Attach every quantitative Finding to an executed Python script, tool event,
   or registered artifact in `evidence_refs`. Copy exact references returned by
   `run_python`, `save_artifact`, or another approved evidence tool; never
@@ -190,15 +197,17 @@ def validate_statistician_result(
                 for finding in result.findings
             ],
             "metric_comparisons": [
-                comparison.model_copy(
-                    update={
-                        "evidence_refs": canonicalize_evidence_refs(
-                            comparison.evidence_refs,
-                            executed_refs=executed_refs,
-                            aliases=aliases,
-                        )
-                        or comparison.evidence_refs
-                    }
+                normalize_metric_comparison(
+                    comparison.model_copy(
+                        update={
+                            "evidence_refs": canonicalize_evidence_refs(
+                                comparison.evidence_refs,
+                                executed_refs=executed_refs,
+                                aliases=aliases,
+                            )
+                            or comparison.evidence_refs
+                        }
+                    )
                 )
                 for comparison in deduplicate_metric_comparisons(
                     result.metric_comparisons

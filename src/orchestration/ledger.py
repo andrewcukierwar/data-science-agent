@@ -13,7 +13,12 @@ from pydantic import ValidationError
 
 from schemas.audit import AuditResult
 from schemas.findings import Finding
-from schemas.metrics import MetricComparison
+from schemas.metrics import (
+    MetricComparison,
+    deduplicate_metric_comparisons,
+    metric_comparison_identity,
+    normalize_metric_comparison,
+)
 from schemas.run_state import (
     AgentEvent,
     AgentEventStatus,
@@ -409,9 +414,10 @@ class AnalysisLedger(ToolEventLedger):
     ) -> MetricComparison:
         """Create or replace a comparison with the same generic identity."""
 
-        identity = self._metric_comparison_identity(comparison)
+        comparison = normalize_metric_comparison(comparison)
+        identity = metric_comparison_identity(comparison)
         for index, current in enumerate(self.metric_comparisons):
-            if self._metric_comparison_identity(current) == identity:
+            if metric_comparison_identity(current) == identity:
                 if current == comparison:
                     return current
                 self._state.metric_comparisons[index] = comparison
@@ -420,26 +426,6 @@ class AnalysisLedger(ToolEventLedger):
         self._state.metric_comparisons.append(comparison)
         self.save()
         return comparison
-
-    @staticmethod
-    def _metric_comparison_identity(
-        comparison: MetricComparison,
-    ) -> tuple[object, ...]:
-        """Return a stable identity that excludes value and evidence."""
-
-        return (
-            comparison.metric_key.strip().lower(),
-            tuple(
-                sorted(
-                    (key.strip().lower(), value.strip().lower())
-                    for key, value in comparison.dimensions.items()
-                )
-            ),
-            comparison.baseline_period.strip().lower(),
-            comparison.comparison_period.strip().lower(),
-            comparison.comparison_type.value,
-            comparison.unit.strip().lower(),
-        )
 
     def add_artifact(self, artifact: Artifact) -> Artifact:
         """Append an artifact reference with a unique identifier."""
@@ -571,6 +557,17 @@ class AnalysisLedger(ToolEventLedger):
                 if isinstance(result, SpecialistResult)
                 else SpecialistResult.model_validate(result)
             ),
+        )
+        record = record.model_copy(
+            update={
+                "result": record.result.model_copy(
+                    update={
+                        "metric_comparisons": deduplicate_metric_comparisons(
+                            record.result.metric_comparisons
+                        )
+                    }
+                )
+            }
         )
         self._state.specialist_results.append(record)
         self.save()

@@ -24,6 +24,10 @@ recommendations:
    an available upstream mechanism when the objective asks why. Treat
    `follow_up_analysis=true` as an explicit request for bounded work, not as a
    harmless caveat.
-8. Return `PASS` only when no material issue remains. Otherwise return
+8. When acquisition economics materially support the explanation, require the
+   final answer to connect spend, sessions/traffic, conversion, acquired
+   customers, CAC, and downstream LTV/value. Distinguish the observed funnel
+   mechanism from unsupported causal explanations for upstream changes.
+9. Return `PASS` only when no material issue remains. Otherwise return
    `REVISE` with severity, exact evidence references, and concrete remediation.
    Do not invent defects when evidence is missing; state the limitation.

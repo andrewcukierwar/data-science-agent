@@ -17,7 +17,18 @@ from schemas.findings import (
     canonicalize_specialist_result,
 )
 from schemas.lead import LeadRecommendation, LeadResult, SpecialistTask
-from schemas.metrics import MetricComparison, MetricComparisonType, MetricObservation
+from schemas.metrics import (
+    MetricComparison,
+    MetricComparisonType,
+    MetricObservation,
+    deduplicate_metric_comparisons,
+    metric_comparison_identity,
+    normalize_metric_comparison,
+    normalize_metric_dimensions,
+    normalize_metric_key,
+    normalize_metric_period,
+    normalize_metric_unit,
+)
 from schemas.run_state import (
     AgentEvent,
     AgentEventStatus,
@@ -67,6 +78,13 @@ __all__ = [
     "MetricComparison",
     "MetricComparisonType",
     "MetricObservation",
+    "deduplicate_metric_comparisons",
+    "metric_comparison_identity",
+    "normalize_metric_comparison",
+    "normalize_metric_dimensions",
+    "normalize_metric_key",
+    "normalize_metric_period",
+    "normalize_metric_unit",
     "ModelUsage",
     "RunBudget",
     "RunStatus",

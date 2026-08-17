@@ -16,7 +16,9 @@ Use this procedure for evidence-backed KPI investigation:
 4. For profitability, explicitly decompose net revenue, COGS, contribution
    before marketing, marketing spend, and reporting contribution profit. State
    whether revenue, COGS/margin, or marketing economics are material drivers or
-   non-drivers.
+   non-drivers. Compute and compare COGS, contribution before marketing, and
+   contribution margin (or the COGS/revenue ratio); if broad margin deterioration
+   is not material, state that explicitly.
 5. Segment the result by relevant channel, customer, product, region, device,
    and funnel stage. Use acquisition cohorts when timing affects outcomes.
 6. For acquisition, calculate CAC as channel spend divided by newly acquired
@@ -55,7 +57,14 @@ Return material period or segment comparisons as generic `MetricComparison`
 objects as well as prose Findings. Preserve their metric identity, dimensions,
 periods, comparison type, unit, value, and exact evidence references.
 
+For a material acquisition-efficiency explanation, close the observable path in
+the same answer: marketing spend -> sessions/traffic -> conversion -> acquired
+customers -> CAC -> downstream LTV/value. State which links are observed and
+which upstream causes remain unsupported by the available data.
+
 For comparable period changes, use a stable metric identifier and set
 value_unit to relative_change_fraction; report the relative change as a decimal
 fraction (0.10 means +10%, -0.25 means -25%). Keep absolute values in their
-documented business units instead of mixing percentages and decimals.
+documented business units instead of mixing percentages and decimals. When a
+nonzero baseline is available, return the relative_change comparison in addition
+to an absolute difference when both are material to the conclusion.

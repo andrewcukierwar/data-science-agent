@@ -32,6 +32,7 @@ from schemas.metrics import (
     MetricComparison,
     deduplicate_metric_comparisons,
     metric_comparison_identity,
+    normalize_metric_comparison,
 )
 from schemas.run_state import Hypothesis
 
@@ -90,7 +91,14 @@ Required investigation behavior:
    alternative explanation for acquisition quality deterioration. Do not
    finalize while an open question is both necessary to answer the primary
    objective and answerable with available data/tools within the remaining
-   budget.
+   budget. For profitability questions, make the final candidate address net
+   revenue, COGS, contribution before marketing, marketing spend/acquisition
+   efficiency, the largest relevant segment, and downstream customer value.
+   State material non-drivers explicitly. When acquisition economics explain a
+   material change, connect the observed path from spend to sessions/traffic,
+   conversion, acquired customers, CAC, and downstream LTV/value. Separate that
+   observed mechanism from unsupported claims about why an upstream metric
+   changed.
 5. Construct concise candidate findings and recommendations. Every quantitative
    finding and every recommendation must include evidence_refs pointing to an
    executed tool event, artifact, or saved query/script path. Distinguish observed
@@ -506,11 +514,13 @@ def _reuse_specialist_metric_comparisons(
     specialist_index: dict[tuple[object, ...], MetricComparison] = {}
     for record in ledger.specialist_results:
         for comparison in record.result.metric_comparisons:
-            specialist_index.setdefault(
-                metric_comparison_identity(comparison), comparison
-            )
+            comparison = normalize_metric_comparison(comparison)
+            specialist_index[metric_comparison_identity(comparison)] = comparison
     reused = [
-        specialist_index.get(metric_comparison_identity(comparison), comparison)
+        specialist_index.get(
+            metric_comparison_identity(comparison),
+            normalize_metric_comparison(comparison),
+        )
         for comparison in comparisons
     ]
     return deduplicate_metric_comparisons(reused)

@@ -17,7 +17,14 @@ from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunResult
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
 from schemas.lead import LeadResult
-from schemas.metrics import MetricComparison
+from schemas.metrics import (
+    MetricComparison,
+    normalize_metric_comparison,
+    normalize_metric_dimensions,
+    normalize_metric_key,
+    normalize_metric_period,
+    normalize_metric_unit,
+)
 from schemas.run_state import AgentEventStatus, ArtifactKind, RunStatus
 from schemas.validation import ValidationStatus
 from tools.artifacts import ArtifactManager
@@ -30,32 +37,13 @@ class CanonicalAcceptanceError(AssertionError):
 def _normalized_metric_identifier(metric: str) -> str:
     """Normalize a generic metric key for evaluator-only identity matching."""
 
-    normalized = re.sub(r"[^a-z0-9]+", "_", metric.lower()).strip("_")
-    aliases = {
-        "conversion": "conversion_rate",
-        "session_conversion": "conversion_rate",
-        "session_conversion_rate": "conversion_rate",
-        "new_customers": "acquired_customers",
-        "customer_count": "acquired_customers",
-        "spend": "marketing_spend",
-        "customer_acquisition_cost": "cac",
-        "ltv_90d": "ltv",
-        "ltv_90_day": "ltv",
-        "90_day_ltv": "ltv",
-    }
-    return aliases.get(normalized, normalized)
+    return normalize_metric_key(metric, {})
 
 
 def _normalized_period(period: str) -> str:
     """Normalize common quarter labels without accepting scenario IDs."""
 
-    normalized = re.sub(r"\s+", " ", period.strip().lower())
-    match = re.fullmatch(r"(?:q([1-4])\s*(\d{4})|(\d{4})\s*q([1-4]))", normalized)
-    if match:
-        quarter = match.group(1) or match.group(4)
-        year = match.group(2) or match.group(3)
-        return f"q{quarter} {year}"
-    return normalized
+    return normalize_metric_period(period).lower()
 
 
 def _normalized_dimensions(
@@ -63,16 +51,9 @@ def _normalized_dimensions(
 ) -> dict[str, str]:
     """Normalize generic dimension names and values for identity matching."""
 
-    key_aliases = {
-        "acquisition_channel": "channel",
-        "channel_name": "channel",
-        "segment_name": "segment",
-    }
     return {
-        key_aliases.get(
-            _normalized_metric_identifier(key), key.lower().strip()
-        ): value.strip().lower()
-        for key, value in dimensions.items()
+        key: value.lower()
+        for key, value in normalize_metric_dimensions(dimensions).items()
     }
 
 
@@ -84,9 +65,13 @@ def _metric_identity_matches(
 
     expected_dimensions = _normalized_dimensions(expected.dimensions)
     actual_dimensions = _normalized_dimensions(comparison.dimensions)
+    normalized_actual = normalize_metric_comparison(comparison)
+    expected_metric_key = normalize_metric_key(
+        expected.metric_key,
+        expected.dimensions,
+    )
     return (
-        _normalized_metric_identifier(comparison.metric_key)
-        == _normalized_metric_identifier(expected.metric_key)
+        normalized_actual.metric_key == expected_metric_key
         and all(
             actual_dimensions.get(key) == value
             for key, value in expected_dimensions.items()
@@ -96,7 +81,8 @@ def _metric_identity_matches(
         and _normalized_period(comparison.comparison_period)
         == _normalized_period(expected.comparison_period)
         and comparison.comparison_type is expected.comparison_type
-        and comparison.unit.strip().lower() == expected.value_unit.strip().lower()
+        and normalized_actual.unit
+        == normalize_metric_unit(expected.value_unit, expected.comparison_type)
     )
 
 
