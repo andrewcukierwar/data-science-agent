@@ -186,6 +186,45 @@ class ModelUsage(BaseModel):
     reasoning_tokens: int = Field(default=0, ge=0)
 
 
+class ModelPricing(BaseModel):
+    """Provider pricing expressed in USD per one million tokens."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    input_per_1m: float = Field(ge=0)
+    cached_input_per_1m: float = Field(ge=0)
+    output_per_1m: float = Field(ge=0)
+
+
+class CostBreakdown(BaseModel):
+    """Persisted, reproducible estimate of model cost by token category."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pricing_model: NonEmptyString
+    input_per_1m: float = Field(ge=0)
+    cached_input_per_1m: float = Field(ge=0)
+    output_per_1m: float = Field(ge=0)
+    input_tokens: int = Field(ge=0)
+    cached_tokens: int = Field(ge=0)
+    uncached_input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    uncached_input_cost_usd: float = Field(ge=0)
+    cached_input_cost_usd: float = Field(ge=0)
+    output_cost_usd: float = Field(ge=0)
+    estimated_cost_usd: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def token_counts_are_consistent(self) -> "CostBreakdown":
+        if self.cached_tokens > self.input_tokens:
+            raise ValueError("cached_tokens cannot exceed input_tokens")
+        if self.uncached_input_tokens != self.input_tokens - self.cached_tokens:
+            raise ValueError(
+                "uncached_input_tokens must equal input_tokens - cached_tokens"
+            )
+        return self
+
+
 class AnalysisRunState(BaseModel):
     """Persisted, observable state for one analysis run."""
 
@@ -216,6 +255,7 @@ class AnalysisRunState(BaseModel):
     run_budget: RunBudget = Field(default_factory=RunBudget)
     usage: ModelUsage = Field(default_factory=ModelUsage)
     elapsed_seconds: float | None = Field(default=None, ge=0)
+    cost_breakdown: CostBreakdown | None = None
     estimated_cost_usd: float | None = Field(default=None, ge=0)
     cost_estimation_note: NonEmptyString | None = None
     final_report: Artifact | None = None

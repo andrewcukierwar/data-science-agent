@@ -14,6 +14,12 @@ from orchestration.ledger import (
     ToolEventLedger,
     ToolEventSink,
 )
+from orchestration.pricing import (
+    MODEL_PRICING,
+    calculate_cost_breakdown,
+    pricing_for_model,
+    resolve_model_pricing,
+)
 
 
 def __getattr__(name: str):  # noqa: ANN001
@@ -33,6 +39,8 @@ __all__ = [
     "BudgetExhaustedError",
     "BudgetResource",
     "BudgetSnapshot",
+    "MODEL_PRICING",
+    "calculate_cost_breakdown",
     "AnalysisLedger",
     "AnalysisRunResult",
     "AnalysisRunner",
@@ -40,6 +48,8 @@ __all__ = [
     "LedgerError",
     "RunBudgetController",
     "RunBudgetManager",
+    "pricing_for_model",
+    "resolve_model_pricing",
     "ToolEventLedger",
     "ToolEventSink",
 ]

@@ -24,6 +24,7 @@ from agents.runtime import (
 )
 from orchestration.budgets import BudgetExhaustedError, BudgetResource
 from orchestration.ledger import AnalysisLedger
+from orchestration.pricing import resolve_model_pricing
 from schemas.audit import AuditResult, AuditStatus
 from schemas.lead import LeadResult
 from schemas.run_state import (
@@ -81,7 +82,11 @@ class AnalysisRunner:
         budget: RunBudget | None = None,
         agent_turn_limits: Mapping[AgentRole | str, int] | None = None,
         input_cost_per_1k_tokens: float | None = None,
+        cached_input_cost_per_1k_tokens: float | None = None,
         output_cost_per_1k_tokens: float | None = None,
+        input_cost_per_1m: float | None = None,
+        cached_input_cost_per_1m: float | None = None,
+        output_cost_per_1m: float | None = None,
         auditor_runner: AuditorRunner | None = None,
         lead_runner: LeadRunner | None = None,
         critic_runner: CriticRunner | None = None,
@@ -98,10 +103,39 @@ class AnalysisRunner:
         self.docker_image = docker_image
         self.budget = budget
         self.agent_turn_limits = normalize_agent_turn_limits(agent_turn_limits)
-        if (input_cost_per_1k_tokens is None) != (output_cost_per_1k_tokens is None):
-            raise ValueError("input and output cost rates must be provided together")
-        self.input_cost_per_1k_tokens = input_cost_per_1k_tokens
-        self.output_cost_per_1k_tokens = output_cost_per_1k_tokens
+        legacy_rates = (
+            input_cost_per_1k_tokens,
+            cached_input_cost_per_1k_tokens,
+            output_cost_per_1k_tokens,
+        )
+        modern_rates = (input_cost_per_1m, cached_input_cost_per_1m, output_cost_per_1m)
+        if any(rate is not None for rate in legacy_rates) and any(
+            rate is not None for rate in modern_rates
+        ):
+            raise ValueError("use either per-1k or per-1m cost overrides, not both")
+        if any(rate is not None for rate in legacy_rates):
+            if input_cost_per_1k_tokens is None or output_cost_per_1k_tokens is None:
+                raise ValueError(
+                    "input and output cost rates must be provided together"
+                )
+            cached_rate = (
+                input_cost_per_1k_tokens
+                if cached_input_cost_per_1k_tokens is None
+                else cached_input_cost_per_1k_tokens
+            )
+            self.model_pricing = resolve_model_pricing(
+                self.model,
+                input_per_1m=input_cost_per_1k_tokens * 1_000,
+                cached_input_per_1m=cached_rate * 1_000,
+                output_per_1m=output_cost_per_1k_tokens * 1_000,
+            )
+        else:
+            self.model_pricing = resolve_model_pricing(
+                self.model,
+                input_per_1m=input_cost_per_1m,
+                cached_input_per_1m=cached_input_cost_per_1m,
+                output_per_1m=output_cost_per_1m,
+            )
         self.auditor_runner = auditor_runner or run_data_auditor
         self.lead_runner = lead_runner or run_lead
         self.critic_runner = critic_runner or run_critic
@@ -443,8 +477,8 @@ class AnalysisRunner:
         """Persist final usage/cost and elapsed time before report rendering."""
 
         ledger.record_cost_estimate(
-            input_cost_per_1k_tokens=self.input_cost_per_1k_tokens,
-            output_cost_per_1k_tokens=self.output_cost_per_1k_tokens,
+            pricing=self.model_pricing,
+            pricing_model=self.model,
         )
         ledger.record_elapsed(time.perf_counter() - started)
 
@@ -851,6 +885,19 @@ class AnalysisRunner:
                     "as provisional and resolve the listed issues before acting.",
                 ]
             )
+        breakdown = ledger.state.cost_breakdown
+        if breakdown is None:
+            cost_lines = ["- Pricing breakdown: **not configured**"]
+        else:
+            cost_lines = [
+                f"- Pricing model: **{breakdown.pricing_model}**",
+                f"- Uncached input tokens: **{breakdown.uncached_input_tokens}**",
+                f"- Cached input tokens: **{breakdown.cached_tokens}**",
+                "- Uncached input cost (USD): "
+                f"**{breakdown.uncached_input_cost_usd:.6f}**",
+                f"- Cached input cost (USD): **{breakdown.cached_input_cost_usd:.6f}**",
+                f"- Output cost (USD): **{breakdown.output_cost_usd:.6f}**",
+            ]
         lines.extend(["", "## Reproducibility", ""])
         lines.extend(
             [
@@ -860,6 +907,7 @@ class AnalysisRunner:
                 f"- Critic loops: **{ledger.budget.critic_loops}**",
                 f"- Model requests: **{ledger.usage.requests}**",
                 f"- Total tokens: **{ledger.usage.total_tokens}**",
+                *cost_lines,
                 f"- Elapsed seconds: **{ledger.state.elapsed_seconds or 0:.3f}**",
                 (
                     "- Estimated model cost (USD): "

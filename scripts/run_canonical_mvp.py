@@ -73,6 +73,24 @@ def _arguments() -> argparse.Namespace:
         help="Optional provider-specific output price used only for an estimate.",
     )
     parser.add_argument(
+        "--input-cost-per-1m",
+        type=float,
+        default=None,
+        help="Optional uncached input price in USD per million tokens.",
+    )
+    parser.add_argument(
+        "--cached-input-cost-per-1m",
+        type=float,
+        default=None,
+        help="Optional cached input price in USD per million tokens.",
+    )
+    parser.add_argument(
+        "--output-cost-per-1m",
+        type=float,
+        default=None,
+        help="Optional output price in USD per million tokens.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Remove and recreate this exact run directory before execution.",
@@ -129,6 +147,9 @@ def main() -> int:
             docker_image=args.docker_image,
             input_cost_per_1k_tokens=args.input_cost_per_1k_tokens,
             output_cost_per_1k_tokens=args.output_cost_per_1k_tokens,
+            input_cost_per_1m=args.input_cost_per_1m,
+            cached_input_cost_per_1m=args.cached_input_cost_per_1m,
+            output_cost_per_1m=args.output_cost_per_1m,
         )
         result = runner.run_sync(
             args.run_id,

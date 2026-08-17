@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from orchestration.pricing import calculate_cost_breakdown
 from schemas.audit import AuditResult
 from schemas.findings import Finding
 from schemas.metrics import (
@@ -26,6 +27,7 @@ from schemas.run_state import (
     Artifact,
     Hypothesis,
     HypothesisStatus,
+    ModelPricing,
     ModelUsage,
     RunBudget,
     RunStatus,
@@ -296,25 +298,79 @@ class AnalysisLedger(ToolEventLedger):
         self,
         *,
         input_cost_per_1k_tokens: float | None = None,
+        cached_input_cost_per_1k_tokens: float | None = None,
         output_cost_per_1k_tokens: float | None = None,
+        input_cost_per_1m: float | None = None,
+        cached_input_cost_per_1m: float | None = None,
+        output_cost_per_1m: float | None = None,
+        pricing: ModelPricing | None = None,
+        pricing_model: str | None = None,
     ) -> float | None:
-        """Persist an optional cost estimate without inventing provider pricing."""
+        """Persist an optional cached/uncached model cost breakdown.
 
-        if input_cost_per_1k_tokens is None or output_cost_per_1k_tokens is None:
+        The per-1k arguments remain as a compatibility path for existing
+        callers. When the cached rate is omitted on that path, cached input is
+        charged at the legacy input rate.
+        """
+
+        legacy_rates = (
+            input_cost_per_1k_tokens,
+            cached_input_cost_per_1k_tokens,
+            output_cost_per_1k_tokens,
+        )
+        modern_rates = (input_cost_per_1m, cached_input_cost_per_1m, output_cost_per_1m)
+        if pricing is not None and (
+            any(rate is not None for rate in legacy_rates)
+            or any(rate is not None for rate in modern_rates)
+        ):
+            raise ValueError("provide pricing or token rates, not both")
+
+        if pricing is None and any(rate is not None for rate in modern_rates):
+            if any(rate is None for rate in modern_rates):
+                raise ValueError(
+                    "input, cached input, and output cost rates must be provided"
+                    " together"
+                )
+            pricing = ModelPricing(
+                input_per_1m=input_cost_per_1m,
+                cached_input_per_1m=cached_input_cost_per_1m,
+                output_per_1m=output_cost_per_1m,
+            )
+
+        if pricing is None and any(rate is not None for rate in legacy_rates):
+            if (
+                input_cost_per_1k_tokens is not None
+                and output_cost_per_1k_tokens is not None
+            ):
+                cached_rate = (
+                    input_cost_per_1k_tokens
+                    if cached_input_cost_per_1k_tokens is None
+                    else cached_input_cost_per_1k_tokens
+                )
+                pricing = ModelPricing(
+                    input_per_1m=input_cost_per_1k_tokens * 1_000,
+                    cached_input_per_1m=cached_rate * 1_000,
+                    output_per_1m=output_cost_per_1k_tokens * 1_000,
+                )
+
+        if pricing is None:
+            self._state.cost_breakdown = None
             self._state.estimated_cost_usd = None
             self._state.cost_estimation_note = (
-                "Cost estimate unavailable: model pricing rates were not configured."
+                "Cost estimate unavailable: model pricing rates were not configured"
+                f" for {self._state.model or 'the configured model'}."
             )
         else:
-            if input_cost_per_1k_tokens < 0 or output_cost_per_1k_tokens < 0:
-                raise ValueError("cost rates must be non-negative")
-            self._state.estimated_cost_usd = (
-                self.usage.input_tokens / 1_000 * input_cost_per_1k_tokens
-                + self.usage.output_tokens / 1_000 * output_cost_per_1k_tokens
+            breakdown = calculate_cost_breakdown(
+                self.usage,
+                pricing,
+                pricing_model=pricing_model or self._state.model or "configured-model",
             )
+            self._state.cost_breakdown = breakdown
+            self._state.estimated_cost_usd = breakdown.estimated_cost_usd
             self._state.cost_estimation_note = (
-                "Estimated from configured input/output token rates; provider billing "
-                "may differ."
+                "Estimated from configured uncached-input, cached-input, and output "
+                "token rates; provider billing may differ."
             )
         self.save()
         return self._state.estimated_cost_usd
