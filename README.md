@@ -3,9 +3,11 @@
 Foundation for an evidence-backed, multi-agent business analytics system.
 
 Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
-complete. Phase 2: Evaluation and Reliability is underway, expanding the
-deterministic scenario suite and benchmarking the five-agent system against a
-single-agent baseline.
+complete. Phase 2 Tasks 1–9 are implemented and deterministically tested. Task
+10—the paid single-agent versus five-agent benchmark—has not yet run, so this
+repository does not claim benchmark results. See
+[`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
+verification record, and live-run handoff.
 
 ## Development
 
@@ -22,6 +24,19 @@ The planned architecture and implementation sequence are documented in
 Implementation decisions and the Phase 1 hardening handoff are recorded in
 [`docs/decisions/`](docs/decisions/README.md) and
 [`docs/phase1-lessons.md`](docs/phase1-lessons.md).
+
+## Phase 2 status
+
+The repository now contains versioned evaluation contracts, a zero-API offline
+evaluation engine, ten deterministic scenarios, calibrated correct and
+adversarial fixtures, a bounded generalist baseline, an immutable resumable
+benchmark runner, and deterministic aggregation/reporting. The latest full
+deterministic verification completed with **312 passed, 3 skipped, and 13 live
+tests deselected**; Ruff lint and formatting checks passed.
+
+No Phase 2 experiment manifest has been frozen and no paid matrix cells have
+been executed. Existing canonical MVP workspaces predate the declared Phase 2
+matrix and must not be presented as its results.
 
 ## Canonical Phase 1 live acceptance
 
@@ -95,6 +110,37 @@ summaries, failure taxonomy, and paired architecture differences. A paired
 result is labeled `supported_difference`, `not_supported`, or
 `insufficient_sample`; descriptive means are never presented as proof of an
 architecture advantage.
+
+### Credentials when using the VS Code extension
+
+An `export` entered in VS Code's integrated terminal changes only that terminal
+and its child processes. It does not update an already-running VS Code extension
+host. Fully quit VS Code, then launch the repository from a macOS terminal that
+already has the variables:
+
+```bash
+export OPENAI_API_KEY="<your key>"
+export OPENAI_DEFAULT_MODEL="<the exact model frozen in the manifest>"
+code /path/to/data-science-agent
+```
+
+Install the `code` launcher with **Shell Command: Install 'code' command in
+PATH** from the VS Code Command Palette if needed. Start a new agent conversation
+after reopening VS Code. Verify the key without displaying it:
+
+```bash
+test -n "$OPENAI_API_KEY" && echo "API key is set"
+printf '%s\n' "$OPENAI_DEFAULT_MODEL"
+```
+
+Never paste the key into chat, write it into a benchmark manifest, or commit it.
+The manifest model and `OPENAI_DEFAULT_MODEL` must match exactly.
+
+Docker Desktop is healthy on the development machine. A Docker permission error
+from this agent was caused by the restricted workspace sandbox blocking the
+Docker Unix socket; the same read-only `docker info` check succeeded with
+explicit elevated permission. This is not a repository or socket-ownership
+failure.
 
 ## Versioned scenario catalog
 

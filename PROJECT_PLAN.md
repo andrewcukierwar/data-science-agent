@@ -2,7 +2,7 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-17 — Phase 1 completion / Phase 2 evaluation sequencing.
+**Revision:** 2026-08-18 — Phase 2 Tasks 1–9 implemented; paid benchmark pending.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1431,6 +1431,32 @@ Track separately from analytical quality:
 
 Do not hide analytical failures inside an aggregate operational-success number,
 or vice versa.
+
+### Phase 2 implementation status as of 2026-08-18
+
+Tasks 1–9 below are implemented and covered by deterministic tests. The latest
+full local verification completed with 312 passed, 3 skipped, and 13 opt-in live
+tests deselected; Ruff lint and formatting checks passed. This status describes
+the implementation, not an architecture-performance result.
+
+Task 10 remains open. No Phase 2 benchmark manifest has been frozen, no paid
+cost pilot or declared matrix has run, and no aggregate architecture comparison
+has been published. Existing canonical MVP workspaces are legacy acceptance
+artifacts rather than Phase 2 benchmark records. The live handoff and exact
+environment constraints are recorded in `docs/phase2-status.md`.
+
+| Task | Status | Implemented outcome |
+| ---: | --- | --- |
+| 1 | Complete | Strict versioned scenario, evaluator, run-record, and manifest contracts with compatibility errors and model-visible/evaluator-only separation |
+| 2 | Complete | Deterministic composable evaluator primitives plus single-workspace and manifest offline CLIs |
+| 3 | Complete | Versioned scenario catalog, deterministic source writing, evaluator lookup, and shared invariants while retaining the clean baseline |
+| 4 | Complete | Retention, COGS/margin, and discount/refund root-cause scenarios with wrong-definition rejection tests |
+| 5 | Complete | Missing-day, partial-day, and three basic statistical scenarios with seeded sampling and data-quality calibration |
+| 6 | Complete | Channel-mix confounding scenario and catalog-wide correct/adversarial fixture regression suite |
+| 7 | Complete | Bounded generalist architecture sharing runtime, provenance, tools, and report contracts without specialist delegation |
+| 8 | Complete | Immutable resumable matrix runner, paid opt-in, cost pilot gate, failure isolation, and offline rescoring |
+| 9 | Complete | Deterministic denominator-preserving aggregation, uncertainty, paired comparisons, cost/latency, and failure reporting |
+| 10 | Pending | Freeze, pilot, execute, offline-evaluate, inspect, aggregate, and publish the real benchmark without changing frozen rules |
 
 ### Phase 2 implementation order
 
