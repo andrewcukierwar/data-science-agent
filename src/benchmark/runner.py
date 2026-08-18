@@ -43,13 +43,21 @@ from evaluation.contracts import (
     RunConfiguration,
     ScenarioReference,
     ScoreBreakdown,
+    SourceFileIdentity,
     UsageSummary,
+    WorkspaceIdentity,
 )
 from evaluation.engine import (
     ScenarioRules,
     dump_stable_json,
     evaluate_workspace,
     load_manifest,
+)
+from evaluation.workspace_identity import (
+    WorkspaceIdentityError,
+    persist_workspace_identity,
+    source_file_identities_for_roots,
+    verify_workspace_identity,
 )
 from scenarios import discover_scenarios
 from scenarios.catalog import ScenarioCatalog, ScenarioRegistration
@@ -506,10 +514,13 @@ class BenchmarkRunner:
                 if max_cells is not None and processed >= max_cells:
                     break
                 try:
-                    record = self._execute_cell(cell, manifest)
+                    cell, manifest = self._prepare_cell_sources(cell, manifest)
+                    record = self._execute_cell(cell, manifest, sources_prepared=True)
                 except KeyboardInterrupt:
                     interrupted = True
                     break
+                except WorkspaceIdentityError:
+                    raise
                 except Exception as error:  # noqa: BLE001
                     record = self._failure_record(cell, error, manifest)
                 existing_by_key[cell.key] = record
@@ -666,6 +677,18 @@ class BenchmarkRunner:
             workspace_path = Path(record.workspace_path)
             if not workspace_path.is_absolute():
                 workspace_path = base_dir / workspace_path
+            if record.lifecycle.status is LifecycleStatus.COMPLETED:
+                try:
+                    expected_identity = self._workspace_identity(
+                        manifest,
+                        self._cell_from_record(manifest, record, workspace_path),
+                        code_revision=record.code_revision,
+                    )
+                    verify_workspace_identity(workspace_path, expected_identity)
+                except WorkspaceIdentityError as error:
+                    raise BenchmarkError(
+                        f"offline rescore refused for {record.run_id}: {error}"
+                    ) from error
             try:
                 evaluation = evaluate_workspace(workspace_path, current_rules)
                 evaluator_result = evaluation.result
@@ -713,6 +736,79 @@ class BenchmarkRunner:
         """Expose the stable matrix for dry-run and test callers."""
 
         return self._cells(manifest)
+
+    @staticmethod
+    def _bind_source_files(
+        manifest: BenchmarkManifest,
+        cell: BenchmarkCell,
+        source_files: tuple[SourceFileIdentity, ...],
+    ) -> BenchmarkManifest:
+        """Freeze one scenario's generated source hashes into the manifest."""
+
+        references: list[ScenarioReference] = []
+        found = False
+        for reference in manifest.scenario_references:
+            if (
+                reference.scenario_id == cell.scenario.scenario_id
+                and reference.scenario_version == cell.scenario.scenario_version
+            ):
+                found = True
+                if reference.source_files and reference.source_files != source_files:
+                    raise WorkspaceIdentityError(
+                        "generated scenario sources do not match the manifest"
+                    )
+                references.append(
+                    reference.model_copy(update={"source_files": source_files})
+                )
+            else:
+                references.append(reference)
+        if not found:
+            raise WorkspaceIdentityError(
+                f"manifest does not declare {cell.scenario.scenario_id}"
+            )
+        values = manifest.model_dump(mode="json")
+        values["scenario_references"] = [
+            reference.model_dump(mode="json") for reference in references
+        ]
+        return BenchmarkManifest.model_validate(values)
+
+    def _workspace_identity(
+        self,
+        manifest: BenchmarkManifest,
+        cell: BenchmarkCell,
+        *,
+        code_revision: CodeRevision | None = None,
+    ) -> WorkspaceIdentity:
+        """Build the immutable identity expected for one benchmark workspace."""
+
+        reference = next(
+            (
+                item
+                for item in manifest.scenario_references
+                if item.scenario_id == cell.scenario.scenario_id
+                and item.scenario_version == cell.scenario.scenario_version
+            ),
+            None,
+        )
+        if reference is None or not reference.source_files:
+            raise WorkspaceIdentityError(
+                "manifest is missing generated source identity for "
+                f"{cell.scenario.scenario_id}@{cell.scenario.scenario_version}"
+            )
+        return WorkspaceIdentity(
+            benchmark_manifest_id=manifest.manifest_id,
+            run_id=cell.run_id,
+            scenario_id=cell.scenario.scenario_id,
+            scenario_version=cell.scenario.scenario_version,
+            evaluator_version=reference.evaluator_version,
+            architecture=cell.architecture,
+            repetition=cell.repetition,
+            seed=reference.seed,
+            source_files=reference.source_files,
+            code_revision=(
+                self.code_revision if code_revision is None else code_revision
+            ),
+        )
 
     def _cells(self, manifest: BenchmarkManifest) -> tuple[BenchmarkCell, ...]:
         configured_ids = manifest.run_configuration.parameters.get("cell_run_ids", {})
@@ -767,17 +863,32 @@ class BenchmarkRunner:
             raise BenchmarkError("manifest resolves duplicate immutable run IDs")
         return tuple(cells)
 
-    def _execute_cell(
+    def _prepare_cell_sources(
         self,
         cell: BenchmarkCell,
         manifest: BenchmarkManifest,
-    ) -> BenchmarkRunRecord:
+    ) -> tuple[BenchmarkCell, BenchmarkManifest]:
+        """Prepare deterministic sources and freeze their hashes in the manifest."""
+
         inputs_source, docs_source = self.source_preparer(
             cell.scenario,
             cell.inputs_source.parent,
         )
-        cell = replace(cell, inputs_source=inputs_source, docs_source=docs_source)
+        prepared = replace(cell, inputs_source=inputs_source, docs_source=docs_source)
+        source_files = source_file_identities_for_roots(inputs_source, docs_source)
+        return prepared, self._bind_source_files(manifest, prepared, source_files)
+
+    def _execute_cell(
+        self,
+        cell: BenchmarkCell,
+        manifest: BenchmarkManifest,
+        *,
+        sources_prepared: bool = False,
+    ) -> BenchmarkRunRecord:
+        if not sources_prepared:
+            cell, manifest = self._prepare_cell_sources(cell, manifest)
         workspace_manager = WorkspaceManager(cell.workspace_path.parent)
+        workspace_exists = cell.workspace_path.exists()
         if cell.workspace_path.exists():
             workspace = workspace_manager.open_workspace(cell.run_id)
         else:
@@ -786,6 +897,11 @@ class BenchmarkRunner:
                 inputs_source=cell.inputs_source,
                 docs_source=cell.docs_source,
             )
+        identity = self._workspace_identity(manifest, cell)
+        if workspace_exists:
+            verify_workspace_identity(workspace, identity)
+        else:
+            persist_workspace_identity(workspace, identity)
         raw_result = self._call_architecture(cell, workspace, manifest)
         outcome = self._coerce_result(raw_result, workspace)
         if outcome.lifecycle.status is LifecycleStatus.COMPLETED:

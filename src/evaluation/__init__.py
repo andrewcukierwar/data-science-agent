@@ -37,8 +37,10 @@ from evaluation.contracts import (
     ScenarioMetadata,
     ScenarioReference,
     ScoreBreakdown,
+    SourceFileIdentity,
     UncertaintyInterval,
     UsageSummary,
+    WorkspaceIdentity,
     WorkspaceVersionCompatibilityError,
     check_workspace_version_compatibility,
 )
@@ -78,6 +80,12 @@ from evaluation.rules import (
     no_effect_experiment_rules,
     partial_latest_day_rules,
     rules_for_scenario,
+)
+from evaluation.workspace_identity import (
+    WorkspaceIdentityError,
+    load_workspace_identity,
+    persist_workspace_identity,
+    verify_workspace_identity,
 )
 
 __all__ = [
@@ -120,8 +128,11 @@ __all__ = [
     "ScenarioMetadata",
     "ScenarioReference",
     "ScoreBreakdown",
+    "SourceFileIdentity",
     "UsageSummary",
     "UncertaintyInterval",
+    "WorkspaceIdentity",
+    "WorkspaceIdentityError",
     "WorkspaceVersionCompatibilityError",
     "check_workspace_version_compatibility",
     "canonical_rules",
@@ -143,6 +154,7 @@ __all__ = [
     "evaluate_task_completeness",
     "evaluate_unsupported_claims",
     "load_manifest",
+    "load_workspace_identity",
     "load_workspace_snapshot",
     "immaterial_experiment_rules",
     "meaningful_experiment_rules",
@@ -150,4 +162,6 @@ __all__ = [
     "no_effect_experiment_rules",
     "partial_latest_day_rules",
     "rules_for_scenario",
+    "persist_workspace_identity",
+    "verify_workspace_identity",
 ]

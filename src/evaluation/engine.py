@@ -15,6 +15,7 @@ from evaluation.contracts import (
     EvaluatorResult,
     EvaluatorStatus,
     ScoreBreakdown,
+    WorkspaceIdentity,
     check_workspace_version_compatibility,
 )
 from evaluation.primitives import (
@@ -31,6 +32,11 @@ from evaluation.primitives import (
     evaluate_statistics,
     evaluate_task_completeness,
     evaluate_unsupported_claims,
+)
+from evaluation.workspace_identity import (
+    verify_workspace_identity,
+    verify_workspace_identity_integrity,
+    workspace_identity_path,
 )
 from orchestration.ledger import AnalysisLedger
 from scenarios.definitions.models import GroundTruthMetric
@@ -146,10 +152,16 @@ def _score_checks(checks: Sequence[EvaluationCheck]) -> ScoreBreakdown:
 def evaluate_workspace(
     workspace: Workspace | str | Path,
     rules: ScenarioRules,
+    *,
+    expected_identity: WorkspaceIdentity | None = None,
 ) -> OfflineEvaluation:
     """Evaluate one persisted workspace using only deterministic primitives."""
 
     snapshot = load_workspace_snapshot(workspace)
+    if expected_identity is not None:
+        verify_workspace_identity(snapshot.workspace, expected_identity)
+    elif workspace_identity_path(snapshot.workspace).is_file():
+        verify_workspace_identity_integrity(snapshot.workspace)
     state = snapshot.state
     checks: list[EvaluationCheck] = []
     checks.extend(evaluate_lifecycle(state))
@@ -278,7 +290,29 @@ def evaluate_manifest(
         workspace_path = Path(record.workspace_path)
         if workspace_base_dir is not None and not workspace_path.is_absolute():
             workspace_path = Path(workspace_base_dir) / workspace_path
-        evaluation = evaluate_workspace(workspace_path, rules)
+        reference = next(
+            item
+            for item in manifest.scenario_references
+            if item.scenario_id == record.scenario_id
+            and item.scenario_version == record.scenario_version
+        )
+        expected_identity = WorkspaceIdentity(
+            benchmark_manifest_id=manifest.manifest_id,
+            run_id=record.run_id,
+            scenario_id=record.scenario_id,
+            scenario_version=record.scenario_version,
+            evaluator_version=record.evaluator_version,
+            architecture=record.architecture,
+            repetition=record.repetition,
+            seed=record.seed,
+            source_files=reference.source_files,
+            code_revision=record.code_revision,
+        )
+        evaluation = evaluate_workspace(
+            workspace_path,
+            rules,
+            expected_identity=expected_identity,
+        )
         if evaluation.snapshot.state.run_id != record.run_id:
             raise ValueError(
                 f"workspace run ID {evaluation.snapshot.state.run_id} does not match "

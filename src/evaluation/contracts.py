@@ -16,10 +16,17 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 
 from scenarios.definitions.models import GroundTruthMetric, InjectedCondition
 from schemas.metrics import MetricComparisonType
@@ -351,6 +358,57 @@ class CodeRevision(ContractModel):
     dirty: bool = False
 
 
+class SourceFileIdentity(ContractModel):
+    """Hash and path identity for one immutable workspace source file."""
+
+    path: NonEmptyString
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=0)
+
+    @field_validator("path")
+    @classmethod
+    def path_is_an_approved_workspace_source(cls, value: str) -> str:
+        normalized = value.replace("\\", "/")
+        path = PurePosixPath(normalized)
+        if (
+            not path.parts
+            or path.is_absolute()
+            or ".." in path.parts
+            or normalized.startswith("./")
+            or (len(normalized) > 1 and normalized[1] == ":")
+            or path.parts[0] not in {"inputs", "docs"}
+            or len(path.parts) < 2
+        ):
+            raise ValueError(
+                "workspace source identity path must be a file under inputs/ or docs/"
+            )
+        return path.as_posix()
+
+
+class WorkspaceIdentity(ContractModel):
+    """Cryptographic identity binding a benchmark workspace to its generator."""
+
+    contract_version: Literal[EVALUATION_CONTRACT_VERSION] = EVALUATION_CONTRACT_VERSION
+    identity_version: Literal["1.0"] = "1.0"
+    benchmark_manifest_id: NonEmptyString
+    run_id: NonEmptyString
+    scenario_id: NonEmptyString
+    scenario_version: VersionString
+    evaluator_version: VersionString
+    architecture: NonEmptyString
+    repetition: int = Field(ge=1)
+    seed: int = Field(ge=0)
+    source_files: tuple[SourceFileIdentity, ...] = Field(min_length=1)
+    code_revision: CodeRevision | None = None
+
+    @model_validator(mode="after")
+    def source_paths_are_unique(self) -> WorkspaceIdentity:
+        paths = [item.path for item in self.source_files]
+        if len(paths) != len(set(paths)):
+            raise ValueError("workspace source identity paths must be unique")
+        return self
+
+
 class BenchmarkRunRecord(ContractModel):
     """Immutable raw record for one scenario/architecture repetition."""
 
@@ -414,6 +472,7 @@ class ScenarioReference(ContractModel):
     scenario_version: VersionString
     evaluator_version: VersionString
     seed: int = Field(ge=0)
+    source_files: tuple[SourceFileIdentity, ...] = Field(default_factory=tuple)
 
 
 class UncertaintyInterval(ContractModel):
@@ -961,9 +1020,11 @@ __all__ = [
     "ScenarioMetadata",
     "ScenarioReference",
     "ScoreBreakdown",
+    "SourceFileIdentity",
     "SUPPORTED_WORKSPACE_VERSIONS",
     "UncertaintyInterval",
     "UsageSummary",
+    "WorkspaceIdentity",
     "WorkspaceVersionCompatibilityError",
     "check_workspace_version_compatibility",
     "workspace_state_path",

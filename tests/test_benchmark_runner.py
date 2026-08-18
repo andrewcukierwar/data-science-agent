@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,10 @@ from evaluation.contracts import (
     ScoreBreakdown,
 )
 from evaluation.engine import ScenarioRules, load_manifest
+from evaluation.workspace_identity import (
+    load_workspace_identity,
+    workspace_identity_path,
+)
 
 FIXED_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 SCENARIO_ID = "meaningful-ab-treatment-effect"
@@ -357,3 +362,48 @@ def test_cost_pilot_is_persisted_and_required_before_full_resume(tmp_path):
     assert full.manifest.status.value == "complete"
     assert len(full.skipped_run_ids) == 1
     assert len(calls) == 3
+
+
+def test_benchmark_workspace_persists_manifest_bound_source_identity(tmp_path):
+    runner = _runner(tmp_path, lambda cell, _workspace: _completed(cell))
+    manifest_path = _plan(runner, tmp_path)
+
+    summary = runner.execute(manifest_path, max_cells=1)
+    record = summary.manifest.run_records[0]
+    reference = summary.manifest.scenario_references[0]
+    identity = load_workspace_identity(record.workspace_path)
+
+    assert reference.source_files
+    assert identity.source_files == reference.source_files
+    assert identity.benchmark_manifest_id == summary.manifest.manifest_id
+    assert identity.run_id == record.run_id
+    assert identity.scenario_id == record.scenario_id
+    assert identity.seed == record.seed
+    assert workspace_identity_path(record.workspace_path).is_file()
+
+
+def test_offline_rescore_refuses_tampered_workspace_source(tmp_path):
+    runner = _runner(tmp_path, lambda cell, _workspace: _completed(cell))
+    manifest_path = _plan(runner, tmp_path)
+    runner.execute(manifest_path, max_cells=1)
+    record = load_manifest(manifest_path).run_records[0]
+    source_path = Path(record.workspace_path) / "inputs" / "fixture.parquet"
+    source_path.chmod(0o644)
+    source_path.write_bytes(b"tampered fixture")
+
+    with pytest.raises(BenchmarkError, match="offline rescore refused"):
+        runner.rescore(manifest_path, output_path=tmp_path / "rescored.json")
+
+
+def test_offline_rescore_refuses_tampered_workspace_metadata(tmp_path):
+    runner = _runner(tmp_path, lambda cell, _workspace: _completed(cell))
+    manifest_path = _plan(runner, tmp_path)
+    runner.execute(manifest_path, max_cells=1)
+    record = load_manifest(manifest_path).run_records[0]
+    identity_path = workspace_identity_path(record.workspace_path)
+    payload = json.loads(identity_path.read_text(encoding="utf-8"))
+    payload["scenario_id"] = "tampered-scenario"
+    identity_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BenchmarkError, match="offline rescore refused"):
+        runner.rescore(manifest_path, output_path=tmp_path / "rescored.json")
