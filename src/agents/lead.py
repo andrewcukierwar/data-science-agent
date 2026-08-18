@@ -15,7 +15,7 @@ from agents import (
     ToolOutputText,
     function_tool,
 )
-from agents.evidence import has_source_lineage
+from agents.evidence import executed_references, has_source_lineage
 from agents.runtime import (
     DEFAULT_AGENT_TURN_LIMITS,
     AgentRole,
@@ -425,28 +425,9 @@ create_lead_agent = build_lead_agent
 
 
 def _executed_references(ledger: AnalysisLedger) -> set[str]:
-    references = {event.id for event in ledger.tool_events}
-    for event in ledger.tool_events:
-        references.update(event.artifact_refs)
-        references.update(
-            value
-            for key in (
-                "query_id",
-                "query_path",
-                "script_id",
-                "script_path",
-            )
-            if isinstance(value := event.arguments.get(key), str)
-        )
-        if event.output is not None:
-            generated_refs = event.output.get("generated_evidence_refs", [])
-            if isinstance(generated_refs, list):
-                references.update(
-                    value for value in generated_refs if isinstance(value, str)
-                )
-    references.update(artifact.id for artifact in ledger.artifacts)
-    references.update(artifact.path for artifact in ledger.artifacts)
-    return references
+    """Return only evidence references backed by successful execution/artifacts."""
+
+    return executed_references(ledger)
 
 
 def _finding_reference_aliases(ledger: AnalysisLedger) -> dict[str, list[Finding]]:

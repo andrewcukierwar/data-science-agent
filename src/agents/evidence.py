@@ -3,31 +3,131 @@
 from __future__ import annotations
 
 import re
+from hashlib import sha256
 from pathlib import Path
 
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import Finding
+from schemas.run_state import ToolEventStatus
+
+
+def _event_references(event: object) -> set[str]:
+    """Return references emitted by one tool event, regardless of status."""
+
+    references = {event.id}
+    references.update(
+        event.artifact_refs
+        if isinstance(getattr(event, "artifact_refs", None), list)
+        else ()
+    )
+    arguments = getattr(event, "arguments", {})
+    references.update(
+        value
+        for key in ("query_id", "query_path", "script_id", "script_path")
+        if isinstance(value := arguments.get(key), str)
+    )
+    output = getattr(event, "output", None)
+    if isinstance(output, dict):
+        generated_refs = output.get("generated_evidence_refs", [])
+        if isinstance(generated_refs, list):
+            references.update(
+                value for value in generated_refs if isinstance(value, str)
+            )
+    return references
+
+
+def successful_tool_events(ledger: AnalysisLedger) -> tuple[object, ...]:
+    """Return only tool events that completed successfully."""
+
+    return tuple(
+        event
+        for event in ledger.tool_events
+        if event.status is ToolEventStatus.SUCCEEDED
+    )
+
+
+def evidence_events(
+    ledger: AnalysisLedger,
+    references: list[str],
+) -> tuple[object, ...]:
+    """Resolve evidence references to successful tool events only."""
+
+    reference_set = set(references)
+    reference_set.update(
+        artifact.path for artifact in ledger.artifacts if artifact.id in reference_set
+    )
+    return tuple(
+        event
+        for event in successful_tool_events(ledger)
+        if _event_references(event).intersection(reference_set)
+    )
+
+
+def _artifact_is_verified(ledger: AnalysisLedger, artifact: object) -> bool:
+    """Verify a persisted artifact without importing the artifact manager."""
+
+    root = ledger.state_path.parent.parent.resolve()
+    relative_path = getattr(artifact, "path", "")
+    path_parts = Path(relative_path).parts if relative_path else ()
+    if not path_parts or path_parts[0] not in {"working", "outputs"}:
+        return False
+    raw_candidate = root / relative_path
+    try:
+        raw_candidate.relative_to(root)
+    except ValueError:
+        return False
+    current = root
+    for part in path_parts:
+        current /= part
+        if current.is_symlink():
+            return False
+    try:
+        candidate = raw_candidate.resolve(strict=True)
+        candidate.relative_to(root)
+        candidate.relative_to(root / path_parts[0])
+    except (IndexError, OSError, ValueError):
+        return False
+    if not candidate.is_file():
+        return False
+    digest = sha256()
+    size_bytes = 0
+    try:
+        with candidate.open("rb") as artifact_file:
+            while chunk := artifact_file.read(1024 * 1024):
+                digest.update(chunk)
+                size_bytes += len(chunk)
+    except OSError:
+        return False
+    return digest.hexdigest() == artifact.sha256 and size_bytes == artifact.size_bytes
 
 
 def executed_references(ledger: AnalysisLedger) -> set[str]:
-    """Return exact references emitted by approved tools or saved artifacts."""
+    """Return references backed by successful tools or verified artifacts.
 
-    references = {event.id for event in ledger.tool_events}
-    for event in ledger.tool_events:
-        references.update(event.artifact_refs)
-        references.update(
-            value
-            for key in ("query_id", "query_path", "script_id", "script_path")
-            if isinstance(value := event.arguments.get(key), str)
-        )
-        if event.output is not None:
-            generated_refs = event.output.get("generated_evidence_refs", [])
-            if isinstance(generated_refs, list):
-                references.update(
-                    value for value in generated_refs if isinstance(value, str)
-                )
-    references.update(artifact.id for artifact in ledger.artifacts)
-    references.update(artifact.path for artifact in ledger.artifacts)
+    Failed events never contribute event IDs, paths, arguments, or generated
+    evidence. A registered artifact may establish evidence only when its file
+    still verifies and it is not exclusively associated with failed events.
+    """
+
+    successful_events = successful_tool_events(ledger)
+    failed_events = tuple(
+        event
+        for event in ledger.tool_events
+        if event.status is not ToolEventStatus.SUCCEEDED
+    )
+    successful_refs = set().union(
+        *(_event_references(event) for event in successful_events)
+    )
+    failed_refs = set().union(*(_event_references(event) for event in failed_events))
+    references = set(successful_refs)
+    for artifact in ledger.artifacts:
+        artifact_refs = {artifact.id, artifact.path}
+        if artifact_refs.intersection(failed_refs) and not artifact_refs.intersection(
+            successful_refs
+        ):
+            continue
+        if _artifact_is_verified(ledger, artifact):
+            references.update(artifact_refs)
     return references
 
 
@@ -171,27 +271,21 @@ def has_source_lineage(ledger: AnalysisLedger, references: list[str]) -> bool:
     ]
     event_references = set(references)
     event_references.update(artifact.path for artifact in referenced_artifacts)
+    known_event_references = set().union(
+        *(_event_references(event) for event in ledger.tool_events)
+    )
     events = [
         event
-        for event in ledger.tool_events
-        if any(
-            reference
-            in {
-                event.id,
-                *event.artifact_refs,
-                *(
-                    value
-                    for value in event.arguments.values()
-                    if isinstance(value, str)
-                ),
-            }
-            for reference in event_references
-        )
+        for event in successful_tool_events(ledger)
+        if _event_references(event).intersection(event_references)
     ]
-    if referenced_artifacts and not events:
+    has_known_reference = event_references.intersection(known_event_references)
+    if (referenced_artifacts or has_known_reference) and not events:
         # A checksum proves file integrity, not that the file was produced by
-        # an approved execution. Require a tool-event relationship before an
-        # artifact can be the sole provenance of a material claim.
+        # a successful approved execution. Require a successful tool-event
+        # relationship before an artifact or failed event can be provenance.
+        return False
+    if not referenced_artifacts and not has_known_reference:
         return False
     inspected_sql = False
     inspected_python = False

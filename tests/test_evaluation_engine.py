@@ -9,6 +9,7 @@ from pathlib import Path
 from evaluation.contracts import (
     BenchmarkManifest,
     BudgetConfiguration,
+    EvaluationCheckStatus,
     ExecutionMode,
     RunConfiguration,
     ScenarioReference,
@@ -19,6 +20,7 @@ from evaluation.primitives import (
     TaskCompletenessPolicy,
     compile_final_metric_set,
     evaluate_numeric_comparisons,
+    evaluate_provenance,
     evaluate_root_cause,
     evaluate_unsupported_claims,
     numeric_ground_truth_failures,
@@ -27,8 +29,9 @@ from evaluation.rules import canonical_rules
 from orchestration.ledger import AnalysisLedger
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
 from schemas.audit import AuditStatus
+from schemas.findings import ConfidenceLevel, Finding
 from schemas.metrics import MetricComparison
-from schemas.run_state import RunStatus
+from schemas.run_state import RunStatus, ToolEvent, ToolEventStatus
 from tools.workspace import WorkspaceManager
 
 
@@ -161,6 +164,54 @@ def test_repeated_offline_evaluation_is_byte_stable(tmp_path: Path) -> None:
     assert first.result.evaluated_at == datetime.fromisoformat(
         first.result.evaluated_at.isoformat()
     ).astimezone(UTC)
+
+
+def test_offline_provenance_rejects_failed_event_even_with_unrelated_success(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(
+        "provenance-status"
+    )
+    ledger = AnalysisLedger(workspace, run_id="provenance-status", objective="Measure")
+    stamp = datetime(2026, 8, 18, 12, 0, tzinfo=UTC)
+    ledger.append_tool_event(
+        ToolEvent(
+            id="tool-failed",
+            tool_name="run_sql",
+            status=ToolEventStatus.FAILED,
+            started_at=stamp,
+            completed_at=stamp,
+            artifact_refs=["working/queries/failed.sql"],
+            error="query failed",
+        )
+    )
+    ledger.append_tool_event(
+        ToolEvent(
+            id="tool-unrelated",
+            tool_name="run_sql",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=stamp,
+            completed_at=stamp,
+            artifact_refs=["working/queries/unrelated.sql"],
+        )
+    )
+    ledger.add_finding(
+        Finding(
+            id="F-FAILED",
+            statement="The failed query measured the value.",
+            metric="value",
+            value=1.0,
+            evidence_refs=["tool-failed"],
+            confidence=ConfidenceLevel.HIGH,
+        )
+    )
+
+    checks = evaluate_provenance(workspace, ledger.state, "")
+    finding_check = next(
+        check for check in checks if check.check_id == "provenance:finding:F-FAILED"
+    )
+
+    assert finding_check.status is EvaluationCheckStatus.FAIL
 
 
 def test_batch_cli_is_offline_and_does_not_overwrite_manifest(tmp_path: Path) -> None:

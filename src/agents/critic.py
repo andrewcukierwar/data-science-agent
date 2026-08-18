@@ -6,7 +6,7 @@ from math import isclose
 from pathlib import Path
 
 from agents import Agent, Runner
-from agents.evidence import has_source_lineage
+from agents.evidence import evidence_events, has_source_lineage
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.budgets import BudgetResource
@@ -437,23 +437,7 @@ def _events_for_evidence(
 ) -> list[object]:
     """Resolve direct tool-event, path, and artifact evidence references."""
 
-    return [
-        event
-        for event in ledger.tool_events
-        if any(
-            reference
-            in {
-                event.id,
-                *event.artifact_refs,
-                *(
-                    value
-                    for value in event.arguments.values()
-                    if isinstance(value, str)
-                ),
-            }
-            for reference in references
-        )
-    ]
+    return list(evidence_events(ledger, references))
 
 
 def _event_metric_comparisons(event: object) -> list[MetricComparison]:

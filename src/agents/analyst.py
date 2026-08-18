@@ -277,9 +277,7 @@ def _persist_analyst_artifacts(
 ) -> None:
     """Register model-listed files only when execution returned their refs."""
 
-    executed_refs = {
-        reference for event in ledger.tool_events for reference in event.artifact_refs
-    }
+    executed_refs = executed_references(ledger)
 
     for path in result.artifacts:
         if artifact_manager.ledger.get_artifact(path) is not None:

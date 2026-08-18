@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from agents import AgentRole, AgentRunConfig, AgentRunContext
 from agents.analyst import persist_analyst_result
@@ -13,6 +14,7 @@ from agents.critic import (
     run_critic,
     validate_candidate_evidence_provenance,
 )
+from agents.evidence import executed_references
 from agents.lead import persist_lead_result
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
@@ -291,6 +293,181 @@ def test_values_only_sql_cannot_be_sole_material_provenance(tmp_path: Path) -> N
     assert validation is not None
     assert validation.status is ValidationStatus.REVISE
     assert validation.issues[0].category == "evidence_provenance"
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "event_id", "reference", "source"),
+    (
+        (
+            "run_sql",
+            "tool-failed-sql",
+            "working/queries/failed.sql",
+            "SELECT * FROM customers;",
+        ),
+        (
+            "run_python",
+            "tool-failed-python",
+            "working/scripts/failed.py",
+            (
+                "import pandas as pd\n"
+                "pd.read_parquet('/workspace/inputs/customers.parquet')"
+            ),
+        ),
+    ),
+)
+def test_failed_tool_execution_cannot_establish_material_evidence(
+    tmp_path: Path,
+    tool_name: str,
+    event_id: str,
+    reference: str,
+    source: str,
+) -> None:
+    context = _context(tmp_path, AgentRole.CRITIC)
+    evidence_path = context.workspace.root / reference
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(source, encoding="utf-8")
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id=event_id,
+            tool_name=tool_name,
+            status=ToolEventStatus.FAILED,
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            arguments={
+                "query_path" if tool_name == "run_sql" else "script_path": reference
+            },
+            artifact_refs=[reference],
+            error=f"{tool_name} failed",
+        )
+    )
+
+    validation = validate_candidate_evidence_provenance(
+        CriticCandidate(
+            objective="Assess the measured value.",
+            answer="The value is supported by the failed execution.",
+            findings=[
+                Finding(
+                    id="F-FAILED-TOOL",
+                    statement="The failed execution measured the value.",
+                    metric="value",
+                    value=1.0,
+                    evidence_refs=[event_id],
+                    confidence=ConfidenceLevel.HIGH,
+                )
+            ],
+        ),
+        context.ledger,
+    )
+
+    assert event_id not in executed_references(context.ledger)
+    assert validation is not None
+    assert validation.status is ValidationStatus.REVISE
+
+
+def test_failed_artifact_cannot_establish_material_evidence(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path, AgentRole.CRITIC)
+    artifact_path = context.workspace.working / "results" / "failed.csv"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("metric,value\ncac,0.3\n", encoding="utf-8")
+    artifact = context.artifact_manager.register(
+        "working/results/failed.csv",
+        artifact_id="failed-artifact",
+    )
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-failed-artifact",
+            tool_name="run_python",
+            status=ToolEventStatus.FAILED,
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            arguments={"script_path": "working/scripts/failed.py"},
+            output={"generated_evidence_refs": [artifact.path]},
+            artifact_refs=[artifact.path],
+            error="Python execution failed after writing the file",
+        )
+    )
+
+    validation = validate_candidate_evidence_provenance(
+        CriticCandidate(
+            objective="Assess the measured value.",
+            answer="The failed artifact supports the value.",
+            findings=[
+                Finding(
+                    id="F-FAILED-ARTIFACT",
+                    statement="The failed artifact contains the measured value.",
+                    metric="cac",
+                    value=0.3,
+                    evidence_refs=[artifact.id],
+                    confidence=ConfidenceLevel.HIGH,
+                )
+            ],
+        ),
+        context.ledger,
+    )
+
+    assert artifact.id not in executed_references(context.ledger)
+    assert validation is not None
+    assert validation.status is ValidationStatus.REVISE
+
+
+def test_unrelated_success_does_not_rescue_failed_evidence(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path, AgentRole.CRITIC)
+    failed_path = context.workspace.working / "queries" / "failed.sql"
+    unrelated_path = context.workspace.working / "queries" / "unrelated.sql"
+    failed_path.parent.mkdir(parents=True, exist_ok=True)
+    failed_path.write_text("SELECT * FROM customers;", encoding="utf-8")
+    unrelated_path.write_text("SELECT 1;", encoding="utf-8")
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-failed-query",
+            tool_name="run_sql",
+            status=ToolEventStatus.FAILED,
+            started_at=stamp,
+            completed_at=stamp,
+            arguments={"query_path": "working/queries/failed.sql"},
+            artifact_refs=["working/queries/failed.sql"],
+            error="query failed",
+        )
+    )
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-unrelated-success",
+            tool_name="run_sql",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=stamp,
+            completed_at=stamp,
+            arguments={"query_path": "working/queries/unrelated.sql"},
+            artifact_refs=["working/queries/unrelated.sql"],
+        )
+    )
+
+    validation = validate_candidate_evidence_provenance(
+        CriticCandidate(
+            objective="Assess the measured value.",
+            answer="The failed query is supported because another query succeeded.",
+            findings=[
+                Finding(
+                    id="F-UNRELATED-SUCCESS",
+                    statement="The failed query measured the value.",
+                    metric="value",
+                    value=1.0,
+                    evidence_refs=["tool-failed-query"],
+                    confidence=ConfidenceLevel.HIGH,
+                )
+            ],
+        ),
+        context.ledger,
+    )
+
+    assert "tool-unrelated-success" in executed_references(context.ledger)
+    assert "tool-failed-query" not in executed_references(context.ledger)
+    assert validation is not None
+    assert validation.status is ValidationStatus.REVISE
 
 
 def test_values_only_cte_cannot_claim_an_approved_relation(tmp_path: Path) -> None:

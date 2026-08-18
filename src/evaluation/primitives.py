@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from math import isclose, isfinite
 
+from agents.evidence import executed_references
 from evaluation.contracts import EvaluationCheck, EvaluationCheckStatus
 from orchestration.ledger import AnalysisLedger
 from scenarios.definitions.models import GroundTruthMetric
@@ -641,14 +642,10 @@ def _evaluate_statistical_assessment(
     )
 
 
-def _evidence_refs(state: AnalysisRunState) -> set[str]:
-    refs = {event.id for event in state.tool_events}
-    refs.update(
-        reference for event in state.tool_events for reference in event.artifact_refs
-    )
-    refs.update(artifact.id for artifact in state.artifacts)
-    refs.update(artifact.path for artifact in state.artifacts)
-    return refs
+def _evidence_refs(workspace: Workspace) -> set[str]:
+    """Resolve only successful and verified persisted evidence references."""
+
+    return executed_references(AnalysisLedger(workspace))
 
 
 def _successful_tool_events(state: AnalysisRunState, tool_name: str):
@@ -724,7 +721,7 @@ def evaluate_provenance(
                 )
             )
 
-    refs = _evidence_refs(state)
+    refs = _evidence_refs(workspace)
     for finding in state.findings:
         checks.append(
             _check(
