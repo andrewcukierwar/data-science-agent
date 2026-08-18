@@ -13,6 +13,7 @@ import pandas as pd
 from scenarios.definitions.models import GroundTruthMetric
 from schemas.metrics import (
     MetricComparison,
+    metric_definition_contexts_match,
     normalize_metric_comparison,
     normalize_metric_dimensions,
     normalize_metric_key,
@@ -447,6 +448,16 @@ def check_metric_identities(
             normalize_metric_period(metric.comparison_period),
             metric.comparison_type.value,
             normalize_metric_unit(metric.value_unit, metric.comparison_type),
+            tuple(
+                sorted(
+                    (key, value.lower())
+                    for key, value in (
+                        metric.definition_context.model_dump(exclude_none=True).items()
+                        if metric.definition_context is not None
+                        else {}
+                    )
+                )
+            ),
         )
         identities.append(identity)
         if not isfinite(metric.expected_relative_change) or not isfinite(
@@ -491,6 +502,10 @@ def check_observable_ground_truth(
             and item.comparison_type is metric.comparison_type
             and item.unit
             == normalize_metric_unit(metric.value_unit, metric.comparison_type)
+            and metric_definition_contexts_match(
+                item.definition_context,
+                metric.definition_context,
+            )
         ]
         invariant_id = f"ground_truth:{metric.id}"
         if not matches:

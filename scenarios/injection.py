@@ -74,7 +74,7 @@ class ScenarioRun:
 
     dataset: SyntheticEcommerceDataset
     definition: ScenarioDefinition
-    injection_config: CanonicalScenarioInjectionConfig
+    injection_config: BaseModel
 
 
 class CanonicalProfitabilityScenarioInjector:
@@ -566,6 +566,7 @@ def observe_canonical_ground_truth(
             value=changes[metric.metric_key],
             unit=metric.value_unit,
             evidence_refs=[f"generated-ground-truth:{metric.id}"],
+            definition_context=metric.definition_context,
         )
         for metric in CANONICAL_PROFITABILITY_SCENARIO.ground_truth
     )

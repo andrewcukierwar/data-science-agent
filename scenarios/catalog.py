@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -13,12 +13,16 @@ from evaluation.contracts import (
     ScenarioMetadata,
 )
 from evaluation.engine import ScenarioRules
-from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
-from scenarios.definitions.models import ScenarioModelContext
+from scenarios.definitions import (
+    BUSINESS_ROOT_CAUSE_SCENARIOS,
+    CANONICAL_PROFITABILITY_SCENARIO,
+)
+from scenarios.definitions.models import ScenarioDefinition, ScenarioModelContext
 from scenarios.invariants import (
     ScenarioInvariantSuite,
     synthetic_ecommerce_invariant_suite,
 )
+from schemas.metrics import MetricComparison
 
 if TYPE_CHECKING:
     from scenarios.injection import ScenarioRun
@@ -255,13 +259,84 @@ def _canonical_registration() -> ScenarioRegistration:
     )
 
 
+def _business_registration(
+    definition: ScenarioDefinition,
+    *,
+    generator_name: str,
+    generator: ScenarioGenerator,
+    evaluator_name: str,
+    evaluator: ScenarioEvaluator,
+    metric_observer: Callable[[object], Sequence[MetricComparison]],
+) -> ScenarioRegistration:
+    return ScenarioRegistration(
+        metadata=definition.to_metadata(),
+        evaluation_spec=definition.to_evaluation_spec(),
+        model_visible_context=definition.model_visible_context(),
+        generator_name=generator_name,
+        generator=generator,
+        evaluator_name=evaluator_name,
+        evaluator=evaluator,
+        invariant_suite=synthetic_ecommerce_invariant_suite(
+            expected_metrics=definition.ground_truth,
+            metric_observer=metric_observer,
+        ),
+    )
+
+
+def _business_registrations() -> tuple[ScenarioRegistration, ...]:
+    from evaluation.rules import (
+        cogs_margin_rules,
+        discount_refund_rules,
+        retention_rules,
+    )
+    from scenarios.business_scenarios import (
+        generate_cogs_margin_deterioration_scenario,
+        generate_discount_refund_deterioration_scenario,
+        generate_retention_deterioration_scenario,
+        observe_cogs_margin_ground_truth,
+        observe_discount_refund_ground_truth,
+        observe_retention_ground_truth,
+    )
+
+    definitions = {
+        definition.scenario_id: definition
+        for definition in BUSINESS_ROOT_CAUSE_SCENARIOS
+    }
+    return (
+        _business_registration(
+            definitions["retention-q2-deterioration"],
+            generator_name="generate_retention_deterioration_scenario",
+            generator=generate_retention_deterioration_scenario,
+            evaluator_name="retention_rules",
+            evaluator=retention_rules,
+            metric_observer=observe_retention_ground_truth,
+        ),
+        _business_registration(
+            definitions["cogs-q2-margin-deterioration"],
+            generator_name="generate_cogs_margin_deterioration_scenario",
+            generator=generate_cogs_margin_deterioration_scenario,
+            evaluator_name="cogs_margin_rules",
+            evaluator=cogs_margin_rules,
+            metric_observer=observe_cogs_margin_ground_truth,
+        ),
+        _business_registration(
+            definitions["discount-refund-q2-deterioration"],
+            generator_name="generate_discount_refund_deterioration_scenario",
+            generator=generate_discount_refund_deterioration_scenario,
+            evaluator_name="discount_refund_rules",
+            evaluator=discount_refund_rules,
+            metric_observer=observe_discount_refund_ground_truth,
+        ),
+    )
+
+
 def discover_scenarios() -> ScenarioCatalog:
     """Discover all built-in versioned scenario registrations."""
 
     # Keep discovery explicit and deterministic until the catalog is large
     # enough to justify module scanning. Duplicate keys are rejected by the
     # catalog constructor rather than silently shadowed.
-    return ScenarioCatalog((_canonical_registration(),))
+    return ScenarioCatalog((_canonical_registration(), *_business_registrations()))
 
 
 def get_scenario(

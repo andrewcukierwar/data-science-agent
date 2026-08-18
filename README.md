@@ -66,5 +66,10 @@ scenario = get_scenario("canonical-q2-profitability", "1.0")
 run = scenario.generate_validated()
 ```
 
+The built-in catalog also includes `retention-q2-deterioration`,
+`cogs-q2-margin-deterioration`, and `discount-refund-q2-deterioration`, each at
+version `1.0` with its own deterministic generator, evaluator, and invariant
+suite.
+
 The clean synthetic ecommerce baseline remains independently available through
 `SyntheticEcommerceGenerator` and `validate_synthetic_ecommerce_baseline`.

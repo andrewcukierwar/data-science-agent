@@ -314,8 +314,15 @@ _CONTEXT_ANCHORS = {
         "marketing_spend": ("marketing spend", "ad spend"),
         "converted_sessions": ("converted sessions", "conversions"),
         "acquired_customers": ("acquired customers", "new customers"),
+        "retained_customers": (
+            "retained customers",
+            "repeat customers",
+            "second order",
+        ),
         "net_revenue": ("net revenue",),
         "cogs": ("cogs", "cost of goods"),
+        "discount": ("discount", "discounts"),
+        "refund": ("refund", "refunds"),
         "contribution": ("contribution",),
     },
     "denominator": {
@@ -323,6 +330,7 @@ _CONTEXT_ANCHORS = {
         "acquired_customers": ("acquired customers", "new customers"),
         "orders": ("orders",),
         "net_revenue": ("net revenue",),
+        "gross_revenue": ("gross revenue", "gross sales"),
     },
 }
 
@@ -369,6 +377,25 @@ def metric_definition_contexts_compatible(
         if left_values and right_values and left_values.isdisjoint(right_values):
             return False
     return True
+
+
+def metric_definition_contexts_match(
+    actual: MetricDefinitionContext | None,
+    expected: MetricDefinitionContext | None,
+) -> bool:
+    """Require an actual comparison to carry every expected estimand anchor."""
+
+    if expected is None:
+        return True
+    if actual is None or not metric_definition_contexts_compatible(actual, expected):
+        return False
+    expected_anchors = _context_anchor_sets(expected)
+    actual_anchors = _context_anchor_sets(actual)
+    return all(
+        field_name in actual_anchors
+        and expected_values.issubset(actual_anchors[field_name])
+        for field_name, expected_values in expected_anchors.items()
+    )
 
 
 def _merge_evidence_refs(comparisons: list[MetricComparison]) -> list[str]:
@@ -501,6 +528,7 @@ __all__ = [
     "metric_comparison_identity",
     "metric_comparison_scope_identity",
     "metric_definition_contexts_compatible",
+    "metric_definition_contexts_match",
     "normalize_metric_definition_context",
     "normalize_metric_comparison",
     "normalize_metric_dimensions",

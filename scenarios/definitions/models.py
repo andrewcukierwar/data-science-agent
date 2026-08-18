@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from schemas.metrics import MetricComparisonType
+from schemas.metrics import MetricComparisonType, MetricDefinitionContext
 
 if TYPE_CHECKING:
     from evaluation.contracts import (
@@ -44,6 +44,7 @@ class GroundTruthMetric(BaseModel):
     comparison_period: NonEmptyString
     comparison_type: MetricComparisonType
     value_unit: NonEmptyString = "relative_change_fraction"
+    definition_context: MetricDefinitionContext | None = None
     expected_relative_change: float
     tolerance: float = Field(ge=0)
 

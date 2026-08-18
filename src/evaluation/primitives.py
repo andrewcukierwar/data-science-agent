@@ -23,6 +23,7 @@ from schemas.lead import LeadResult
 from schemas.metrics import (
     MetricComparison,
     compile_metric_comparisons,
+    metric_definition_contexts_match,
     normalize_metric_comparison,
     normalize_metric_dimensions,
     normalize_metric_key,
@@ -218,6 +219,10 @@ def _metric_identity_matches(
         and comparison.comparison_type is expected.comparison_type
         and normalized_actual.unit
         == normalize_metric_unit(expected.value_unit, expected.comparison_type)
+        and metric_definition_contexts_match(
+            normalized_actual.definition_context,
+            expected.definition_context,
+        )
     )
 
 
