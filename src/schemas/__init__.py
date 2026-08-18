@@ -16,6 +16,7 @@ from schemas.findings import (
     SpecialistResult,
     canonicalize_specialist_result,
 )
+from schemas.generalist import GeneralistResult
 from schemas.lead import LeadRecommendation, LeadResult, SpecialistTask
 from schemas.metrics import (
     MetricComparison,
@@ -86,6 +87,7 @@ __all__ = [
     "DataQualityIssue",
     "DateRange",
     "Finding",
+    "GeneralistResult",
     "Hypothesis",
     "HypothesisStatus",
     "IssueSeverity",

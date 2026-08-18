@@ -25,6 +25,7 @@ class AgentRole(StrEnum):
     """Roles whose tool surfaces are constrained by the project plan."""
 
     LEAD = "lead"
+    GENERALIST = "generalist"
     DATA_AUDITOR = "data_auditor"
     ANALYST = "analyst"
     STATISTICIAN = "statistician"
@@ -34,6 +35,10 @@ class AgentRole(StrEnum):
 DEFAULT_AGENT_TURN_LIMITS: Mapping[AgentRole, int] = MappingProxyType(
     {
         AgentRole.LEAD: 16,
+        # Keep the default primary-agent turn cap aligned with Lead. A
+        # benchmark may explicitly override this architecture's cap, but the
+        # difference must remain visible in its run configuration.
+        AgentRole.GENERALIST: 16,
         AgentRole.DATA_AUDITOR: 12,
         AgentRole.ANALYST: 10,
         AgentRole.STATISTICIAN: 10,
@@ -73,6 +78,24 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
             "inspect_workspace",
             "read_document",
             "save_artifact",
+            "update_investigation_plan",
+            "record_hypothesis",
+            "record_open_question",
+        }
+    ),
+    # The baseline owns every deterministic primitive used by the five-agent
+    # architecture, plus the observable planning state tools.  This is a
+    # capability union, not a delegation surface: no specialist-as-tool or
+    # handoff is registered for this role.
+    AgentRole.GENERALIST: frozenset(
+        {
+            "inspect_workspace",
+            "read_document",
+            "inspect_relations",
+            "run_sql",
+            "run_python",
+            "save_artifact",
+            "inspect_evidence",
             "update_investigation_plan",
             "record_hypothesis",
             "record_open_question",
@@ -278,6 +301,7 @@ class AgentRunContext:
         name = getattr(agent, "name", None)
         role_by_name = {
             "Lead Data Scientist": AgentRole.LEAD,
+            "Generalist Data Scientist": AgentRole.GENERALIST,
             "Data Auditor": AgentRole.DATA_AUDITOR,
             "Analyst": AgentRole.ANALYST,
             "Statistician": AgentRole.STATISTICIAN,

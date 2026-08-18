@@ -25,12 +25,23 @@ from orchestration.pricing import (
 def __getattr__(name: str):  # noqa: ANN001
     """Load the runner lazily to avoid the agents/runtime import cycle."""
 
-    if name in {"AnalysisRunResult", "AnalysisRunner"}:
+    if name in {
+        "AnalysisRunResult",
+        "AnalysisRunner",
+        "GeneralistRunResult",
+        "GeneralistRunner",
+    }:
+        from orchestration.generalist_runner import (
+            GeneralistRunner,
+            GeneralistRunResult,
+        )
         from orchestration.runner import AnalysisRunner, AnalysisRunResult
 
         return {
             "AnalysisRunResult": AnalysisRunResult,
             "AnalysisRunner": AnalysisRunner,
+            "GeneralistRunResult": GeneralistRunResult,
+            "GeneralistRunner": GeneralistRunner,
         }[name]
     raise AttributeError(name)
 
@@ -44,6 +55,8 @@ __all__ = [
     "AnalysisLedger",
     "AnalysisRunResult",
     "AnalysisRunner",
+    "GeneralistRunResult",
+    "GeneralistRunner",
     "LedgerConflictError",
     "LedgerError",
     "RunBudgetController",

@@ -16,6 +16,7 @@ from agents.critic import (
     persist_validation_result,
     run_critic,
 )
+from agents.generalist import build_generalist_agent
 from agents.lead import build_lead_agent, persist_lead_result, run_lead
 from agents.runtime import (
     AgentRole,
@@ -680,6 +681,8 @@ class AnalysisRunner:
         )
         if role is AgentRole.DATA_AUDITOR:
             return context, build_data_auditor_agent(config)
+        if role is AgentRole.GENERALIST:
+            return context, build_generalist_agent(config)
         if role is AgentRole.LEAD:
             return context, build_lead_agent(config)
         if role is AgentRole.CRITIC:
