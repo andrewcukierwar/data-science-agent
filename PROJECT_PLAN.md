@@ -2,9 +2,13 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-14 — Phase 0 completion / Phase 1 sequencing update.
+**Revision:** 2026-08-17 — Phase 1 completion / Phase 2 evaluation sequencing.
 
-The core product thesis and five-agent architecture remain unchanged. This revision aligns the roadmap with the implemented repository, adds the missing Phase 0 execution/sandbox work, and makes the Phase 1 runtime/orchestration boundaries explicit.
+The core product thesis and five-agent architecture remain unchanged. Phase 0
+and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
+versioned, reproducible evaluation program: expand the deterministic scenario
+suite, build a fair single-agent baseline, and benchmark analytical reliability
+before beginning product UI or cloud deployment.
 
 ---
 
@@ -1097,8 +1101,8 @@ workspace lifecycle, DuckDB execution, persistent Analysis Ledger, synthetic
 ecommerce generation, artifact provenance, Docker-backed Python execution, and
 the end-to-end acceptance path are implemented.
 
-Phase 1: Multi-Agent MVP is now underway. Agent behavior remains intentionally
-outside the completed Phase 0 foundation work.
+Phase 1: Multi-Agent MVP is complete. Phase 2: Evaluation and Reliability is now
+underway on top of the completed deterministic foundation.
 
 ### Phase 0 completion status
 
@@ -1165,6 +1169,22 @@ The entire flow must be covered by a deterministic integration test, with pytest
 ### Goal
 
 One canonical scenario works extremely well locally through the full five-agent system.
+
+### Completion status
+
+Phase 1 is complete. The repository now contains the five typed agents, shared
+runtime and deterministic tools, application-level lifecycle enforcement,
+evidence and metric provenance, bounded remediation, offline persisted-workspace
+acceptance, and a no-steering canonical workflow.
+
+- [x] Deterministic canonical scenario and evaluator-only ground truth
+- [x] Shared Agents SDK runtime with role-bound tools
+- [x] Analyst, Data Auditor, Statistician, Critic, and Lead agents
+- [x] Application-level `AnalysisRunner` lifecycle
+- [x] Atomic budgets, task-local roles, and graceful constrained reporting
+- [x] Structured evidence and metric compilation through final validation
+- [x] Canonical live runner and zero-API offline workspace evaluator
+- [x] Deterministic, Docker-backed, Ruff, and opt-in live test coverage
 
 ### Updated implementation order
 
@@ -1289,37 +1309,304 @@ available for the Python specialist tools.
 
 Turn the project from a demo into an empirically evaluated AI system.
 
-Expand from one scenario to approximately **10 deterministic scenarios**.
+Expand from one scenario to approximately **10 deterministic scenarios**, then
+compare the five-agent architecture with a fair single-agent baseline using a
+versioned and reproducible benchmark.
+
+Phase 2 improves evaluation breadth and reliability. It must not introduce
+Streamlit, AWS, predictive ML, external web research, a second agent framework,
+or unrelated infrastructure.
+
+### Phase 2 operating principles
+
+1. **Ground truth stays downstream.** Scenario answers, expected values, and
+   tolerances are available only to deterministic generators/evaluators, never
+   to agent prompts, model-visible documents, or tools.
+2. **Persisted state is authoritative.** Every score must be reproducible offline
+   from an immutable workspace, ledger, report, artifacts, and a versioned
+   evaluation manifest.
+3. **Score before rerunning.** Add deterministic evaluator fixtures and inspect
+   exact failures before paying for another model run.
+4. **Compare architectures fairly.** Use the same raw inputs, documentation,
+   question, model configuration, deterministic execution tools, and
+   output/evidence contracts for single-agent and multi-agent runs.
+5. **Separate reliability dimensions.** Operational completion, analytical
+   correctness, evidence quality, cost, and latency are distinct outcomes.
+6. **Preserve raw results.** Benchmark runs use unique immutable IDs. Never use
+   `--force` to overwrite benchmark evidence.
+7. **Declare the experiment first.** Freeze scenario/evaluator versions,
+   repetitions, model, budgets, and aggregation rules before running the paid
+   benchmark. Do not cherry-pick or invent results.
+
+### Evaluation scenario contract
+
+Each evaluation scenario should define, with typed schemas:
+
+- stable scenario ID, version, name, seed/configuration, and user question;
+- deterministic source-data and business-document generation;
+- injected business conditions and data-quality conditions;
+- expected primary driver and important secondary findings;
+- known non-drivers and tempting false hypotheses;
+- expected data-quality and statistical conclusions;
+- generic structured metric identities, values, units, and tolerances;
+- required evidence/provenance and task-completeness checks;
+- evaluator version and compatibility information.
+
+Scenario ground truth must be derivable from the generated model-visible data,
+not only from comparison with a hidden clean baseline. Clean-baseline invariants
+and injected relationships should be tested independently.
+
+### Target scenario catalog
+
+The exact mix may evolve when generator constraints are discovered, but Phase 2
+should cover approximately this breadth without leaving V1 business analytics:
+
+| # | Scenario | Primary capability |
+| ---: | --- | --- |
+| 1 | Acquisition conversion deterioration | Profit/CAC/funnel decomposition and stable-LTV non-driver |
+| 2 | Retention deterioration | Repeat behavior, cohorts, and 90-day LTV |
+| 3 | Missing orders day | Detect data incompleteness before claiming business decline |
+| 4 | Partial latest reporting day | Temporal coverage and reporting-cutoff discipline |
+| 5 | COGS/margin deterioration | Revenue-versus-margin profit decomposition |
+| 6 | Discount/refund deterioration | Net-revenue bridge and order-economics diagnosis |
+| 7 | Meaningful A/B treatment effect | Correct test, interval, effect size, and practical significance |
+| 8 | No-effect/non-significant experiment | Avoid false positives and causal overstatement |
+| 9 | Statistically significant but immaterial effect | Distinguish statistical from practical significance |
+| 10 | Channel/mix confounding trap | Reject a tempting segment attribution or causal non-driver |
+
+Every scenario does not need every specialist. The expected behavior includes
+appropriate stopping and avoiding unnecessary tool/specialist work.
 
 ### Metrics
 
 #### Numerical correctness
 
-Do reported values match ground truth within tolerance?
+Do material structured values match evaluator-only ground truth within the
+declared tolerance? Also report expected-metric coverage and materially
+conflicting duplicate measurements.
 
 #### Root-cause identification
 
-Did the system identify the injected primary driver?
+Did the final validated answer assert and support the injected primary mechanism,
+rather than merely mention it as something to investigate? Did it reject known
+non-drivers?
 
 #### Data-quality detection
 
-Did it identify injected defects?
+Did it identify injected defects without inventing problems in clean data?
+Report both recall and false-positive behavior.
 
 #### Statistical correctness
 
-Did it reach the correct inferential conclusion?
+Did it choose an appropriate analysis, respect assumptions, report uncertainty
+and effect size, distinguish practical significance, and reach the expected
+inferential conclusion?
 
 #### Evidence grounding
 
-Are material quantitative claims tied to executed analysis?
+Are material quantitative claims tied to approved executed analysis or
+source-derived artifacts with valid lineage? Are cited values reproducible?
 
 #### Unsupported claims
 
-Did the agent claim more than the data establishes?
+Did the answer make unsupported causal, numerical, or recommendation claims?
+Did it preserve uncertainty and observational limitations?
 
 #### Overall task success
 
-Did it solve the analytical problem?
+Did the run complete the required lifecycle, receive final Critic `PASS`, answer
+the primary objective, provide supported actions, and satisfy all hard scenario
+acceptance gates?
+
+#### Operational reliability and efficiency
+
+Track separately from analytical quality:
+
+- completion / blocked / failed status and failure taxonomy;
+- agent, tool, schema, budget, timeout, sandbox, and provider failures;
+- model requests and input/cached/output/reasoning tokens;
+- estimated cost and elapsed time;
+- SQL, Python, specialist, Critic-loop, and chart usage;
+- remediation and follow-up frequency.
+
+Do not hide analytical failures inside an aggregate operational-success number,
+or vice versa.
+
+### Phase 2 implementation order
+
+#### Task 1 — Versioned evaluation contracts and manifests
+
+Define typed, architecture-neutral schemas for scenario metadata, evaluator
+results, per-run benchmark records, and aggregate benchmark manifests. A run
+record should include scenario/evaluator version, architecture, model/provider,
+run configuration, budgets/turn limits, code revision where available, seed,
+workspace path, lifecycle outcome, score breakdown, usage, cost, and latency.
+
+Acceptance:
+
+- schemas reject incomplete or ambiguous benchmark records;
+- evaluator-only fields cannot enter model-visible scenario context;
+- old canonical persisted workspaces remain evaluable or fail with an explicit
+  version-compatibility message.
+
+#### Task 2 — Generic offline evaluation engine
+
+Extract canonical-specific mechanics into reusable deterministic evaluators for
+lifecycle, numerical comparisons, root-cause/non-driver semantics, data quality,
+statistics, provenance, unsupported claims, and task completeness. Compose
+scenario-specific rules from these primitives rather than cloning the canonical
+evaluator.
+
+Provide an offline CLI that evaluates one persisted workspace and a batch CLI
+that evaluates a manifest. Neither may load `.env`, invoke agents, or make API
+calls.
+
+Acceptance:
+
+- deterministic fixtures cover pass, missing, incorrect, conflicting, stale,
+  and unsupported-claim cases;
+- final report, Critic, and evaluator consume the same canonical final metric
+  set;
+- repeated offline evaluation of unchanged state is byte-for-byte stable where
+  practical and semantically identical otherwise.
+
+#### Task 3 — Scenario framework and catalog invariants
+
+Generalize scenario registration/generation without replacing the clean
+ecommerce baseline. Add catalog discovery, versioning, deterministic source
+writing, evaluator lookup, and common invariant checks for keys, dates, metric
+identities, documented nulls, economic identities, and observable ground truth.
+
+Acceptance:
+
+- the canonical scenario migrates to the generic contract without changing its
+  model-visible inputs or answer;
+- the clean baseline remains independently testable;
+- scenario IDs/versions uniquely resolve generator and evaluator definitions.
+
+#### Task 4 — Business root-cause scenarios
+
+Implement retention deterioration, COGS/margin deterioration, and
+discount/refund deterioration. Each should include plausible non-drivers,
+coherent cross-table economics, deterministic tolerances, and tests proving the
+intended mechanism is observable at the configured evaluation scale.
+
+Acceptance:
+
+- the three scenarios pass generator/invariant tests;
+- their evaluators reject the correct metric with the wrong population, date
+  basis, denominator, or observation window;
+- no prompt or business document reveals the injected conclusion.
+
+#### Task 5 — Data-quality and statistical scenarios
+
+Implement missing-day and partial-day data-quality traps plus statistically
+meaningful, no-effect, and statistically-significant-but-immaterial experiment
+scenarios. Add experiment fields only as required by the typed scenario and keep
+the work within V1 basic statistical testing.
+
+Acceptance:
+
+- Auditor correctness includes both injected-defect recall and clean-data false
+  positives;
+- statistical evaluators check conclusion, confidence interval/effect size,
+  practical significance, assumptions, and causal restraint;
+- seeded test fixtures have stable known sampling properties.
+
+#### Task 6 — Scenario breadth and evaluator calibration
+
+Add the final confounding/mix scenario and calibrate the full suite with
+hand-authored correct and adversarial persisted fixtures before live runs.
+Fixtures should include plausible wrong denominators, grain-multiplying joins,
+period leakage, unsupported causality, evidence-free numbers, and incomplete
+but keyword-rich answers.
+
+Acceptance:
+
+- approximately 10 scenarios are registered and deterministically generatable;
+- a fully correct fixture passes each evaluator;
+- each targeted analytical defect fails for the intended reason;
+- evaluator changes are regression-tested across the entire scenario catalog.
+
+#### Task 7 — Fair single-agent baseline
+
+Implement one generalist analysis agent using the existing Agents SDK,
+`AgentRunContext`, workspaces, DuckDB/Python/artifact services, budgets, evidence
+schemas, final metric compiler, and report contract. It owns audit, analysis,
+statistics, validation/self-critique, and synthesis itself and cannot invoke the
+five specialist agents.
+
+For comparison, hold constant:
+
+- raw scenario data, documentation, and question;
+- model/provider and model parameters;
+- SQL/Python/chart limits and sandbox/security boundaries;
+- structured findings, metric, evidence, report, and evaluator contracts.
+
+Architecture-specific calls and token use should be measured, not disguised by
+forcing identical internal workflows. Any budget differences must be declared in
+the benchmark manifest.
+
+Acceptance:
+
+- construction/permission tests prove the baseline cannot call specialists;
+- deterministic tests require the same provenance and bounded execution rules;
+- opt-in live smoke tests remain outside normal CI.
+
+#### Task 8 — Resumable benchmark runner
+
+Build an explicit benchmark matrix runner over scenario x architecture x
+repetition. It should create unique immutable run IDs, persist the experiment
+manifest before execution, resume without rerunning completed cells, isolate
+provider/operational failures, and support offline rescoring after evaluator
+changes without rerunning agents.
+
+Use at least three repetitions per scenario/architecture for the first declared
+benchmark unless cost calibration justifies and documents another count. Run a
+small cost-estimation pilot before launching the full matrix.
+
+Acceptance:
+
+- deterministic fake-run tests cover resume, interruption, duplicate IDs,
+  failed cells, and offline rescore;
+- no benchmark command overwrites an existing workspace;
+- paid execution requires an explicit opt-in flag and API credentials, while
+  dry-run/plan/offline modes require neither.
+
+#### Task 9 — Aggregation, uncertainty, and reporting
+
+Aggregate per-run metrics by scenario and architecture while retaining every raw
+record. Report denominators, completion rates, score distributions, paired
+differences where runs share scenarios/configuration, and uncertainty intervals
+appropriate to the sample size. Include cost/latency and failure taxonomy; do
+not collapse everything into one opaque score.
+
+Acceptance:
+
+- aggregation is deterministic and tested on known records;
+- missing/failed runs cannot silently disappear from denominators;
+- reports clearly distinguish descriptive results from statistically supported
+  architecture differences;
+- output can feed README tables later without manually transcribing values.
+
+#### Task 10 — Execute and publish the Phase 2 benchmark
+
+Freeze a benchmark manifest, run the declared single-agent and five-agent
+matrix, evaluate every persisted workspace offline, inspect failures without
+changing rules mid-experiment, and publish the actual results and limitations.
+If a defect requires code/evaluator changes, version the benchmark and rerun the
+affected declared matrix rather than silently patching scores.
+
+Acceptance:
+
+- raw manifests, run records, evaluator results, and aggregate report are
+  retained;
+- README/project documentation reports real task success, numerical accuracy,
+  unsupported claims, operational reliability, cost, and latency;
+- conclusions acknowledge sample size, model specificity, evaluator limitations,
+  and failed runs;
+- no result is invented or selected only because it favors the multi-agent
+  system.
 
 ### Key experiment
 
@@ -1333,6 +1620,21 @@ Example future result format:
 | Multi-Agent | TBD | TBD | TBD |
 
 Do not invent results before running the benchmark.
+
+### Phase 2 done when
+
+- approximately 10 deterministic, versioned scenarios cover root cause, data
+  quality, statistical reasoning, evidence grounding, and non-driver rejection;
+- every scenario has tested evaluator-only ground truth and an offline evaluator;
+- the single-agent baseline shares the deterministic runtime, security,
+  provenance, and final output contracts;
+- a frozen, resumable benchmark compares both architectures across declared
+  repetitions using the same model/configuration;
+- raw run records and aggregate metrics include analytical quality,
+  operational reliability, cost, latency, and failure taxonomy;
+- real benchmark results and limitations are documented without cherry-picking;
+- deterministic pytest, Docker integration tests, Ruff, and CI remain green;
+- no Phase 3 UI or Phase 4 AWS work is required for Phase 2 completion.
 
 ---
 
@@ -1787,9 +2089,10 @@ Acceptance criteria:
 - [x] Ruff check and format check pass.
 - [x] GitHub Actions CI runs deterministic checks on `main`.
 
-This milestone is complete. Begin **Phase 1 Task 1: the canonical profitability
-scenario**, followed by the shared agent runtime/tool-adapter layer. Do not jump
-directly to the Analyst.
+This Phase 0 milestone and the subsequent Phase 1 multi-agent MVP are complete.
+Begin **Phase 2 Task 1: versioned evaluation contracts and manifests**, followed
+by the generic offline evaluator. Do not start by running a large paid benchmark
+or by adding scenarios without stable evaluator contracts.
 
 ---
 
@@ -1864,11 +2167,18 @@ A beautiful interface around a weak agent is not the goal.
 Current recommended sequence:
 
 1. Keep deterministic pytest, Ruff, and Docker-backed acceptance checks green in CI.
-2. Begin **Phase 1 Task 1 — Canonical profitability scenario**.
-3. Implement **Phase 1 Task 2 — Agents SDK runtime/tool adapters**.
-4. Implement specialists independently in this order: Analyst → Data Auditor → Statistician → Critic.
-5. Implement the Lead only after the specialist contracts and tools are stable.
-6. Implement `AnalysisRunner` to enforce mandatory audit/critic workflow and bounded remediation.
-7. Run the canonical end-to-end acceptance scenario with no human steering.
+2. Implement **Phase 2 Task 1 — versioned evaluation contracts and manifests**.
+3. Implement **Phase 2 Task 2 — generic zero-API offline evaluation engine**.
+4. Migrate the canonical scenario to the generic contract without changing its
+   visible data, prompts, or acceptance semantics.
+5. Add and deterministically validate business, data-quality, and statistical
+   scenarios before making paid runs.
+6. Implement the fair single-agent baseline on the existing execution and
+   evidence foundation.
+7. Build and dry-run the resumable benchmark manifest/runner.
+8. Freeze the experiment, run a cost pilot, then execute and publish the real
+   comparison.
 
-Do not build Streamlit or AWS infrastructure during Phase 1. The priority is proving the autonomous analytical system works and is reproducible.
+Do not build Streamlit or AWS infrastructure during Phase 2. The priority is
+measuring analytical correctness and reliability across scenarios with a fair,
+reproducible benchmark.

@@ -2,9 +2,10 @@
 
 Foundation for an evidence-backed, multi-agent business analytics system.
 
-Phase 0 deterministic infrastructure is complete. Phase 1: Multi-Agent MVP is
-underway; agent behavior is being added on top of the tested execution and
-evidence foundation.
+Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
+complete. Phase 2: Evaluation and Reliability is underway, expanding the
+deterministic scenario suite and benchmarking the five-agent system against a
+single-agent baseline.
 
 ## Development
 

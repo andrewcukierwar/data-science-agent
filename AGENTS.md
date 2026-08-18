@@ -4,9 +4,12 @@ See `PROJECT_PLAN.md` for the full architecture, implementation plan, and roadma
 
 ## Current Phase
 
-Phase 1: Multi-Agent MVP.
+Phase 2: Evaluation and Reliability.
 
-Do not implement future phases unless explicitly requested.
+Phase 1 is complete. The current objective is to expand the deterministic
+scenario suite, build a fair single-agent baseline, and benchmark reliability.
+Do not implement Phase 3 UI, Phase 4 AWS, predictive ML, or other future phases
+unless explicitly requested.
 
 ## Architecture Rules
 
@@ -17,6 +20,24 @@ Do not implement future phases unless explicitly requested.
 - Persist explicit plans, hypotheses, tool outputs, and evidence — not hidden chain-of-thought.
 - Input datasets must remain read-only during analysis runs.
 - Prefer simple, deterministic infrastructure over unnecessary abstractions.
+
+## Phase 2 Evaluation Rules
+
+- Keep scenario ground truth and tolerances evaluator-only; never expose them to
+  agent prompts, model-visible documents, or tools.
+- Evaluate persisted workspaces offline without OpenAI/API calls.
+- Version scenario definitions, evaluator rules, architecture configuration,
+  model identity, and budgets for every benchmark run.
+- Use immutable benchmark run IDs and preserve raw run records; do not overwrite
+  benchmark evidence with `--force`.
+- Compare single-agent and multi-agent systems on the same scenario inputs,
+  model configuration, deterministic tools, and output/evidence contracts.
+- Separate operational failures from analytical-quality failures and report
+  both.
+- Do not invent, cherry-pick, or publish benchmark results before running the
+  declared experiment.
+- Add deterministic evaluator fixtures before spending API credits on a live
+  benchmark.
 
 ## Engineering
 

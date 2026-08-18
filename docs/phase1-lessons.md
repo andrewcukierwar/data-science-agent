@@ -15,7 +15,8 @@ taught us and why the current guardrails exist.
 
 ## Executive status
 
-- Current phase: **Phase 1: Multi-Agent MVP**. Phase 2 has not begun.
+- Phase 1 status: **complete**. Phase 2: Evaluation and Reliability is now
+  underway; this file remains the Phase 1 implementation handoff.
 - Phase 0 deterministic infrastructure is implemented: workspaces, ledger,
   artifact provenance, bounded DuckDB, Docker Python, synthetic generation,
   tests, and CI.
@@ -366,8 +367,9 @@ uv run python scripts/run_canonical_mvp.py --run-id canonical-q2-YYYYMMDD-HHMM
    checks first.
 8. **Unknown pricing.** Usage remains valid when a model lacks registry pricing,
    but cost will be null unless all rates are configured or overridden.
-9. **No Phase 2 scope.** Do not add UI, AWS, Kubernetes, another agent framework,
-   or broader scenario infrastructure until Phase 1 closure is explicit.
+9. **No Phase 3/4 scope during evaluation.** Phase 2 may expand deterministic
+   scenarios and evaluator infrastructure, but should not add UI, AWS,
+   Kubernetes, another agent framework, or predictive ML.
 
 ## What not to regress
 
