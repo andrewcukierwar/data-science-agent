@@ -88,6 +88,12 @@ from scenarios.invariants import (
     synthetic_ecommerce_invariant_suite,
     validate_synthetic_ecommerce_baseline,
 )
+from scenarios.mix_scenarios import (
+    ChannelMixScenarioInjectionConfig,
+    generate_channel_mix_confounding_scenario,
+    inject_channel_mix_confounding,
+    observe_channel_mix_ground_truth,
+)
 from scenarios.sources import SourceWriteError, write_deterministic_sources
 
 
@@ -124,6 +130,7 @@ def __getattr__(name: str):
 
 __all__ = [
     "CANONICAL_PROFITABILITY_SCENARIO",
+    "CHANNEL_MIX_CONFOUNDING_SCENARIO",
     "BUSINESS_ROOT_CAUSE_SCENARIOS",
     "DATA_QUALITY_SCENARIOS",
     "EXPERIMENT_SCENARIOS",
@@ -149,6 +156,7 @@ __all__ = [
     "SyntheticEcommerceDataset",
     "SyntheticEcommerceGenerator",
     "generate_canonical_profitability_scenario",
+    "generate_channel_mix_confounding_scenario",
     "generate_cogs_margin_deterioration_scenario",
     "generate_discount_refund_deterioration_scenario",
     "generate_retention_deterioration_scenario",
@@ -167,12 +175,14 @@ __all__ = [
     "ForeignKeyInvariant",
     "get_scenario",
     "inject_canonical_profitability_scenario",
+    "inject_channel_mix_confounding",
     "inject_cogs_margin_deterioration",
     "inject_discount_refund_deterioration",
     "inject_retention_deterioration",
     "inject_missing_reporting_day",
     "inject_partial_latest_reporting_day",
     "observe_canonical_ground_truth",
+    "observe_channel_mix_ground_truth",
     "observe_cogs_margin_ground_truth",
     "observe_discount_refund_ground_truth",
     "observe_retention_ground_truth",
@@ -189,6 +199,7 @@ __all__ = [
     "NO_EFFECT_EXPERIMENT_SCENARIO",
     "IMMATERIAL_EXPERIMENT_SCENARIO",
     "RetentionScenarioInjectionConfig",
+    "ChannelMixScenarioInjectionConfig",
     "MissingReportingDayInjectionConfig",
     "PartialLatestDayInjectionConfig",
     "InvariantReport",

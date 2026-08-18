@@ -16,6 +16,7 @@ from evaluation.engine import ScenarioRules
 from scenarios.definitions import (
     BUSINESS_ROOT_CAUSE_SCENARIOS,
     CANONICAL_PROFITABILITY_SCENARIO,
+    CHANNEL_MIX_CONFOUNDING_SCENARIO,
     DATA_QUALITY_SCENARIOS,
     EXPERIMENT_SCENARIOS,
 )
@@ -455,6 +456,29 @@ def _experiment_registrations() -> tuple[ScenarioRegistration, ...]:
     )
 
 
+def _mix_registration() -> ScenarioRegistration:
+    from evaluation.rules import channel_mix_rules
+    from scenarios.mix_scenarios import (
+        generate_channel_mix_confounding_scenario,
+        observe_channel_mix_ground_truth,
+    )
+
+    definition = CHANNEL_MIX_CONFOUNDING_SCENARIO
+    return ScenarioRegistration(
+        metadata=definition.to_metadata(),
+        evaluation_spec=definition.to_evaluation_spec(),
+        model_visible_context=definition.model_visible_context(),
+        generator_name="generate_channel_mix_confounding_scenario",
+        generator=generate_channel_mix_confounding_scenario,
+        evaluator_name="channel_mix_rules",
+        evaluator=channel_mix_rules,
+        invariant_suite=synthetic_ecommerce_invariant_suite(
+            expected_metrics=definition.ground_truth,
+            metric_observer=observe_channel_mix_ground_truth,
+        ),
+    )
+
+
 def discover_scenarios() -> ScenarioCatalog:
     """Discover all built-in versioned scenario registrations."""
 
@@ -467,6 +491,7 @@ def discover_scenarios() -> ScenarioCatalog:
             *_business_registrations(),
             *_data_quality_registrations(),
             *_experiment_registrations(),
+            _mix_registration(),
         )
     )
 

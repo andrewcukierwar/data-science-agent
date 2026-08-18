@@ -62,6 +62,7 @@ from evaluation.primitives import (
 )
 from evaluation.rules import (
     canonical_rules,
+    channel_mix_rules,
     cogs_margin_rules,
     discount_refund_rules,
     immaterial_experiment_rules,
@@ -110,6 +111,7 @@ __all__ = [
     "WorkspaceVersionCompatibilityError",
     "check_workspace_version_compatibility",
     "canonical_rules",
+    "channel_mix_rules",
     "cogs_margin_rules",
     "discount_refund_rules",
     "compile_final_metric_set",

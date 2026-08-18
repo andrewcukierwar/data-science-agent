@@ -16,6 +16,7 @@ from evaluation.primitives import (
 )
 from scenarios.definitions import (
     CANONICAL_PROFITABILITY_SCENARIO,
+    CHANNEL_MIX_CONFOUNDING_SCENARIO,
     COGS_MARGIN_DETERIORATION_SCENARIO,
     DATA_QUALITY_SCENARIOS,
     DISCOUNT_REFUND_DETERIORATION_SCENARIO,
@@ -186,6 +187,8 @@ def canonical_rules() -> ScenarioRules:
 def _business_rules(
     definition: ScenarioDefinition,
     root_cause_rules: tuple[TextRule, ...],
+    *,
+    unsupported_claim_patterns: tuple[str, ...] = (),
 ) -> ScenarioRules:
     """Build common completion gates around scenario-specific text rules."""
 
@@ -212,6 +215,7 @@ def _business_rules(
                 "critic",
             )
         ),
+        unsupported_claim_patterns=unsupported_claim_patterns,
     )
 
 
@@ -367,6 +371,76 @@ def immaterial_experiment_rules() -> ScenarioRules:
             if item.scenario_id == "significant-but-immaterial-ab-effect"
         ),
         conclusion_patterns=(r"statistically significant", r"immaterial|not practical"),
+    )
+
+
+def channel_mix_rules() -> ScenarioRules:
+    """Return evaluator rules for the acquisition-channel mix trap."""
+
+    return _business_rules(
+        CHANNEL_MIX_CONFOUNDING_SCENARIO,
+        (
+            TextRule(
+                check_id="mix_shift_driver",
+                description=(
+                    "final analysis identifies the channel-composition shift as "
+                    "the explanation for the apparent channel movement"
+                ),
+                predicate=lambda text: contains_asserted_mechanism(
+                    text,
+                    subject_terms=(r"channel mix|channel composition|mix shift",),
+                    mechanism_terms=(r"shift|changed|rebalanc|composition",),
+                    change_terms=(r"q2|second quarter|latest|period",),
+                    causal_terms=(
+                        r"explain|reflect|account|rather than|not .*decline",
+                    ),
+                    uncertainty_terms=(r"may", r"might", r"could", r"uncertain"),
+                ),
+            ),
+            TextRule(
+                check_id="total_volume_non_driver",
+                description=(
+                    "final analysis reconciles stable total acquired-customer volume"
+                ),
+                predicate=lambda text: contains_stable_conclusion(
+                    text,
+                    value_terms=(r"total|overall", r"acquired customers|acquisition"),
+                    stable_terms=(r"stable", r"unchanged", r"flat", r"did not decline"),
+                ),
+            ),
+            TextRule(
+                check_id="causal_restraint",
+                description=(
+                    "final analysis rejects a causal claim about a channel-level "
+                    "attribution movement"
+                ),
+                predicate=lambda text: contains_all_concepts(
+                    text,
+                    (
+                        r"meta|organic|channel",
+                        r"caus|attribut|association",
+                        (
+                            r"not .*cause|no evidence|no .*caus|does not establish|"
+                            r"unsupported"
+                        ),
+                    ),
+                ),
+            ),
+            TextRule(
+                check_id="mix_estimand_scope",
+                description=(
+                    "final analysis states that channel share uses all acquired "
+                    "customers as its denominator"
+                ),
+                predicate=lambda text: contains_all_concepts(
+                    text,
+                    (r"channel|mix|share", r"acquired customer", r"denominator"),
+                ),
+            ),
+        ),
+        unsupported_claim_patterns=(
+            r"\b(?:meta|organic|channel(?:\s+mix)?)\b[^.!?]{0,80}\bcaused?\b",
+        ),
     )
 
 
@@ -628,6 +702,7 @@ def rules_for_scenario(
 
 __all__ = [
     "canonical_rules",
+    "channel_mix_rules",
     "cogs_margin_rules",
     "discount_refund_rules",
     "immaterial_experiment_rules",

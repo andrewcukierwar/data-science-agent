@@ -20,6 +20,7 @@ from scenarios.definitions.experiments import (
     MEANINGFUL_EXPERIMENT_SCENARIO,
     NO_EFFECT_EXPERIMENT_SCENARIO,
 )
+from scenarios.definitions.mix import CHANNEL_MIX_CONFOUNDING_SCENARIO
 from scenarios.definitions.models import (
     GroundTruthMetric,
     InjectedCondition,
@@ -29,6 +30,7 @@ from scenarios.definitions.models import (
 
 __all__ = [
     "CANONICAL_PROFITABILITY_SCENARIO",
+    "CHANNEL_MIX_CONFOUNDING_SCENARIO",
     "BUSINESS_ROOT_CAUSE_SCENARIOS",
     "COGS_MARGIN_DETERIORATION_SCENARIO",
     "DISCOUNT_REFUND_DETERIORATION_SCENARIO",
