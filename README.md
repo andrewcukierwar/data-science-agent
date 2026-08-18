@@ -4,7 +4,7 @@ Foundation for an evidence-backed, multi-agent business analytics system.
 
 Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
 complete. Phase 2 Tasks 1–9 are implemented and deterministically tested, but
-the required Phase 2 Pre-Benchmark Remediation R1–R6 is not yet complete. Task
+the required Phase 2 Pre-Benchmark Remediation R1–R12 is not yet complete. Task
 10—the paid single-agent versus five-agent benchmark—must wait for that
 remediation and has not yet run, so this repository does not claim benchmark
 results. See
@@ -33,19 +33,24 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **312 passed, 3 skipped, and 13 live
-tests deselected**; Ruff lint and formatting checks passed.
+deterministic verification completed with **330 passed and 13 live tests
+deselected**; Ruff lint and formatting checks passed, and the 10 × 2 × 3 matrix
+dry-run produced 60 unique cells.
 
-Before Task 10, complete the six documented remediation tasks in
+Before Task 10, complete the twelve documented remediation tasks in
 [`PROJECT_PLAN.md`](PROJECT_PLAN.md): architecture-neutral evaluation (R1),
 hardened evidence provenance (R2), scenario-bound workspaces (R3), explicit
 evaluator errors (R4), hardened benchmark execution semantics (R5), and
-scenario-document integrity plus full deterministic preflight (R6).
+scenario-document integrity plus full deterministic preflight (R6). The
+follow-up review adds capability-driven tool neutrality (R7), universal
+workspace binding (R8), canonical aggregation-safe rescoring (R9), pilot/run
+binding (R10), durable attempt history (R11), and non-destructive offline
+outputs (R12).
 
 No Phase 2 experiment manifest has been frozen and no paid matrix cells have
 been executed. Existing canonical MVP workspaces predate the declared Phase 2
 matrix and must not be presented as its results. Do not begin paid benchmark
-execution until R1–R6 are complete and verified.
+execution until R1–R12 are complete and verified.
 
 ## Canonical Phase 1 live acceptance
 
@@ -71,13 +76,20 @@ uv run python scripts/evaluate_workspace.py \
   .runs/canonical-mvp/canonical-q2-mvp
 ```
 
-Rescore all persisted workspaces referenced by a manifest. The input manifest
-is never overwritten:
+The standalone evaluator is currently a diagnostic interface. Until R8 is
+complete, do not use it to score a benchmark workspace without independently
+verifying that the selected rules match the persisted workspace identity.
+
+For benchmark manifests, use the benchmark runner's rescore path, which refuses
+to overwrite the input manifest:
 
 ```bash
-uv run python scripts/evaluate_manifest.py benchmark-manifest.json \
+uv run python scripts/run_benchmark.py offline-rescore benchmark-manifest.json \
   --output benchmark-rescored.json
 ```
+
+The legacy `scripts/evaluate_manifest.py` path remains diagnostic-only until it
+is consolidated under R9 and its output handling is hardened under R12.
 
 ## Resumable benchmark matrix
 

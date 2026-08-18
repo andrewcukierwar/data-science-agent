@@ -1435,12 +1435,15 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-18
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 312 passed, 3 skipped, and 13 opt-in live
-tests deselected; Ruff lint and formatting checks passed. This status describes
-the implementation, not an architecture-performance result.
+full local verification completed with 330 passed and 13 opt-in live tests
+deselected; Ruff lint and formatting checks passed. This status describes the
+implementation, not an architecture-performance result.
 
-R1–R6 remain open and must be completed before Task 10. No Phase 2 benchmark
-manifest has been frozen, no paid cost pilot or declared matrix has run, and no
+R1–R5 have initial implementations, but the 2026-08-18 follow-up review found
+residual validity gaps. R2 meets its current acceptance criteria; R1, R3, R4,
+and R5 remain partial. R6 and follow-up tasks R7–R12 must be completed before
+Task 10. No Phase 2 benchmark manifest has been frozen, no paid cost pilot or
+declared matrix has run, and no
 aggregate architecture comparison has been published. Existing canonical MVP
 workspaces are legacy acceptance artifacts rather than Phase 2 benchmark
 records. The live handoff and exact environment constraints are recorded in
@@ -1695,9 +1698,136 @@ perform a complete deterministic benchmark preflight:
 - dry-run of all 10 × 2 × 3 declared cells;
 - another Sol High code review focused specifically on benchmark validity.
 
+R6 is the final pre-benchmark gate. Its complete preflight must be rerun after
+R7–R12 are implemented; an earlier green test run does not close R6.
+
+### Phase 2 Follow-up Review Remediation: R7–R12
+
+The post-R5 code review identified residual gaps not covered by the original
+regression fixtures. These tasks refine R1, R3, R4, and R5 and add explicit
+immutability requirements for offline outputs.
+
+#### R7 — Make tool use capability-driven rather than mandatory [P0]
+
+Remove unconditional SQL- and Python-presence checks from generic provenance
+scoring. Scenario rules should declare the analytical capabilities and typed
+outputs they require; the evaluator should not prescribe which tool produced a
+valid result when the tool choice is not part of the estimand.
+
+Acceptance:
+
+- a non-statistical scenario can pass with verified SQL-only evidence when all
+  required outputs and provenance are present;
+- adding an unnecessary successful Python execution does not change the result;
+- a statistical scenario requires its typed statistical assessment and evidence
+  without requiring a Statistician role or a particular producer architecture;
+- equivalence fixtures vary role traces, specialist-result placement, and
+  SQL/Python tool mixes while holding semantic outputs constant;
+- genuinely missing required capabilities still fail through a named,
+  scenario-specific check.
+
+#### R8 — Enforce workspace identity at every offline evaluation boundary [P1]
+
+Make persisted identity authoritative wherever it exists. The supplied or
+resolved evaluator rules must match the workspace scenario ID, scenario
+version, and evaluator version. Manifest rescoring must compare the complete
+expected identity for every record, including non-completed records, before
+evaluation or error classification.
+
+Acceptance:
+
+- standalone evaluation refuses a workspace whose persisted scenario or
+  evaluator version differs from the selected rules;
+- the standalone CLI derives rules from persisted identity or requires an
+  explicit selection that is verified against it;
+- manifest rescore checks manifest ID, run ID, scenario/version, evaluator
+  version, architecture, repetition, seed, source hashes, and code revision for
+  every persisted record;
+- missing, corrupt, mismatched, or source-tampered benchmark identities produce
+  an explicit refusal rather than an analytical failure or `not_evaluated`;
+- legacy unbound workspaces, if retained, use an explicit diagnostic-only path
+  and cannot enter a benchmark manifest.
+
+#### R9 — Consolidate offline rescoring and make it aggregation-safe [P1]
+
+Use one canonical manifest-rescore implementation for the Python API and both
+CLIs. Isolate evaluator exceptions per record, retain operational outcomes,
+update evaluator versions deliberately, and recompute all aggregates and
+architecture comparisons from the new run results before writing output.
+
+Acceptance:
+
+- one evaluator exception does not abort scoring of unrelated records;
+- a completed run with an evaluator exception receives `error`, no score, and
+  remains in operational/reliability counts;
+- non-completed runs retain their lifecycle outcome and are not converted into
+  analytical failures;
+- analytical-quality denominators exclude evaluator errors while the failure
+  taxonomy reports them;
+- rescored aggregates and paired comparisons are recomputed and cannot retain
+  values from the input manifest;
+- tests exercise a non-empty multi-record manifest, including one evaluator
+  crash and previously populated aggregates.
+
+#### R10 — Bind the cost pilot to its recorded benchmark cell [P2]
+
+Treat the pilot report as a derived view of an immutable run record, not an
+independent source of truth. Bind it to the manifest/model/configuration and a
+canonical digest of the referenced run record, then re-derive and compare usage,
+latency, pricing availability, and cost at the full-run gate.
+
+Acceptance:
+
+- changing pilot cost, usage, latency, run ID, model identity, matrix size, or
+  record digest causes the full run to refuse execution;
+- unknown cost can proceed only through an explicit acknowledgement tied to the
+  exact manifest and pilot record;
+- known pricing requires a matching pricing model and recorded cost breakdown;
+- adversarial tests prove that replacing `null` cost with `0.0` cannot bypass
+  the acknowledgement.
+
+#### R11 — Persist append-only attempt history and reconcile totals [P2]
+
+Replace the single overwritten attempt ID with typed, append-only attempt
+records. Each attempt should retain its identity, timestamps, terminal outcome,
+usage delta, cost availability/delta, and elapsed time while the run record
+retains reconciled cumulative totals.
+
+Acceptance:
+
+- resuming a workspace appends a new attempt without changing prior attempt
+  records;
+- agent and tool events can be attributed to the attempt that produced them;
+- cumulative usage, known cost, and elapsed time equal the sum of attempt-level
+  values, with unknown cost represented explicitly rather than as zero;
+- interrupted-before-record and interrupted-after-partial-write fixtures recover
+  without double counting;
+- the final benchmark record exposes or references the full attempt history,
+  not only the latest attempt ID.
+
+#### R12 — Make every offline output non-destructive and atomic [P2]
+
+All offline evaluation, rescore, and report writers must refuse the input path
+and existing output files. Consolidate exclusive/atomic writing behavior and
+retire or delegate legacy CLI paths so documentation cannot direct users to a
+less-safe implementation.
+
+Acceptance:
+
+- input and output resolving to the same path are rejected before evaluation;
+- an existing output is never overwritten implicitly;
+- writes validate the full payload before an atomic publication operation that
+  fails if the destination already exists, without modifying the source
+  manifest;
+- the legacy manifest-evaluation CLI delegates to the canonical R9 path or is
+  removed from supported benchmark documentation;
+- regression tests cover identical paths, symlink/relative aliases, existing
+  outputs, evaluator failure, and successful exclusive creation.
+
 #### Task 10 — Execute and publish the Phase 2 benchmark
 
-After R1–R6 are complete, freeze a benchmark manifest, run the declared
+After R1–R12 are complete, including the final R6 preflight, freeze a benchmark
+manifest, run the declared
 single-agent and five-agent matrix, evaluate every persisted workspace offline,
 inspect failures without changing rules mid-experiment, and publish the actual
 results and limitations.
@@ -1730,7 +1860,7 @@ Do not invent results before running the benchmark.
 
 ### Phase 2 done when
 
-- R1–R6 pre-benchmark remediation is complete and its deterministic regression
+- R1–R12 pre-benchmark remediation is complete and its deterministic regression
   suite is green;
 - approximately 10 deterministic, versioned scenarios cover root cause, data
   quality, statistical reasoning, evidence grounding, and non-driver rejection;

@@ -3,7 +3,7 @@
 **Status date:** 2026-08-18  
 **Implementation:** Tasks 1–9 complete
 
-**Remediation:** R1–R6 pending before Task 10
+**Remediation:** R2 verified; R1/R3/R4/R5 partial; R6–R12 pending before Task 10
 
 **Experiment:** Task 10 not started; no results published
 
@@ -12,7 +12,7 @@ required pre-benchmark remediation, and the exact boundary between tested
 infrastructure and empirical results. It is a handoff record, not a benchmark
 report.
 
-## Phase 2 Pre-Benchmark Remediation: R1–R6
+## Phase 2 Pre-Benchmark Remediation: R1–R12
 
 The following remediation tasks must be completed and deterministically
 verified before Task 10 begins:
@@ -43,7 +43,37 @@ verified before Task 10 begins:
    preflight: tests, Ruff, architecture-neutral fixtures, workspace mismatch,
    failed evidence, evaluator exceptions, interrupted resume, unknown pricing,
    all 10 × 2 × 3 dry-run cells, and a benchmark-validity-focused Sol High code
-   review.
+   review. This is the final gate and must be rerun after R7–R12.
+7. **R7 — Make tool use capability-driven [P0].** Remove unconditional SQL and
+   Python presence gates. Express requirements as scenario-specific typed
+   capabilities and test equivalent outputs across different valid tool mixes.
+8. **R8 — Enforce identity at every offline boundary [P1].** Match persisted
+   workspace identity to selected rules and complete manifest identity for
+   standalone, completed, and non-completed rescore paths. Keep unbound legacy
+   evaluation explicitly outside benchmark use.
+9. **R9 — Consolidate aggregation-safe rescoring [P1].** Route APIs and CLIs
+   through one per-record error-isolated implementation, then recompute
+   aggregates and paired comparisons from the rescored records.
+10. **R10 — Bind the pilot to its run record [P2].** Verify a canonical run-record
+    digest and re-derive usage, latency, pricing availability, and cost before
+    permitting the remaining matrix.
+11. **R11 — Persist append-only attempt history [P2].** Retain every attempt ID,
+    timing, outcome, usage/cost delta, and event attribution; reconcile those
+    records to cumulative benchmark totals.
+12. **R12 — Make offline outputs non-destructive and atomic [P2].** Refuse input
+    paths and existing outputs, consolidate exclusive writes, and retire or
+    delegate unsafe legacy CLI behavior.
+
+### Follow-up review disposition
+
+| Remediation | Current disposition | Required closure |
+| --- | --- | --- |
+| R1 | Partial | R7 capability/tool-mix regressions |
+| R2 | Verified | Retain all four failed-evidence adversarial fixtures |
+| R3 | Partial | R8 enforcement across every offline entry point |
+| R4 | Partial | R9 canonical per-record error isolation and reaggregation |
+| R5 | Partial | R10 pilot binding and R11 durable attempt history |
+| R6 | Pending | Remove false documents and rerun the final preflight after R7–R12 |
 
 ## What is implemented
 
@@ -67,7 +97,10 @@ definitions compose these rules instead of cloning a canonical evaluator.
 
 `scripts/evaluate_workspace.py` evaluates one persisted workspace and
 `scripts/evaluate_manifest.py` evaluates a manifest. These paths do not load
-`.env`, invoke agents, or make API calls. Stable serialization supports
+`.env`, invoke agents, or make API calls. Until R8, R9, and R12 are complete,
+they are diagnostic interfaces rather than approved benchmark-rescore paths;
+benchmark manifests should use `scripts/run_benchmark.py offline-rescore`.
+Stable serialization supports
 byte-for-byte repeatability where timestamps or equivalent semantics do not
 require normalization. The final report, Critic, and evaluator use the same
 compiled final metric set.
@@ -158,24 +191,27 @@ for later README tables without manual transcription.
 
 ## Verification completed
 
-The latest full deterministic run completed with:
+The latest full deterministic review run completed with:
 
 ```text
-312 passed, 3 skipped, 13 deselected
+330 passed, 13 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
-passed. Deterministic fake-run coverage includes resume, interruption,
+passed, and the complete 10 × 2 × 3 declaration produced 60 unique cells and
+workspace paths. Deterministic fake-run coverage includes resume, interruption,
 duplicate IDs, failed cells, immutable workspaces, paid-execution guards, pilot
-enforcement, and offline rescoring.
+enforcement, and offline rescoring. The follow-up review also demonstrated that
+the green suite does not yet cover tool-mix neutrality, standalone scenario
+identity mismatch, tampered pilot cost, or non-empty legacy batch rescoring.
 
-## Task 10 is intentionally blocked pending R1–R6
+## Task 10 is intentionally blocked pending R1–R12
 
 No Phase 2 benchmark manifest currently exists. No paid pilot or single-agent
 versus five-agent matrix has been executed, evaluated, or aggregated. Existing
 canonical MVP workspaces were created under the earlier acceptance workflow and
 are not valid substitutes for declared Phase 2 cells. Task 10 must not begin
-until R1–R6 are complete and the full deterministic preflight is green.
+until R1–R12 are complete and the full deterministic preflight is green.
 
 Therefore there are currently no honest Phase 2 values for task success,
 numerical accuracy, unsupported claims, operational reliability, cost, latency,
