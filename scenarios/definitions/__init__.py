@@ -7,11 +7,13 @@ from scenarios.definitions.models import (
     GroundTruthMetric,
     InjectedCondition,
     ScenarioDefinition,
+    ScenarioModelContext,
 )
 
 __all__ = [
     "CANONICAL_PROFITABILITY_SCENARIO",
     "GroundTruthMetric",
     "InjectedCondition",
+    "ScenarioModelContext",
     "ScenarioDefinition",
 ]

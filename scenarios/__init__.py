@@ -5,6 +5,7 @@ from scenarios.definitions import (
     GroundTruthMetric,
     InjectedCondition,
     ScenarioDefinition,
+    ScenarioModelContext,
 )
 from scenarios.generator import (
     SyntheticEcommerceConfig,
@@ -26,6 +27,7 @@ __all__ = [
     "CanonicalScenarioInjectionConfig",
     "GroundTruthMetric",
     "InjectedCondition",
+    "ScenarioModelContext",
     "ScenarioDefinition",
     "ScenarioRun",
     "SyntheticEcommerceConfig",

@@ -2,11 +2,12 @@
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from schemas.metrics import MetricComparisonType
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
+VersionString = Annotated[str, Field(pattern=r"^\d+\.\d+$", min_length=3)]
 
 
 class InjectedCondition(BaseModel):
@@ -44,11 +45,41 @@ class ScenarioDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scenario_id: NonEmptyString
+    scenario_version: VersionString = "1.0"
     name: NonEmptyString
     user_question: NonEmptyString
+    seed: int = Field(default=42, ge=0)
+    generation_config: dict[str, JsonValue] = Field(default_factory=dict)
+    evaluator_version: VersionString = "1.0"
     injected_conditions: tuple[InjectedCondition, ...] = Field(min_length=1)
     expected_primary_driver: NonEmptyString
     expected_secondary_findings: tuple[NonEmptyString, ...] = Field(min_length=1)
     known_non_drivers: tuple[NonEmptyString, ...] = Field(min_length=1)
     expected_data_quality_findings: tuple[NonEmptyString, ...] = Field(min_length=1)
     ground_truth: tuple[GroundTruthMetric, ...] = Field(min_length=1)
+
+    def model_visible_context(self) -> "ScenarioModelContext":
+        """Return the allow-listed context safe to pass to an analysis model.
+
+        ``ScenarioDefinition`` remains evaluator-only because it contains
+        injected conditions and expected answers.  Callers constructing a
+        prompt must use this projection rather than dumping the definition.
+        """
+
+        return ScenarioModelContext(
+            scenario_id=self.scenario_id,
+            scenario_version=self.scenario_version,
+            name=self.name,
+            user_question=self.user_question,
+        )
+
+
+class ScenarioModelContext(BaseModel):
+    """Strict model-visible scenario projection with no evaluator fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_id: NonEmptyString
+    scenario_version: VersionString
+    name: NonEmptyString
+    user_question: NonEmptyString

@@ -230,6 +230,10 @@ class AnalysisRunState(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # Added after the Phase 1 canonical workspaces were created.  The default
+    # keeps those workspaces loadable while new persisted state advertises the
+    # schema understood by the offline evaluation contracts.
+    schema_version: str = "1.0"
     run_id: NonEmptyString
     objective: NonEmptyString
     business_context: NonEmptyString | None = None

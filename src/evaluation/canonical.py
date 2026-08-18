@@ -15,6 +15,10 @@ from math import isclose, isfinite
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from evaluation.contracts import (
+    WorkspaceVersionCompatibilityError,
+    check_workspace_version_compatibility,
+)
 from orchestration.ledger import AnalysisLedger
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO, GroundTruthMetric
 from schemas.lead import LeadResult
@@ -337,7 +341,10 @@ def _open_workspace_path(workspace_path: str | Path) -> Workspace:
     if not root.is_dir():
         raise CanonicalAcceptanceError(f"workspace does not exist: {root}")
     try:
+        check_workspace_version_compatibility(root)
         return WorkspaceManager(root.parent).open_workspace(root.name)
+    except WorkspaceVersionCompatibilityError as exc:
+        raise CanonicalAcceptanceError(str(exc)) from exc
     except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
         raise CanonicalAcceptanceError(f"workspace layout is invalid: {exc}") from exc
 
@@ -383,6 +390,11 @@ def evaluate_canonical_workspace(
     failures: list[str] = []
     if not isinstance(workspace, Workspace):
         workspace = _open_workspace_path(workspace)
+    else:
+        try:
+            check_workspace_version_compatibility(workspace.root)
+        except WorkspaceVersionCompatibilityError as exc:
+            raise CanonicalAcceptanceError(str(exc)) from exc
     try:
         ledger = AnalysisLedger(workspace)
     except Exception as exc:
