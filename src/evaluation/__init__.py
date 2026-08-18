@@ -4,10 +4,12 @@ from evaluation.canonical import (
     CanonicalAcceptanceError,
     CanonicalAcceptanceSummary,
     evaluate_canonical_run,
+    evaluate_canonical_workspace,
 )
 
 __all__ = [
     "CanonicalAcceptanceError",
     "CanonicalAcceptanceSummary",
     "evaluate_canonical_run",
+    "evaluate_canonical_workspace",
 ]

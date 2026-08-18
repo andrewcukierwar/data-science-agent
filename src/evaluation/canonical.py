@@ -11,11 +11,12 @@ import re
 import stat
 from collections.abc import Iterable
 from dataclasses import dataclass
-from math import isfinite
+from math import isclose, isfinite
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orchestration.ledger import AnalysisLedger
-from orchestration.runner import AnalysisRunResult
-from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
+from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO, GroundTruthMetric
 from schemas.lead import LeadResult
 from schemas.metrics import (
     MetricComparison,
@@ -29,6 +30,13 @@ from schemas.metrics import (
 from schemas.run_state import AgentEventStatus, ArtifactKind, RunStatus
 from schemas.validation import ValidationStatus
 from tools.artifacts import ArtifactManager
+from tools.workspace import Workspace, WorkspaceManager
+
+if TYPE_CHECKING:
+    from orchestration.runner import AnalysisRunResult
+
+_CORROBORATION_RELATIVE_TOLERANCE = 1e-3
+_CORROBORATION_ABSOLUTE_TOLERANCE = 1e-3
 
 
 class CanonicalAcceptanceError(AssertionError):
@@ -58,14 +66,12 @@ def _normalized_dimensions(
     }
 
 
-def _metric_identity_matches(
+def _metric_non_dimension_identity_matches(
     comparison: MetricComparison,
-    expected: object,
+    expected: GroundTruthMetric,
 ) -> bool:
-    """Match only generic metric identity, never evaluator-specific IDs."""
+    """Match generic metric identity except dimensions."""
 
-    expected_dimensions = _normalized_dimensions(expected.dimensions)
-    actual_dimensions = _normalized_dimensions(comparison.dimensions)
     normalized_actual = normalize_metric_comparison(comparison)
     expected_metric_key = normalize_metric_key(
         expected.metric_key,
@@ -73,10 +79,6 @@ def _metric_identity_matches(
     )
     return (
         normalized_actual.metric_key == expected_metric_key
-        and all(
-            actual_dimensions.get(key) == value
-            for key, value in expected_dimensions.items()
-        )
         and _normalized_period(comparison.baseline_period)
         == _normalized_period(expected.baseline_period)
         and _normalized_period(comparison.comparison_period)
@@ -85,6 +87,74 @@ def _metric_identity_matches(
         and normalized_actual.unit
         == normalize_metric_unit(expected.value_unit, expected.comparison_type)
     )
+
+
+def _dimensions_are_compatible_superset(
+    actual: dict[str, str],
+    expected: dict[str, str],
+) -> bool:
+    """Return whether actual dimensions contain the expected segmentation."""
+
+    return all(actual.get(key) == value for key, value in expected.items())
+
+
+def _selected_metric_candidates(
+    comparisons: list[MetricComparison],
+    expected: GroundTruthMetric,
+) -> list[MetricComparison]:
+    """Prefer exact dimensions, otherwise return compatible supersets."""
+
+    expected_dimensions = _normalized_dimensions(expected.dimensions)
+    candidates = [
+        normalize_metric_comparison(comparison)
+        for comparison in comparisons
+        if _metric_non_dimension_identity_matches(comparison, expected)
+    ]
+    exact = [
+        comparison
+        for comparison in candidates
+        if _normalized_dimensions(comparison.dimensions) == expected_dimensions
+    ]
+    if exact:
+        return exact
+    return [
+        comparison
+        for comparison in candidates
+        if _dimensions_are_compatible_superset(
+            _normalized_dimensions(comparison.dimensions),
+            expected_dimensions,
+        )
+    ]
+
+
+def _reconcile_metric_candidates(
+    candidates: list[MetricComparison],
+    expected: GroundTruthMetric,
+) -> tuple[MetricComparison | None, bool]:
+    """Compile compatible measurements and identify material conflicts."""
+
+    expected_dimensions = normalize_metric_dimensions(expected.dimensions)
+    projected = [
+        comparison.model_copy(update={"dimensions": expected_dimensions})
+        for comparison in candidates
+    ]
+    compilation = compile_metric_comparisons(projected)
+    if compilation.conflicts:
+        return None, True
+    reconciled = compilation.comparisons
+    materially_consistent = all(
+        isclose(
+            left.value,
+            right.value,
+            rel_tol=_CORROBORATION_RELATIVE_TOLERANCE,
+            abs_tol=_CORROBORATION_ABSOLUTE_TOLERANCE,
+        )
+        for index, left in enumerate(reconciled)
+        for right in reconciled[index + 1 :]
+    )
+    if not materially_consistent:
+        return None, True
+    return (reconciled[-1] if reconciled else None), False
 
 
 def _metric_comparisons_from_input(
@@ -103,28 +173,22 @@ def _canonical_numeric_ground_truth_failures(
     """Compare generic structured metric identity and values to ground truth."""
 
     failures: list[str] = []
-    compilation = compile_metric_comparisons(_metric_comparisons_from_input(values))
-    comparisons = compilation.comparisons
-    failures.extend(
-        "materially conflicting numeric findings for metric: " + conflict.metric_key
-        for conflict in compilation.conflicts
-    )
+    comparisons = _metric_comparisons_from_input(values)
 
     for metric in CANONICAL_PROFITABILITY_SCENARIO.ground_truth:
-        matching = [
-            comparison
-            for comparison in comparisons
-            if _metric_identity_matches(comparison, metric)
-        ]
-        if not matching:
+        candidates = _selected_metric_candidates(comparisons, metric)
+        if not candidates:
             failures.append(f"missing numeric ground-truth finding: {metric.id}")
             continue
-        if len(matching) > 1:
+        comparison, conflicting = _reconcile_metric_candidates(candidates, metric)
+        if conflicting:
             failures.append(
-                f"multiple incompatible metric definitions for: {metric.id}"
+                f"materially conflicting numeric findings for metric: {metric.id}"
             )
             continue
-        comparison = matching[0]
+        if comparison is None:
+            failures.append(f"missing numeric ground-truth finding: {metric.id}")
+            continue
         if not isfinite(comparison.value):
             failures.append(f"numeric finding is not finite: {metric.id}")
             continue
@@ -140,7 +204,9 @@ def _analysis_sentences(text: str) -> list[str]:
     """Split report prose into bounded units for semantic acceptance checks."""
 
     return [
-        sentence.strip() for sentence in re.split(r"[.!?\n]+", text) if sentence.strip()
+        sentence.strip()
+        for sentence in re.split(r"(?<!\d)[.!?]+(?!\d)|\n+", text)
+        if sentence.strip()
     ]
 
 
@@ -264,15 +330,59 @@ class CanonicalAcceptanceSummary:
         }
 
 
-def evaluate_canonical_run(
-    result: AnalysisRunResult,
+def _open_workspace_path(workspace_path: str | Path) -> Workspace:
+    """Open one existing workspace from its direct filesystem path."""
+
+    root = Path(workspace_path).expanduser().resolve()
+    if not root.is_dir():
+        raise CanonicalAcceptanceError(f"workspace does not exist: {root}")
+    try:
+        return WorkspaceManager(root.parent).open_workspace(root.name)
+    except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
+        raise CanonicalAcceptanceError(f"workspace layout is invalid: {exc}") from exc
+
+
+def _report_has_recommendations(report_text: str) -> bool:
+    """Require a non-empty persisted Recommendations report section."""
+
+    match = re.search(
+        r"(?ims)^## Recommendations\s*$\n(?P<body>.*?)(?=^## |\Z)",
+        report_text,
+    )
+    if match is None:
+        return False
+    body = match.group("body").strip().lower()
+    return bool(body) and "no recommendations were returned" not in body
+
+
+def _report_recommendation_evidence_refs(report_text: str) -> list[str]:
+    """Extract exact evidence references from the persisted report section."""
+
+    match = re.search(
+        r"(?ims)^## Recommendations\s*$\n(?P<body>.*?)(?=^## |\Z)",
+        report_text,
+    )
+    if match is None:
+        return []
+    return [
+        reference.strip()
+        for group in re.findall(
+            r"(?i)evidence:\s*([^)]*)\)",
+            match.group("body"),
+        )
+        for reference in group.split(",")
+        if reference.strip()
+    ]
+
+
+def evaluate_canonical_workspace(
+    workspace: Workspace | str | Path,
 ) -> CanonicalAcceptanceSummary:
-    """Verify the persisted workspace and the evaluator-only business outcome."""
+    """Evaluate a completed canonical workspace using only persisted state."""
 
     failures: list[str] = []
-    if result.workspace is None:
-        raise CanonicalAcceptanceError("run did not create a workspace")
-    workspace = result.workspace
+    if not isinstance(workspace, Workspace):
+        workspace = _open_workspace_path(workspace)
     try:
         ledger = AnalysisLedger(workspace)
     except Exception as exc:
@@ -353,32 +463,10 @@ def evaluate_canonical_run(
     ]
     require(bool(chart_artifacts), "no chart artifact was registered")
     require(bool(state.findings), "no findings were persisted")
-    numeric_comparisons = (
-        result.lead_result.metric_comparisons if result.lead_result is not None else []
-    )
-    failures.extend(_canonical_numeric_ground_truth_failures(numeric_comparisons))
+    failures.extend(_canonical_numeric_ground_truth_failures(state.metric_comparisons))
     require(
         bool(state.metric_comparisons),
         "structured metric comparisons were not persisted",
-    )
-    if result.lead_result is not None:
-        lead_metrics = compile_metric_comparisons(result.lead_result.metric_comparisons)
-        ledger_metrics = compile_metric_comparisons(state.metric_comparisons)
-        require(
-            not lead_metrics.conflicts and not ledger_metrics.conflicts,
-            "final structured metric state contains unresolved conflicts",
-        )
-        require(
-            lead_metrics.comparisons == ledger_metrics.comparisons,
-            "Lead, Critic/report, and ledger do not share one final metric set",
-        )
-    require(
-        result.lead_result is not None and bool(result.lead_result.findings),
-        "Lead did not return final findings",
-    )
-    require(
-        result.lead_result is not None and bool(result.lead_result.recommendations),
-        "Lead did not return final recommendations",
     )
 
     evidence_refs = {event.id for event in state.tool_events}
@@ -404,26 +492,15 @@ def evaluate_canonical_run(
                 ),
                 f"resolved hypothesis cites no executed evidence: {hypothesis.id}",
             )
-    if result.lead_result is not None:
-        for recommendation in result.lead_result.recommendations:
-            require(
-                any(
-                    reference in evidence_refs
-                    for reference in recommendation.evidence_refs
-                ),
-                f"recommendation cites no executed evidence: {recommendation.id}",
-            )
-        for comparison in result.lead_result.metric_comparisons:
-            require(
-                bool(comparison.evidence_refs),
-                f"metric comparison has no evidence_refs: {comparison.metric_key}",
-            )
-            require(
-                all(
-                    reference in evidence_refs for reference in comparison.evidence_refs
-                ),
-                f"metric comparison cites unexecuted evidence: {comparison.metric_key}",
-            )
+    for comparison in state.metric_comparisons:
+        require(
+            bool(comparison.evidence_refs),
+            f"metric comparison has no evidence_refs: {comparison.metric_key}",
+        )
+        require(
+            all(reference in evidence_refs for reference in comparison.evidence_refs),
+            f"metric comparison cites unexecuted evidence: {comparison.metric_key}",
+        )
 
     specialist_roles = {record.agent_role for record in state.specialist_results}
     require(
@@ -476,10 +553,22 @@ def evaluate_canonical_run(
         report_text = (workspace.root / state.final_report.path).read_text(
             encoding="utf-8"
         )
+    require(
+        _report_has_recommendations(report_text),
+        "final report recommendations are missing",
+    )
+    recommendation_evidence_refs = _report_recommendation_evidence_refs(report_text)
+    require(
+        bool(recommendation_evidence_refs),
+        "final report recommendations cite no evidence",
+    )
+    require(
+        all(reference in evidence_refs for reference in recommendation_evidence_refs),
+        "final report recommendations cite unexecuted evidence",
+    )
     analysis_text = " ".join(
         [
             report_text,
-            result.lead_result.answer if result.lead_result is not None else "",
             *[finding.statement for finding in state.findings],
         ]
     ).lower()
@@ -544,3 +633,13 @@ def evaluate_canonical_run(
         elapsed_seconds=elapsed,
         estimated_cost_usd=state.estimated_cost_usd,
     )
+
+
+def evaluate_canonical_run(
+    result: AnalysisRunResult,
+) -> CanonicalAcceptanceSummary:
+    """Evaluate a live result through the same persisted-workspace core."""
+
+    if result.workspace is None:
+        raise CanonicalAcceptanceError("run did not create a workspace")
+    return evaluate_canonical_workspace(result.workspace)

@@ -1,6 +1,10 @@
 """Deterministic checks for the canonical acceptance evaluator boundary."""
 
 import asyncio
+import json
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +17,9 @@ from evaluation.canonical import (
     _has_asserted_primary_driver,
     _has_primary_channel_contribution,
     evaluate_canonical_run,
+    evaluate_canonical_workspace,
 )
+from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
 from schemas.audit import AuditResult
@@ -21,7 +27,13 @@ from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.hypotheses import Hypothesis, HypothesisStatus
 from schemas.lead import LeadResult
 from schemas.metrics import MetricComparison
-from schemas.run_state import AgentEventStatus, ArtifactKind, ToolEvent, ToolEventStatus
+from schemas.run_state import (
+    AgentEventStatus,
+    ArtifactKind,
+    RunStatus,
+    ToolEvent,
+    ToolEventStatus,
+)
 from schemas.validation import ValidationResult, ValidationStatus
 from tools.artifacts import ArtifactManager
 from tools.workspace import WorkspaceManager
@@ -81,6 +93,112 @@ def test_canonical_numeric_ground_truth_requires_the_declared_unit() -> None:
     assert any(
         "missing numeric ground-truth finding" in failure for failure in failures
     )
+
+
+def _replace_ltv_comparisons(
+    replacements: list[MetricComparison],
+) -> list[MetricComparison]:
+    return [
+        item for item in _canonical_comparisons() if item.metric_key != "ltv"
+    ] + replacements
+
+
+def _ltv_comparison(
+    value: float,
+    dimensions: dict[str, str],
+    evidence_ref: str,
+) -> MetricComparison:
+    return MetricComparison(
+        metric_key="ltv",
+        dimensions=dimensions,
+        baseline_period="Q1 2025",
+        comparison_period="Q2 2025",
+        comparison_type="relative_change",
+        value=value,
+        unit="relative_change_fraction",
+        evidence_refs=[evidence_ref],
+    )
+
+
+def test_exact_metric_dimensions_win_over_consistent_specific_match() -> None:
+    comparisons = _replace_ltv_comparisons(
+        [
+            _ltv_comparison(0.0, {"channel": "Meta"}, "exact"),
+            _ltv_comparison(
+                0.0001,
+                {"channel": "Meta", "cohort": "acquired customers"},
+                "specific",
+            ),
+        ]
+    )
+
+    assert _canonical_numeric_ground_truth_failures(comparisons) == []
+
+
+def test_consistent_compatible_metric_supersets_are_reconciled() -> None:
+    comparisons = _replace_ltv_comparisons(
+        [
+            _ltv_comparison(
+                0.0,
+                {"channel": "Meta", "cohort": "acquired customers"},
+                "cohort",
+            ),
+            _ltv_comparison(
+                0.0001,
+                {"channel": "Meta", "population": "new customers"},
+                "population",
+            ),
+        ]
+    )
+
+    assert _canonical_numeric_ground_truth_failures(comparisons) == []
+
+
+def test_conflicting_compatible_metric_matches_fail() -> None:
+    comparisons = _replace_ltv_comparisons(
+        [
+            _ltv_comparison(
+                0.0,
+                {"channel": "Meta", "cohort": "acquired customers"},
+                "cohort",
+            ),
+            _ltv_comparison(
+                0.2,
+                {"channel": "Meta", "population": "new customers"},
+                "population",
+            ),
+        ]
+    )
+
+    failures = _canonical_numeric_ground_truth_failures(comparisons)
+
+    assert any("materially conflicting" in failure for failure in failures)
+    assert any("meta-q2-90-day-ltv" in failure for failure in failures)
+
+
+def test_incorrect_exact_metric_match_is_not_replaced_by_superset() -> None:
+    comparisons = _replace_ltv_comparisons(
+        [
+            _ltv_comparison(0.2, {"channel": "Meta"}, "incorrect-exact"),
+            _ltv_comparison(
+                0.0,
+                {"channel": "Meta", "cohort": "acquired customers"},
+                "correct-specific",
+            ),
+        ]
+    )
+
+    failures = _canonical_numeric_ground_truth_failures(comparisons)
+
+    assert any("outside" in failure for failure in failures)
+    assert any("meta-q2-90-day-ltv" in failure for failure in failures)
+
+
+def test_missing_metric_still_fails_numeric_acceptance() -> None:
+    failures = _canonical_numeric_ground_truth_failures(_replace_ltv_comparisons([]))
+
+    assert any("missing" in failure for failure in failures)
+    assert any("meta-q2-90-day-ltv" in failure for failure in failures)
 
 
 def test_generic_metric_aliases_and_paraphrased_periods_match_identity() -> None:
@@ -370,3 +488,229 @@ def test_complete_offline_fixture_passes_phase1_acceptance_without_api(
 
     assert summary.status == "completed"
     assert summary.model_requests == 5
+
+
+def test_completed_persisted_workspace_passes_without_executing_agents(
+    tmp_path: Path,
+) -> None:
+    """Build ledger state directly and evaluate it without an agent lifecycle."""
+
+    inputs_source = tmp_path / "persisted-inputs"
+    inputs_source.mkdir()
+    pd.DataFrame({"customer_id": ["C1"]}).to_parquet(
+        inputs_source / "customers.parquet"
+    )
+    docs_source = tmp_path / "persisted-docs"
+    docs_source.mkdir()
+    (docs_source / "business_definitions.md").write_text(
+        "# Business definitions\nUse reporting contribution profit.",
+        encoding="utf-8",
+    )
+    workspace = WorkspaceManager(tmp_path / "persisted-workspaces").create_workspace(
+        "canonical-persisted",
+        inputs_source=inputs_source,
+        docs_source=docs_source,
+    )
+    ledger = AnalysisLedger(
+        workspace,
+        objective=CANONICAL_PROFITABILITY_SCENARIO.user_question,
+    )
+    ledger.record_run_metadata(model="offline-fixture", model_provider="none")
+    ledger.record_audit(AuditResult(status="complete"))
+    ledger.update_investigation_plan(
+        ["Audit inputs", "Decompose profit", "Validate recommendations"]
+    )
+
+    query_path = workspace.working / "queries" / "canonical.sql"
+    query_path.write_text(
+        "SELECT customer_id FROM customers LIMIT 1\n",
+        encoding="utf-8",
+    )
+    script_path = workspace.working / "scripts" / "canonical.py"
+    script_path.write_text(
+        "import pandas as pd\npd.read_parquet('/workspace/inputs/customers.parquet')\n",
+        encoding="utf-8",
+    )
+    now = datetime.now(UTC)
+    ledger.append_tool_event(
+        ToolEvent(
+            id="persisted-sql",
+            tool_name="run_sql",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=now,
+            completed_at=now,
+            arguments={"query_path": "working/queries/canonical.sql"},
+            artifact_refs=["working/queries/canonical.sql"],
+        )
+    )
+    ledger.append_tool_event(
+        ToolEvent(
+            id="persisted-python",
+            tool_name="run_python",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=now,
+            completed_at=now,
+            arguments={"script_path": "working/scripts/canonical.py"},
+            artifact_refs=["working/scripts/canonical.py"],
+        )
+    )
+
+    evidence_ref = "working/queries/canonical.sql"
+    hypothesis = Hypothesis(
+        id="H1",
+        statement="Acquisition efficiency drove the profitability decline.",
+        status=HypothesisStatus.SUPPORTED,
+        evidence_refs=[evidence_ref],
+        rationale="The persisted funnel evidence supports the mechanism.",
+    )
+    ledger.upsert_hypothesis(hypothesis)
+    finding_text = (
+        "Meta was the largest material profitability driver: contribution profit "
+        "fell $5,235.57 as spend rose, sessions stayed stable, conversion declined "
+        "and drove fewer acquired customers and higher CAC. Meta 90-day LTV and "
+        "broad COGS and contribution margin were stable, so neither was a material "
+        "driver."
+    )
+    ledger.upsert_finding(
+        Finding(
+            id="F1",
+            statement=finding_text,
+            metric="cac",
+            value=0.0,
+            value_unit="relative_change_fraction",
+            evidence_refs=[evidence_ref],
+            confidence=ConfidenceLevel.HIGH,
+        )
+    )
+    comparisons = [
+        item.model_copy(update={"evidence_refs": [evidence_ref]})
+        for item in _canonical_comparisons()
+    ]
+    comparisons.extend(
+        [
+            _ltv_comparison(
+                0.0001,
+                {"channel": "Meta", "cohort": "acquired customers"},
+                evidence_ref,
+            ),
+            MetricComparison(
+                metric_key="sessions",
+                dimensions={"channel": "Meta"},
+                baseline_period="Q1 2025",
+                comparison_period="Q2 2025",
+                comparison_type="relative_change",
+                value=0.0,
+                unit="relative_change_fraction",
+                evidence_refs=[evidence_ref],
+            ),
+        ]
+    )
+    ledger.replace_metric_comparisons(comparisons)
+    ledger.record_specialist_result(
+        "statistician",
+        SpecialistResult(
+            objective="Assess downstream customer value.",
+            metric_comparisons=[
+                item for item in comparisons if item.metric_key == "ltv"
+            ],
+            methods_used=["persisted deterministic fixture"],
+        ),
+    )
+    for role in ("data_auditor", "lead", "analyst", "statistician", "critic"):
+        ledger.record_agent_event(
+            agent_name=role.replace("_", " ").title(),
+            agent_role=role,
+            status=AgentEventStatus.SUCCEEDED,
+            model="offline-fixture",
+            objective=CANONICAL_PROFITABILITY_SCENARIO.user_question,
+            output_type="persisted-fixture",
+        )
+    ledger.add_validation_result(
+        ValidationResult(
+            status=ValidationStatus.PASS,
+            checked_finding_ids=["F1"],
+            summary="Persisted evidence is complete and valid.",
+        )
+    )
+
+    chart_path = workspace.outputs / "canonical-chart.png"
+    chart_path.write_bytes(b"offline chart")
+    ArtifactManager(workspace, ledger).register(
+        "outputs/canonical-chart.png",
+        artifact_id="canonical-chart",
+        kind=ArtifactKind.CHART,
+        media_type="image/png",
+    )
+    report_path = workspace.outputs / "report.md"
+    report_path.write_text(
+        "# Analysis Report\n\n"
+        "## Executive Summary\n\n"
+        f"{finding_text}\n\n"
+        "## Findings\n\n"
+        f"- {finding_text} _(evidence: {evidence_ref})_\n\n"
+        "## Recommendations\n\n"
+        "- Govern spend with CAC, conversion, contribution-profit, and LTV "
+        f"guardrails. _(evidence: {evidence_ref})_\n",
+        encoding="utf-8",
+    )
+    report = ArtifactManager(workspace, ledger).register(
+        "outputs/report.md",
+        artifact_id="final-report",
+        kind=ArtifactKind.REPORT,
+        media_type="text/markdown",
+    )
+    ledger.record_final_report(report)
+    ledger.record_model_usage(
+        SimpleNamespace(
+            requests=5,
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            input_tokens_details=None,
+            output_tokens_details=None,
+        )
+    )
+    ledger.record_elapsed(1.0)
+    ledger.record_cost_estimate()
+    ledger.update_budget(
+        ledger.budget.model_copy(
+            update={
+                "sql_executions": 1,
+                "python_executions": 1,
+                "specialist_invocations": 2,
+                "critic_loops": 1,
+                "charts_created": 1,
+            }
+        )
+    )
+    ledger.set_status(RunStatus.COMPLETED)
+
+    summary = evaluate_canonical_workspace(workspace.root)
+
+    assert summary.status == "completed"
+    assert summary.sql_events == 1
+    assert summary.python_events == 1
+    assert summary.chart_artifacts == 1
+
+    environment = os.environ.copy()
+    environment.pop("OPENAI_API_KEY", None)
+    environment["OPENAI_BASE_URL"] = "http://127.0.0.1:1"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(
+                Path(__file__).resolve().parents[1]
+                / "scripts"
+                / "evaluate_canonical_workspace.py"
+            ),
+            str(workspace.root),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["run_id"] == "canonical-persisted"
