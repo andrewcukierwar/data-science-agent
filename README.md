@@ -55,6 +55,35 @@ uv run python scripts/evaluate_manifest.py benchmark-manifest.json \
   --output benchmark-rescored.json
 ```
 
+## Resumable benchmark matrix
+
+Plan the first benchmark with three repetitions per scenario and architecture.
+Planning writes the manifest before any workspace or agent execution:
+
+```bash
+uv run python scripts/run_benchmark.py plan benchmark.json
+```
+
+Run one paid cost-estimation cell, then resume the remaining immutable cells:
+
+```bash
+uv run python scripts/run_benchmark.py pilot benchmark.json --allow-paid
+uv run python scripts/run_benchmark.py run benchmark.json --allow-paid
+```
+
+Live execution requires `--allow-paid`, `OPENAI_API_KEY`, and a matching
+`OPENAI_DEFAULT_MODEL`. The runner never loads `.env`, never overwrites an
+existing run workspace, and records provider/operational failures separately
+from analytical evaluator results. Use `dry-run` to inspect a matrix without
+writing it, or `offline-rescore` to produce a new manifest after evaluator
+changes without rerunning agents:
+
+```bash
+uv run python scripts/run_benchmark.py dry-run --scenario-id canonical-q2-profitability
+uv run python scripts/run_benchmark.py offline-rescore benchmark.json \
+  --output benchmark-rescored.json
+```
+
 ## Versioned scenario catalog
 
 Scenario generation and evaluator rules resolve through the versioned catalog:
