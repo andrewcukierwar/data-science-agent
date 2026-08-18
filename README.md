@@ -36,3 +36,21 @@ It writes the isolated workspace under `.runs/canonical-mvp/canonical-q2-mvp`,
 prints a persisted-workspace acceptance summary, and uses evaluator-only
 scenario ground truth after the agent run. Use `--force` only to intentionally
 replace that exact run directory.
+
+## Generic offline evaluation
+
+Evaluate a persisted workspace without loading agents, `.env`, or making API
+calls:
+
+```bash
+uv run python scripts/evaluate_workspace.py \
+  .runs/canonical-mvp/canonical-q2-mvp
+```
+
+Rescore all persisted workspaces referenced by a manifest. The input manifest
+is never overwritten:
+
+```bash
+uv run python scripts/evaluate_manifest.py benchmark-manifest.json \
+  --output benchmark-rescored.json
+```

@@ -1,17 +1,10 @@
-"""Evaluator for the canonical Phase 1 no-steering acceptance run.
-
-This module is deliberately downstream of the agents. It may use the scenario
-definition as evaluator-only ground truth, but no value from it is supplied to
-agent prompts.
-"""
+"""Canonical scenario adapter over the generic offline evaluation engine."""
 
 from __future__ import annotations
 
 import re
-import stat
 from collections.abc import Iterable
 from dataclasses import dataclass
-from math import isclose, isfinite
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,286 +12,35 @@ from evaluation.contracts import (
     WorkspaceVersionCompatibilityError,
     check_workspace_version_compatibility,
 )
-from orchestration.ledger import AnalysisLedger
+from evaluation.engine import evaluate_workspace
+from evaluation.primitives import (
+    numeric_ground_truth_failures,
+    reconcile_metric_candidates,
+    select_metric_candidates,
+)
+from evaluation.rules import canonical_rules
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO, GroundTruthMetric
 from schemas.lead import LeadResult
 from schemas.metrics import (
     MetricComparison,
-    compile_metric_comparisons,
-    normalize_metric_comparison,
     normalize_metric_dimensions,
     normalize_metric_key,
     normalize_metric_period,
-    normalize_metric_unit,
 )
-from schemas.run_state import AgentEventStatus, ArtifactKind, RunStatus
-from schemas.validation import ValidationStatus
-from tools.artifacts import ArtifactManager
+from schemas.run_state import ArtifactKind
 from tools.workspace import Workspace, WorkspaceManager
 
 if TYPE_CHECKING:
     from orchestration.runner import AnalysisRunResult
 
-_CORROBORATION_RELATIVE_TOLERANCE = 1e-3
-_CORROBORATION_ABSOLUTE_TOLERANCE = 1e-3
-
 
 class CanonicalAcceptanceError(AssertionError):
-    """Raised when a canonical run does not satisfy the MVP contract."""
-
-
-def _normalized_metric_identifier(metric: str) -> str:
-    """Normalize a generic metric key for evaluator-only identity matching."""
-
-    return normalize_metric_key(metric, {})
-
-
-def _normalized_period(period: str) -> str:
-    """Normalize common quarter labels without accepting scenario IDs."""
-
-    return normalize_metric_period(period).lower()
-
-
-def _normalized_dimensions(
-    dimensions: dict[str, str],
-) -> dict[str, str]:
-    """Normalize generic dimension names and values for identity matching."""
-
-    return {
-        key: value.lower()
-        for key, value in normalize_metric_dimensions(dimensions).items()
-    }
-
-
-def _metric_non_dimension_identity_matches(
-    comparison: MetricComparison,
-    expected: GroundTruthMetric,
-) -> bool:
-    """Match generic metric identity except dimensions."""
-
-    normalized_actual = normalize_metric_comparison(comparison)
-    expected_metric_key = normalize_metric_key(
-        expected.metric_key,
-        expected.dimensions,
-    )
-    return (
-        normalized_actual.metric_key == expected_metric_key
-        and _normalized_period(comparison.baseline_period)
-        == _normalized_period(expected.baseline_period)
-        and _normalized_period(comparison.comparison_period)
-        == _normalized_period(expected.comparison_period)
-        and comparison.comparison_type is expected.comparison_type
-        and normalized_actual.unit
-        == normalize_metric_unit(expected.value_unit, expected.comparison_type)
-    )
-
-
-def _dimensions_are_compatible_superset(
-    actual: dict[str, str],
-    expected: dict[str, str],
-) -> bool:
-    """Return whether actual dimensions contain the expected segmentation."""
-
-    return all(actual.get(key) == value for key, value in expected.items())
-
-
-def _selected_metric_candidates(
-    comparisons: list[MetricComparison],
-    expected: GroundTruthMetric,
-) -> list[MetricComparison]:
-    """Prefer exact dimensions, otherwise return compatible supersets."""
-
-    expected_dimensions = _normalized_dimensions(expected.dimensions)
-    candidates = [
-        normalize_metric_comparison(comparison)
-        for comparison in comparisons
-        if _metric_non_dimension_identity_matches(comparison, expected)
-    ]
-    exact = [
-        comparison
-        for comparison in candidates
-        if _normalized_dimensions(comparison.dimensions) == expected_dimensions
-    ]
-    if exact:
-        return exact
-    return [
-        comparison
-        for comparison in candidates
-        if _dimensions_are_compatible_superset(
-            _normalized_dimensions(comparison.dimensions),
-            expected_dimensions,
-        )
-    ]
-
-
-def _reconcile_metric_candidates(
-    candidates: list[MetricComparison],
-    expected: GroundTruthMetric,
-) -> tuple[MetricComparison | None, bool]:
-    """Compile compatible measurements and identify material conflicts."""
-
-    expected_dimensions = normalize_metric_dimensions(expected.dimensions)
-    projected = [
-        comparison.model_copy(update={"dimensions": expected_dimensions})
-        for comparison in candidates
-    ]
-    compilation = compile_metric_comparisons(projected)
-    if compilation.conflicts:
-        return None, True
-    reconciled = compilation.comparisons
-    materially_consistent = all(
-        isclose(
-            left.value,
-            right.value,
-            rel_tol=_CORROBORATION_RELATIVE_TOLERANCE,
-            abs_tol=_CORROBORATION_ABSOLUTE_TOLERANCE,
-        )
-        for index, left in enumerate(reconciled)
-        for right in reconciled[index + 1 :]
-    )
-    if not materially_consistent:
-        return None, True
-    return (reconciled[-1] if reconciled else None), False
-
-
-def _metric_comparisons_from_input(
-    values: Iterable[MetricComparison] | LeadResult,
-) -> list[MetricComparison]:
-    """Accept a typed LeadResult or comparisons for focused evaluator tests."""
-
-    if isinstance(values, LeadResult):
-        return values.metric_comparisons
-    return list(values)
-
-
-def _canonical_numeric_ground_truth_failures(
-    values: Iterable[MetricComparison] | LeadResult,
-) -> list[str]:
-    """Compare generic structured metric identity and values to ground truth."""
-
-    failures: list[str] = []
-    comparisons = _metric_comparisons_from_input(values)
-
-    for metric in CANONICAL_PROFITABILITY_SCENARIO.ground_truth:
-        candidates = _selected_metric_candidates(comparisons, metric)
-        if not candidates:
-            failures.append(f"missing numeric ground-truth finding: {metric.id}")
-            continue
-        comparison, conflicting = _reconcile_metric_candidates(candidates, metric)
-        if conflicting:
-            failures.append(
-                f"materially conflicting numeric findings for metric: {metric.id}"
-            )
-            continue
-        if comparison is None:
-            failures.append(f"missing numeric ground-truth finding: {metric.id}")
-            continue
-        if not isfinite(comparison.value):
-            failures.append(f"numeric finding is not finite: {metric.id}")
-            continue
-        if abs(comparison.value - metric.expected_relative_change) > metric.tolerance:
-            failures.append(
-                f"{metric.id}={comparison.value} is outside "
-                f"{metric.expected_relative_change} +/- {metric.tolerance}"
-            )
-    return failures
-
-
-def _analysis_sentences(text: str) -> list[str]:
-    """Split report prose into bounded units for semantic acceptance checks."""
-
-    return [
-        sentence.strip()
-        for sentence in re.split(r"(?<!\d)[.!?]+(?!\d)|\n+", text)
-        if sentence.strip()
-    ]
-
-
-def _has_asserted_primary_driver(text: str) -> bool:
-    """Require an asserted conversion mechanism, not a speculative mention."""
-
-    change_terms = r"declin|fell|drop|down|deteriorat|lower|decreas|reduc|worsen"
-    causal_terms = (
-        r"drove|drives|explain|caused|cause|led to|resulted in|"
-        r"primary|main|largest|responsible|accounted for|mechanism"
-    )
-    uncertainty_terms = (
-        r"may be worth|might|could|possible|possibly|uncertain|unclear|"
-        r"unknown|question|investigat"
-    )
-    for sentence in _analysis_sentences(text):
-        lowered = sentence.lower()
-        if "meta" not in lowered or "conversion" not in lowered:
-            continue
-        if re.search(uncertainty_terms, lowered):
-            continue
-        if not re.search(change_terms, lowered):
-            continue
-        if re.search(causal_terms, lowered):
-            return True
-    return False
-
-
-def _has_primary_channel_contribution(text: str) -> bool:
-    """Require the answer to identify Meta as a material profitability driver."""
-
-    terms = r"largest|primary|main|material|major|biggest"
-    for sentence in _analysis_sentences(text):
-        lowered = sentence.lower()
-        if (
-            "meta" in lowered
-            and re.search(terms, lowered)
-            and ("profit" in lowered or "decline" in lowered or "driver" in lowered)
-        ):
-            return True
-    return False
-
-
-def _has_acquisition_efficiency_decomposition(text: str) -> bool:
-    """Require the relevant acquisition path to be discussed as a mechanism."""
-
-    concept_patterns = (
-        r"marketing[_ ]spend|spend",
-        r"conversion",
-        r"acquired[_ ]customers|new customers|customer volume",
-        r"\bcac\b|customer[_ ]acquisition[_ ]cost",
-        r"\bltv\b|lifetime value|customer value",
-    )
-    return all(re.search(pattern, text) for pattern in concept_patterns)
-
-
-def _has_stable_ltv_statement(text: str) -> bool:
-    """Require stable LTV to be stated as a conclusion rather than a mention."""
-
-    stable_terms = r"stable|unchanged|approximately flat|effectively identical|held"
-    for sentence in _analysis_sentences(text):
-        lowered = sentence.lower()
-        if re.search(r"\bltv\b|lifetime value|customer value", lowered) and re.search(
-            stable_terms, lowered
-        ):
-            return True
-    return False
-
-
-def _has_margin_non_driver_statement(text: str) -> bool:
-    """Require broad COGS/margin deterioration to be ruled out explicitly."""
-
-    non_driver_terms = (
-        r"stable|unchanged|no broad|not .*driver|did not|didn't|"
-        r"not explain|not the cause|not responsible|consistent"
-    )
-    for sentence in _analysis_sentences(text):
-        lowered = sentence.lower()
-        if ("cogs" in lowered or "margin" in lowered) and re.search(
-            non_driver_terms, lowered
-        ):
-            return True
-    return False
+    """Raised when a canonical run does not satisfy its scenario contract."""
 
 
 @dataclass(frozen=True, slots=True)
 class CanonicalAcceptanceSummary:
-    """Small machine-readable summary printed by the manual acceptance script."""
+    """Small machine-readable summary retained for the Phase 1 CLI."""
 
     run_id: str
     workspace: str
@@ -335,7 +77,7 @@ class CanonicalAcceptanceSummary:
 
 
 def _open_workspace_path(workspace_path: str | Path) -> Workspace:
-    """Open one existing workspace from its direct filesystem path."""
+    """Open one existing workspace after checking its persisted version."""
 
     root = Path(workspace_path).expanduser().resolve()
     if not root.is_dir():
@@ -349,8 +91,108 @@ def _open_workspace_path(workspace_path: str | Path) -> Workspace:
         raise CanonicalAcceptanceError(f"workspace layout is invalid: {exc}") from exc
 
 
+def _metric_comparisons_from_input(
+    values: Iterable[MetricComparison] | LeadResult,
+) -> list[MetricComparison]:
+    """Compatibility helper for focused canonical evaluator tests."""
+
+    if isinstance(values, LeadResult):
+        return values.metric_comparisons
+    return list(values)
+
+
+def _normalized_metric_identifier(metric: str) -> str:
+    """Compatibility wrapper for generic metric-key normalization."""
+
+    return normalize_metric_key(metric, {})
+
+
+def _normalized_period(period: str) -> str:
+    """Compatibility wrapper for generic period normalization."""
+
+    return normalize_metric_period(period).lower()
+
+
+def _normalized_dimensions(dimensions: dict[str, str]) -> dict[str, str]:
+    """Compatibility wrapper for generic dimension normalization."""
+
+    return {
+        key: value.lower()
+        for key, value in normalize_metric_dimensions(dimensions).items()
+    }
+
+
+def _selected_metric_candidates(
+    comparisons: list[MetricComparison],
+    expected: GroundTruthMetric,
+) -> list[MetricComparison]:
+    """Compatibility wrapper for generic metric candidate selection."""
+
+    return select_metric_candidates(comparisons, expected)
+
+
+def _reconcile_metric_candidates(
+    candidates: list[MetricComparison],
+    expected: GroundTruthMetric,
+) -> tuple[MetricComparison | None, bool]:
+    """Compatibility wrapper for generic metric reconciliation."""
+
+    return reconcile_metric_candidates(candidates, expected)
+
+
+def _canonical_numeric_ground_truth_failures(
+    values: Iterable[MetricComparison] | LeadResult,
+) -> list[str]:
+    """Compatibility wrapper around the generic numeric evaluator primitive."""
+
+    return numeric_ground_truth_failures(
+        _metric_comparisons_from_input(values),
+        CANONICAL_PROFITABILITY_SCENARIO.ground_truth,
+    )
+
+
+def _canonical_text_rule(check_id: str):
+    """Resolve a legacy helper to the registered canonical text rule."""
+
+    return next(
+        rule.predicate
+        for rule in canonical_rules().root_cause_rules
+        if rule.check_id == check_id
+    )
+
+
+def _has_asserted_primary_driver(text: str) -> bool:
+    """Compatibility wrapper for the generic asserted-mechanism primitive."""
+
+    return _canonical_text_rule("conversion_mechanism")(text)
+
+
+def _has_primary_channel_contribution(text: str) -> bool:
+    """Compatibility wrapper for the generic material-driver primitive."""
+
+    return _canonical_text_rule("primary_channel_driver")(text)
+
+
+def _has_acquisition_efficiency_decomposition(text: str) -> bool:
+    """Compatibility wrapper for the generic concept-list primitive."""
+
+    return _canonical_text_rule("acquisition_efficiency_decomposition")(text)
+
+
+def _has_stable_ltv_statement(text: str) -> bool:
+    """Compatibility wrapper for the generic stability primitive."""
+
+    return _canonical_text_rule("stable_ltv")(text)
+
+
+def _has_margin_non_driver_statement(text: str) -> bool:
+    """Compatibility wrapper for the generic non-driver primitive."""
+
+    return _canonical_text_rule("margin_non_driver")(text)
+
+
 def _report_has_recommendations(report_text: str) -> bool:
-    """Require a non-empty persisted Recommendations report section."""
+    """Compatibility helper for the persisted report section check."""
 
     match = re.search(
         r"(?ims)^## Recommendations\s*$\n(?P<body>.*?)(?=^## |\Z)",
@@ -363,7 +205,7 @@ def _report_has_recommendations(report_text: str) -> bool:
 
 
 def _report_recommendation_evidence_refs(report_text: str) -> list[str]:
-    """Extract exact evidence references from the persisted report section."""
+    """Compatibility helper for report evidence extraction."""
 
     match = re.search(
         r"(?ims)^## Recommendations\s*$\n(?P<body>.*?)(?=^## |\Z)",
@@ -373,10 +215,7 @@ def _report_recommendation_evidence_refs(report_text: str) -> list[str]:
         return []
     return [
         reference.strip()
-        for group in re.findall(
-            r"(?i)evidence:\s*([^)]*)\)",
-            match.group("body"),
-        )
+        for group in re.findall(r"(?i)evidence:\s*([^)]*)\)", match.group("body"))
         for reference in group.split(",")
         if reference.strip()
     ]
@@ -385,72 +224,22 @@ def _report_recommendation_evidence_refs(report_text: str) -> list[str]:
 def evaluate_canonical_workspace(
     workspace: Workspace | str | Path,
 ) -> CanonicalAcceptanceSummary:
-    """Evaluate a completed canonical workspace using only persisted state."""
+    """Evaluate a canonical workspace with no model, agent, or API activity."""
 
-    failures: list[str] = []
-    if not isinstance(workspace, Workspace):
-        workspace = _open_workspace_path(workspace)
-    else:
-        try:
-            check_workspace_version_compatibility(workspace.root)
-        except WorkspaceVersionCompatibilityError as exc:
-            raise CanonicalAcceptanceError(str(exc)) from exc
     try:
-        ledger = AnalysisLedger(workspace)
-    except Exception as exc:
-        raise CanonicalAcceptanceError(
-            f"analysis ledger could not be reloaded: {exc}"
-        ) from exc
-    state = ledger.state
+        result = evaluate_workspace(workspace, canonical_rules())
+    except WorkspaceVersionCompatibilityError as exc:
+        raise CanonicalAcceptanceError(str(exc)) from exc
+    except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
+        raise CanonicalAcceptanceError(str(exc)) from exc
 
-    def require(condition: bool, message: str) -> None:
-        if not condition:
-            failures.append(message)
+    failures = [
+        check.message for check in result.checks if check.status.value == "fail"
+    ]
+    if failures:
+        raise CanonicalAcceptanceError("; ".join(failures))
 
-    require(state.status is RunStatus.COMPLETED, "run did not complete successfully")
-    require(state.error is None, "completed run retains an error state")
-    for read_only_directory in (workspace.inputs, workspace.docs):
-        for path in read_only_directory.rglob("*"):
-            if path.is_file():
-                require(
-                    not (
-                        path.stat().st_mode
-                        & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
-                    ),
-                    "read-only source became writable: "
-                    f"{path.relative_to(workspace.root)}",
-                )
-    require(state.audit is not None, "completed Data Audit is missing")
-    if state.audit is not None:
-        require(
-            state.audit.status.value == "complete",
-            f"Data Audit status is {state.audit.status.value}, not complete",
-        )
-    require(bool(state.investigation_plan), "investigation plan is missing")
-    require(bool(state.hypotheses), "current hypothesis state is missing")
-    require(bool(state.hypothesis_history), "hypothesis history is missing")
-    require(
-        state.run_budget.sql_executions <= state.run_budget.max_sql_executions,
-        "SQL budget was exceeded",
-    )
-    require(
-        state.run_budget.python_executions <= state.run_budget.max_python_executions,
-        "Python budget was exceeded",
-    )
-    require(
-        state.run_budget.specialist_invocations
-        <= state.run_budget.max_specialist_invocations,
-        "specialist budget was exceeded",
-    )
-    require(
-        state.run_budget.critic_loops <= state.run_budget.max_critic_loops,
-        "critic-loop budget was exceeded",
-    )
-    require(
-        state.run_budget.charts_created <= state.run_budget.max_charts,
-        "chart budget was exceeded",
-    )
-
+    state = result.snapshot.state
     successful_sql = [
         event
         for event in state.tool_events
@@ -461,179 +250,22 @@ def evaluate_canonical_workspace(
         for event in state.tool_events
         if event.tool_name == "run_python" and event.status.value == "succeeded"
     ]
-    require(bool(successful_sql), "successful SQL evidence is missing")
-    require(bool(successful_python), "successful Python evidence is missing")
-    for event in [*successful_sql, *successful_python]:
-        for reference in event.artifact_refs:
-            require(
-                (workspace.root / reference).is_file(),
-                f"tool evidence path is missing: {reference}",
-            )
-
     chart_artifacts = [
         artifact for artifact in state.artifacts if artifact.kind is ArtifactKind.CHART
     ]
-    require(bool(chart_artifacts), "no chart artifact was registered")
-    require(bool(state.findings), "no findings were persisted")
-    failures.extend(_canonical_numeric_ground_truth_failures(state.metric_comparisons))
-    require(
-        bool(state.metric_comparisons),
-        "structured metric comparisons were not persisted",
-    )
-
-    evidence_refs = {event.id for event in state.tool_events}
-    evidence_refs.update(
-        reference for event in state.tool_events for reference in event.artifact_refs
-    )
-    evidence_refs.update(artifact.id for artifact in state.artifacts)
-    evidence_refs.update(artifact.path for artifact in state.artifacts)
-    for finding in state.findings:
-        require(
-            bool(finding.evidence_refs),
-            f"finding has no evidence_refs: {finding.id}",
-        )
-        require(
-            all(reference in evidence_refs for reference in finding.evidence_refs),
-            f"finding cites unexecuted evidence: {finding.id}",
-        )
-    for hypothesis in state.hypotheses:
-        if hypothesis.status.value != "open":
-            require(
-                any(
-                    reference in evidence_refs for reference in hypothesis.evidence_refs
-                ),
-                f"resolved hypothesis cites no executed evidence: {hypothesis.id}",
-            )
-    for comparison in state.metric_comparisons:
-        require(
-            bool(comparison.evidence_refs),
-            f"metric comparison has no evidence_refs: {comparison.metric_key}",
-        )
-        require(
-            all(reference in evidence_refs for reference in comparison.evidence_refs),
-            f"metric comparison cites unexecuted evidence: {comparison.metric_key}",
-        )
-
-    specialist_roles = {record.agent_role for record in state.specialist_results}
-    require(
-        "statistician" in specialist_roles,
-        "Statistician typed output is missing for the canonical LTV question",
-    )
-
-    agent_roles = {
-        event.agent_role
-        for event in state.agent_events
-        if event.status is AgentEventStatus.SUCCEEDED
-    }
-    for role in ("data_auditor", "lead", "analyst", "statistician", "critic"):
-        require(role in agent_roles, f"successful {role} trace is missing")
-    require(bool(state.agent_events), "agent execution trace is missing")
-    require(bool(state.tool_events), "tool execution trace is missing")
-
-    require(bool(state.validation_results), "Critic validation is missing")
-    if state.validation_results:
-        require(
-            state.validation_results[-1].status is ValidationStatus.PASS,
-            "final Critic validation did not pass",
-        )
-    require(state.final_report is not None, "final report record is missing")
-    if state.final_report is not None:
-        require(
-            state.final_report.kind is ArtifactKind.REPORT,
-            "final report is not registered as a report artifact",
-        )
-        require(
-            (workspace.root / state.final_report.path).is_file(),
-            "final report file is missing",
-        )
-
-    require(state.usage.requests > 0, "model request usage is missing")
-    require(state.usage.total_tokens > 0, "model token usage is missing")
-    require(state.elapsed_seconds is not None, "elapsed-time metadata is missing")
-    require(state.cost_estimation_note is not None, "cost metadata is missing")
-    for artifact in state.artifacts:
-        try:
-            require(
-                ArtifactManager(workspace, ledger).verify_artifact(artifact.id),
-                f"artifact provenance mismatch: {artifact.id}",
-            )
-        except (OSError, ValueError, KeyError) as exc:
-            failures.append(f"artifact provenance could not be verified: {exc}")
-
-    report_text = ""
-    if state.final_report is not None:
-        report_text = (workspace.root / state.final_report.path).read_text(
-            encoding="utf-8"
-        )
-    require(
-        _report_has_recommendations(report_text),
-        "final report recommendations are missing",
-    )
-    recommendation_evidence_refs = _report_recommendation_evidence_refs(report_text)
-    require(
-        bool(recommendation_evidence_refs),
-        "final report recommendations cite no evidence",
-    )
-    require(
-        all(reference in evidence_refs for reference in recommendation_evidence_refs),
-        "final report recommendations cite unexecuted evidence",
-    )
-    analysis_text = " ".join(
-        [
-            report_text,
-            *[finding.statement for finding in state.findings],
-        ]
-    ).lower()
-    require(
-        _has_primary_channel_contribution(analysis_text),
-        "final analysis does not identify Meta as the largest material driver",
-    )
-    require(
-        _has_asserted_primary_driver(analysis_text),
-        "final analysis does not assert that Meta conversion deterioration explains "
-        "the acquisition decline",
-    )
-    require(
-        _has_acquisition_efficiency_decomposition(analysis_text),
-        "final analysis does not cover the relevant acquisition-efficiency path",
-    )
-    require(
-        _has_stable_ltv_statement(analysis_text),
-        "final analysis does not characterize acquired-customer LTV as stable",
-    )
-    require(
-        _has_margin_non_driver_statement(analysis_text),
-        "final analysis does not rule out broad COGS or margin deterioration",
-    )
-    if state.audit is not None:
-        require(
-            not any(
-                issue.severity.value in {"medium", "high"}
-                for issue in state.audit.issues
-            ),
-            "audit reports a material data-quality defect",
-        )
-
-    if failures:
-        raise CanonicalAcceptanceError("; ".join(failures))
-
-    elapsed = state.elapsed_seconds or 0.0
     return CanonicalAcceptanceSummary(
         run_id=state.run_id,
-        workspace=str(workspace.root),
+        workspace=str(result.snapshot.workspace.root),
         status=state.status.value,
         checks=(
-            "audit",
-            "plan_and_hypothesis_history",
-            "sql_and_python_evidence",
-            "charts",
+            "lifecycle",
+            "data_quality",
+            "numeric_comparisons",
             "provenance",
-            "specialist_outputs",
-            "critic",
-            "final_report",
-            "trace_and_usage",
-            "structured_metric_comparisons",
-            "semantic_root_cause_and_non_drivers",
+            "root_cause_and_non_drivers",
+            "statistics",
+            "unsupported_claims",
+            "task_completeness",
         ),
         sql_events=len(successful_sql),
         python_events=len(successful_python),
@@ -642,7 +274,7 @@ def evaluate_canonical_workspace(
         specialist_results=len(state.specialist_results),
         model_requests=state.usage.requests,
         total_tokens=state.usage.total_tokens,
-        elapsed_seconds=elapsed,
+        elapsed_seconds=state.elapsed_seconds or 0.0,
         estimated_cost_usd=state.estimated_cost_usd,
     )
 
@@ -650,8 +282,16 @@ def evaluate_canonical_workspace(
 def evaluate_canonical_run(
     result: AnalysisRunResult,
 ) -> CanonicalAcceptanceSummary:
-    """Evaluate a live result through the same persisted-workspace core."""
+    """Evaluate a live result through the same persisted-workspace engine."""
 
     if result.workspace is None:
         raise CanonicalAcceptanceError("run did not create a workspace")
     return evaluate_canonical_workspace(result.workspace)
+
+
+__all__ = [
+    "CanonicalAcceptanceError",
+    "CanonicalAcceptanceSummary",
+    "evaluate_canonical_run",
+    "evaluate_canonical_workspace",
+]
