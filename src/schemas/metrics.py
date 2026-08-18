@@ -2,7 +2,7 @@
 
 import re
 from enum import StrEnum
-from math import isfinite
+from math import isclose, isfinite
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -73,6 +73,29 @@ class MetricComparison(BaseModel):
         return value
 
 
+class MetricConflict(BaseModel):
+    """Materially different values reported for one analytical estimand."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metric_key: NonEmptyString
+    dimensions: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
+    baseline_period: NonEmptyString
+    comparison_period: NonEmptyString
+    comparison_type: MetricComparisonType
+    unit: NonEmptyString
+    comparisons: list[MetricComparison] = Field(min_length=2)
+
+
+class MetricCompilationResult(BaseModel):
+    """One canonical final metric set plus observable material conflicts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    comparisons: list[MetricComparison] = Field(default_factory=list)
+    conflicts: list[MetricConflict] = Field(default_factory=list)
+
+
 _METRIC_ALIASES = {
     "conversion": "conversion_rate",
     "session_conversion": "conversion_rate",
@@ -83,10 +106,16 @@ _METRIC_ALIASES = {
     "new_customers": "acquired_customers",
     "customer_count": "acquired_customers",
     "acquired_customer_count": "acquired_customers",
+    "acquisition_sessions": "sessions",
+    "all_channel_acquisition_sessions": "sessions",
+    "session_count": "sessions",
+    "traffic": "sessions",
     "ltv_90d": "ltv",
     "ltv_90_day": "ltv",
     "90d_ltv": "ltv",
     "90_day_ltv": "ltv",
+    "acquired_customer_90d_ltv": "ltv",
+    "acquired_customer_90_day_ltv": "ltv",
 }
 _DIMENSION_ALIASES = {
     "acquisition_channel": "channel",
@@ -167,9 +196,9 @@ def normalize_metric_unit(
     """Normalize units only when the numeric interpretation is unchanged."""
 
     normalized = _slug(unit)
-    if (
-        comparison_type is MetricComparisonType.RELATIVE_CHANGE
-        and normalized in _RELATIVE_FRACTION_UNITS
+    if comparison_type is MetricComparisonType.RELATIVE_CHANGE and (
+        normalized in _RELATIVE_FRACTION_UNITS
+        or normalized.endswith("_relative_change_fraction")
     ):
         return "relative_change_fraction"
     return normalized
@@ -260,6 +289,189 @@ def metric_comparison_identity(
     return (*metric_comparison_scope_identity(comparison), context_identity)
 
 
+_CONTEXT_ANCHORS = {
+    "population": {
+        "acquisition_cohort": (
+            "acquisition cohort",
+            "acquired customer",
+            "new customer",
+        ),
+        "orders": ("orders", "order rows"),
+        "sessions": ("sessions", "session rows"),
+    },
+    "date_basis": {
+        "acquisition_date": ("acquisition_date", "acquisition date"),
+        "order_date": ("order_date", "order date"),
+        "session_date": ("session_date", "session date"),
+        "marketing_date": ("marketing spend date", "spend date"),
+    },
+    "observation_window": {
+        "90_day": ("90 day", "90-day", "90d"),
+        "calendar_period": ("calendar quarter", "calendar period", "reporting period"),
+        "lifetime": ("lifetime", "all available history"),
+    },
+    "numerator": {
+        "marketing_spend": ("marketing spend", "ad spend"),
+        "converted_sessions": ("converted sessions", "conversions"),
+        "acquired_customers": ("acquired customers", "new customers"),
+        "net_revenue": ("net revenue",),
+        "cogs": ("cogs", "cost of goods"),
+        "contribution": ("contribution",),
+    },
+    "denominator": {
+        "sessions": ("sessions", "traffic"),
+        "acquired_customers": ("acquired customers", "new customers"),
+        "orders": ("orders",),
+        "net_revenue": ("net revenue",),
+    },
+}
+
+
+def _context_anchor_sets(
+    context: MetricDefinitionContext | None,
+) -> dict[str, frozenset[str]]:
+    """Extract only scope distinctions that can change an estimand."""
+
+    if context is None:
+        return {}
+    anchors: dict[str, frozenset[str]] = {}
+    for field_name, candidates in _CONTEXT_ANCHORS.items():
+        value = getattr(context, field_name)
+        if value is None:
+            continue
+        normalized = value.lower().replace("_", " ")
+        matched = frozenset(
+            anchor
+            for anchor, terms in candidates.items()
+            if any(term.replace("_", " ") in normalized for term in terms)
+        )
+        if matched:
+            anchors[field_name] = matched
+    return anchors
+
+
+def metric_definition_contexts_compatible(
+    left: MetricDefinitionContext | None,
+    right: MetricDefinitionContext | None,
+) -> bool:
+    """Return whether two contexts can describe the same analytical estimand.
+
+    Free-form wording is intentionally not identity. Only incompatible scope
+    anchors (for example acquisition-date cohorts versus calendar order dates)
+    split otherwise equivalent measurements.
+    """
+
+    left_anchors = _context_anchor_sets(left)
+    right_anchors = _context_anchor_sets(right)
+    for field_name in _CONTEXT_ANCHORS:
+        left_values = left_anchors.get(field_name)
+        right_values = right_anchors.get(field_name)
+        if left_values and right_values and left_values.isdisjoint(right_values):
+            return False
+    return True
+
+
+def _merge_evidence_refs(comparisons: list[MetricComparison]) -> list[str]:
+    return list(
+        dict.fromkeys(
+            reference
+            for comparison in comparisons
+            for reference in comparison.evidence_refs
+        )
+    )
+
+
+def _best_definition_context(
+    comparisons: list[MetricComparison],
+) -> MetricDefinitionContext | None:
+    """Prefer the latest most-specific compatible context."""
+
+    candidates = [
+        comparison.definition_context
+        for comparison in comparisons
+        if comparison.definition_context is not None
+    ]
+    if not candidates:
+        return None
+    return max(
+        enumerate(candidates),
+        key=lambda item: (
+            sum(value is not None for value in item[1].model_dump().values()),
+            item[0],
+        ),
+    )[1]
+
+
+def compile_metric_comparisons(
+    comparisons: list[MetricComparison],
+    *,
+    relative_tolerance: float = 1e-3,
+    absolute_tolerance: float = 1e-3,
+) -> MetricCompilationResult:
+    """Compile working measurements into one deterministic final metric set.
+
+    Equivalent, numerically consistent measurements corroborate one another and
+    merge provenance. Materially inconsistent measurements remain represented
+    once in the final set and produce an explicit conflict for Critic review.
+    Definition scopes that identify different estimands are never merged.
+    """
+
+    groups: list[list[MetricComparison]] = []
+    for raw_comparison in comparisons:
+        comparison = normalize_metric_comparison(raw_comparison)
+        for group in groups:
+            if metric_comparison_scope_identity(
+                group[0]
+            ) == metric_comparison_scope_identity(comparison) and all(
+                metric_definition_contexts_compatible(
+                    comparison.definition_context,
+                    member.definition_context,
+                )
+                for member in group
+            ):
+                group.append(comparison)
+                break
+        else:
+            groups.append([comparison])
+
+    compiled: list[MetricComparison] = []
+    conflicts: list[MetricConflict] = []
+    for group in groups:
+        latest = group[-1]
+        consistent = all(
+            isclose(
+                left.value,
+                right.value,
+                rel_tol=relative_tolerance,
+                abs_tol=absolute_tolerance,
+            )
+            for index, left in enumerate(group)
+            for right in group[index + 1 :]
+        )
+        if consistent:
+            latest = latest.model_copy(
+                update={
+                    "evidence_refs": _merge_evidence_refs(group),
+                    "definition_context": _best_definition_context(group),
+                }
+            )
+        else:
+            conflicts.append(
+                MetricConflict(
+                    metric_key=latest.metric_key,
+                    dimensions=latest.dimensions,
+                    baseline_period=latest.baseline_period,
+                    comparison_period=latest.comparison_period,
+                    comparison_type=latest.comparison_type,
+                    unit=latest.unit,
+                    comparisons=group,
+                )
+            )
+        compiled.append(latest)
+
+    return MetricCompilationResult(comparisons=compiled, conflicts=conflicts)
+
+
 def deduplicate_metric_comparisons(
     comparisons: list[MetricComparison],
 ) -> list[MetricComparison]:
@@ -278,13 +490,17 @@ def deduplicate_metric_comparisons(
 
 
 __all__ = [
+    "MetricCompilationResult",
     "MetricComparison",
     "MetricComparisonType",
+    "MetricConflict",
     "MetricDefinitionContext",
     "MetricObservation",
+    "compile_metric_comparisons",
     "deduplicate_metric_comparisons",
     "metric_comparison_identity",
     "metric_comparison_scope_identity",
+    "metric_definition_contexts_compatible",
     "normalize_metric_definition_context",
     "normalize_metric_comparison",
     "normalize_metric_dimensions",

@@ -136,8 +136,17 @@ def _sql_has_approved_source(sql: str, relation_names: set[str]) -> bool:
     """Return whether SQL visibly reads an approved input relation."""
 
     without_comments = re.sub(r"--[^\n]*|/\*.*?\*/", " ", sql, flags=re.DOTALL)
+    cte_names = {
+        match.group(1).lower()
+        for match in re.finditer(
+            r"(?:\bwith\b|,)\s*([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(",
+            without_comments,
+            re.IGNORECASE,
+        )
+    }
     return any(
-        re.search(
+        name.lower() not in cte_names
+        and re.search(
             rf"\b(?:from|join|update|into|using)\s+"
             rf"['\"]?{re.escape(name)}['\"]?(?=\s|[,;)]|$)",
             without_comments,

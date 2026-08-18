@@ -31,9 +31,11 @@ from schemas.findings import Finding, SpecialistResult, canonicalize_specialist_
 from schemas.lead import LeadResult, SpecialistTask
 from schemas.metrics import (
     MetricComparison,
+    compile_metric_comparisons,
     deduplicate_metric_comparisons,
     metric_comparison_identity,
     metric_comparison_scope_identity,
+    metric_definition_contexts_compatible,
     normalize_metric_comparison,
     normalize_metric_key,
 )
@@ -565,19 +567,30 @@ def _preserve_metric_definitions(
     consumed: set[int] = set()
     merged: list[MetricComparison] = []
     for previous in prior:
-        exact_index = next(
-            (
-                index
-                for index, item in enumerate(current)
-                if index not in consumed
-                and metric_comparison_identity(item)
-                == metric_comparison_identity(previous)
-            ),
-            None,
-        )
-        if exact_index is not None:
-            consumed.add(exact_index)
-            merged.append(current[exact_index])
+        exact_matches = [
+            (index, item)
+            for index, item in enumerate(current)
+            if index not in consumed
+            and metric_comparison_identity(item) == metric_comparison_identity(previous)
+        ]
+        if exact_matches:
+            previous_repeated = any(
+                item.value == previous.value for _, item in exact_matches
+            )
+            corrected = [
+                (index, item)
+                for index, item in exact_matches
+                if item.value != previous.value
+            ]
+            if previous_repeated and corrected:
+                # A replacement LeadResult commonly carries the stale comparison
+                # forward and appends its correction. The latest correction is
+                # authoritative for this remediation cycle; consume both copies.
+                consumed.update(index for index, _ in exact_matches)
+                merged.append(corrected[-1][1])
+            else:
+                consumed.update(index for index, _ in exact_matches)
+                merged.extend(item for _, item in exact_matches)
             continue
 
         same_metric = [
@@ -588,22 +601,35 @@ def _preserve_metric_definitions(
             == metric_comparison_scope_identity(previous)
         ]
         if same_metric:
-            for index, item in same_metric:
+            compatible = [
+                (index, item)
+                for index, item in same_metric
+                if metric_definition_contexts_compatible(
+                    previous.definition_context,
+                    item.definition_context,
+                )
+            ]
+            incompatible = [
+                (index, item)
+                for index, item in same_metric
+                if (index, item) not in compatible
+            ]
+            for index, item in compatible:
                 consumed.add(index)
-                if (
-                    item.definition_context is None
-                    and previous.definition_context is not None
-                ):
-                    merged.append(
-                        item.model_copy(
-                            update={"definition_context": previous.definition_context}
-                        )
+                merged.append(
+                    item.model_copy(
+                        update={
+                            "definition_context": (
+                                item.definition_context or previous.definition_context
+                            )
+                        }
                     )
-                else:
-                    # A different context is a distinct estimand. Preserve the
-                    # original comparison and retain the newly scoped result.
-                    merged.append(previous)
-                    merged.append(item)
+                )
+            if not compatible:
+                merged.append(previous)
+            for index, item in incompatible:
+                consumed.add(index)
+                merged.append(item)
             continue
         merged.append(previous)
 
@@ -684,12 +710,14 @@ def validate_lead_result(
             canonical_metric_comparisons,
             prior_result,
         )
+    compilation = compile_metric_comparisons(canonical_metric_comparisons)
     result = result.model_copy(
         update={
             "findings": canonical_findings,
             "recommendations": canonical_recommendations,
             "hypotheses": canonical_hypotheses,
-            "metric_comparisons": canonical_metric_comparisons,
+            "metric_comparisons": compilation.comparisons,
+            "metric_conflicts": compilation.conflicts,
         }
     )
     invalid_findings = [
@@ -770,8 +798,7 @@ def _persist_result(
         context.ledger.add_open_question(question)
     for finding in result.findings:
         context.ledger.upsert_finding(finding)
-    for comparison in result.metric_comparisons:
-        context.ledger.upsert_metric_comparison(comparison)
+    context.ledger.replace_metric_comparisons(result.metric_comparisons)
     return result
 
 

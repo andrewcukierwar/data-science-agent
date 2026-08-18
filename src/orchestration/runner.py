@@ -732,6 +732,7 @@ class AnalysisRunner:
             answer=result.answer,
             findings=result.findings,
             metric_comparisons=result.metric_comparisons,
+            metric_conflicts=result.metric_conflicts,
             recommendations=recommendations,
             hypotheses=result.hypotheses,
             open_questions=result.open_questions,

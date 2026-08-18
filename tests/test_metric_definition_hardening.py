@@ -317,7 +317,7 @@ def test_values_only_cte_cannot_claim_an_approved_relation(tmp_path: Path) -> No
         )
     )
 
-    assert not validate_candidate_evidence_provenance(
+    validation = validate_candidate_evidence_provenance(
         CriticCandidate(
             objective="Assess the measured value.",
             answer="The value is source-derived.",
@@ -334,6 +334,9 @@ def test_values_only_cte_cannot_claim_an_approved_relation(tmp_path: Path) -> No
         ),
         context.ledger,
     )
+
+    assert validation is not None
+    assert validation.status is ValidationStatus.REVISE
 
 
 def test_unrelated_registered_artifact_cannot_be_sole_material_provenance(

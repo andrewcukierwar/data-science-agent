@@ -483,6 +483,19 @@ class AnalysisLedger(ToolEventLedger):
         self.save()
         return comparison
 
+    def replace_metric_comparisons(
+        self,
+        comparisons: list[MetricComparison],
+    ) -> list[MetricComparison]:
+        """Persist the canonical final metric set as one source of truth."""
+
+        normalized = [normalize_metric_comparison(item) for item in comparisons]
+        if self._state.metric_comparisons == normalized:
+            return self._state.metric_comparisons
+        self._state.metric_comparisons = normalized
+        self.save()
+        return self._state.metric_comparisons
+
     def add_artifact(self, artifact: Artifact) -> Artifact:
         """Append an artifact reference with a unique identifier."""
 

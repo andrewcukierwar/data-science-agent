@@ -206,13 +206,26 @@ def _profitability_requires_margin_review(
             *candidate.recommendations,
         ]
     ).lower()
+    metric_keys = {
+        normalize_metric_comparison(item).metric_key
+        for item in candidate.metric_comparisons
+    }
+    required_metric_groups = (
+        {"net_revenue"},
+        {"cogs"},
+        {"contribution_before_marketing", "gross_contribution"},
+        {"contribution_margin", "cogs_to_revenue_ratio", "cogs_revenue_ratio"},
+    )
+    has_structured_components = all(
+        bool(metric_keys.intersection(group)) for group in required_metric_groups
+    )
     required_components = (
         ("net revenue", "revenue"),
         ("cogs",),
         ("contribution before marketing", "gross contribution"),
         ("margin", "cogs/revenue", "cogs to revenue"),
     )
-    has_components = all(
+    has_prose_components = all(
         any(term in candidate_text for term in alternatives)
         for alternatives in required_components
     )
@@ -226,6 +239,9 @@ def _profitability_requires_margin_review(
         "no broad",
         "stable margin",
         "margin was stable",
+        "margin was effectively stable",
+        "margin remained effectively stable",
+        "margin deterioration was not a material driver",
         "cogs was stable",
         "cogs remained stable",
     )
@@ -240,7 +256,7 @@ def _profitability_requires_margin_review(
         "cogs changed materially",
     )
     return not (
-        has_components
+        (has_structured_components or has_prose_components)
         and any(term in candidate_text for term in (*non_driver_terms, *driver_terms))
     )
 
@@ -314,10 +330,9 @@ def _acquisition_metric_comparisons_missing(
 ) -> list[str]:
     """Return material acquisition metrics absent from structured output."""
 
-    keys = {
-        normalize_metric_comparison(item).metric_key
-        for item in candidate.metric_comparisons
-    }
+    comparisons = [
+        normalize_metric_comparison(item) for item in candidate.metric_comparisons
+    ]
     required = {
         "marketing_spend": "marketing spend",
         "sessions": "sessions/traffic",
@@ -326,9 +341,75 @@ def _acquisition_metric_comparisons_missing(
         "cac": "CAC",
         "ltv": "downstream LTV/value",
     }
-    aliases = {"traffic": "sessions", "session_count": "sessions"}
-    normalized_keys = {aliases.get(key, key) for key in keys}
-    return [label for key, label in required.items() if key not in normalized_keys]
+    dimension_groups: dict[tuple[tuple[str, str], ...], set[str]] = {}
+    for comparison in comparisons:
+        dimensions = tuple(
+            sorted((key, value.lower()) for key, value in comparison.dimensions.items())
+        )
+        dimension_groups.setdefault(dimensions, set()).add(comparison.metric_key)
+
+    material_dimensions = [
+        dimensions
+        for dimensions, keys in dimension_groups.items()
+        if "cac" in keys
+        and dimensions
+        and any(
+            value not in {"all", "all channels", "overall"} for _, value in dimensions
+        )
+    ]
+    if not material_dimensions:
+        material_dimensions = [()]
+
+    missing: list[str] = []
+    for dimensions in material_dimensions:
+        keys = dimension_groups.get(dimensions, set())
+        dimension_label = ", ".join(f"{key}={value}" for key, value in dimensions)
+        for key, label in required.items():
+            if key not in keys:
+                missing.append(
+                    f"{label} ({dimension_label})" if dimension_label else label
+                )
+    return missing
+
+
+def validate_metric_compilation_conflicts(
+    candidate: CriticCandidate,
+) -> ValidationResult | None:
+    """Require remediation of materially conflicting duplicate measurements."""
+
+    if not candidate.metric_conflicts:
+        return None
+    issues = [
+        ValidationIssue(
+            id=f"V-METRIC-CONFLICT-{index}",
+            severity=ValidationSeverity.HIGH,
+            category="structured_metric_conflict",
+            message=(
+                f"Materially conflicting values remain for '{conflict.metric_key}' "
+                f"with dimensions {conflict.dimensions}: "
+                + ", ".join(str(item.value) for item in conflict.comparisons)
+                + "."
+            ),
+            evidence_refs=list(
+                dict.fromkeys(
+                    reference
+                    for item in conflict.comparisons
+                    for reference in item.evidence_refs
+                )
+            ),
+            recommendation=(
+                "Reconcile the computations at the same grain and definition; "
+                "retain a corrected comparison only when its evidence resolves "
+                "the material discrepancy."
+            ),
+        )
+        for index, conflict in enumerate(candidate.metric_conflicts, start=1)
+    ]
+    return ValidationResult(
+        status=ValidationStatus.REVISE,
+        issues=issues,
+        summary="Materially conflicting structured metrics require remediation.",
+    )
 
 
 def _workspace_has_cogs(context: AgentRunContext) -> bool:
@@ -740,6 +821,13 @@ async def run_critic(
     # specialist work. Its hard limit is the separate critic-loop budget.
     context.consume_budget(BudgetResource.CRITIC_LOOPS)
 
+    conflicts = validate_metric_compilation_conflicts(candidate)
+    if conflicts is not None:
+        return persist_validation_result(
+            conflicts,
+            context.ledger,
+            allow_issue_updates=True,
+        )
     completeness = candidate_completeness_validation(candidate, context=context)
     if completeness is not None:
         return persist_validation_result(

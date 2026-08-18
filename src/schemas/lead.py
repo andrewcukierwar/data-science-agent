@@ -3,7 +3,7 @@
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from schemas.findings import ConfidenceLevel, Finding
-from schemas.metrics import MetricComparison
+from schemas.metrics import MetricComparison, MetricConflict
 from schemas.run_state import Hypothesis, NonEmptyString
 
 
@@ -40,6 +40,7 @@ class LeadResult(BaseModel):
     answer: NonEmptyString
     findings: list[Finding] = Field(default_factory=list)
     metric_comparisons: list[MetricComparison] = Field(default_factory=list)
+    metric_conflicts: list[MetricConflict] = Field(default_factory=list)
     recommendations: list[LeadRecommendation] = Field(default_factory=list)
     hypotheses: list[Hypothesis] = Field(default_factory=list)
     open_questions: list[NonEmptyString] = Field(default_factory=list)

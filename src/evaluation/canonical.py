@@ -19,6 +19,7 @@ from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
 from schemas.lead import LeadResult
 from schemas.metrics import (
     MetricComparison,
+    compile_metric_comparisons,
     normalize_metric_comparison,
     normalize_metric_dimensions,
     normalize_metric_key,
@@ -102,7 +103,12 @@ def _canonical_numeric_ground_truth_failures(
     """Compare generic structured metric identity and values to ground truth."""
 
     failures: list[str] = []
-    comparisons = _metric_comparisons_from_input(values)
+    compilation = compile_metric_comparisons(_metric_comparisons_from_input(values))
+    comparisons = compilation.comparisons
+    failures.extend(
+        "materially conflicting numeric findings for metric: " + conflict.metric_key
+        for conflict in compilation.conflicts
+    )
 
     for metric in CANONICAL_PROFITABILITY_SCENARIO.ground_truth:
         matching = [
@@ -114,9 +120,10 @@ def _canonical_numeric_ground_truth_failures(
             failures.append(f"missing numeric ground-truth finding: {metric.id}")
             continue
         if len(matching) > 1:
-            failures.append(f"multiple numeric findings for metric: {metric.id}")
+            failures.append(
+                f"multiple incompatible metric definitions for: {metric.id}"
+            )
             continue
-
         comparison = matching[0]
         if not isfinite(comparison.value):
             failures.append(f"numeric finding is not finite: {metric.id}")
@@ -354,6 +361,17 @@ def evaluate_canonical_run(
         bool(state.metric_comparisons),
         "structured metric comparisons were not persisted",
     )
+    if result.lead_result is not None:
+        lead_metrics = compile_metric_comparisons(result.lead_result.metric_comparisons)
+        ledger_metrics = compile_metric_comparisons(state.metric_comparisons)
+        require(
+            not lead_metrics.conflicts and not ledger_metrics.conflicts,
+            "final structured metric state contains unresolved conflicts",
+        )
+        require(
+            lead_metrics.comparisons == ledger_metrics.comparisons,
+            "Lead, Critic/report, and ledger do not share one final metric set",
+        )
     require(
         result.lead_result is not None and bool(result.lead_result.findings),
         "Lead did not return final findings",
