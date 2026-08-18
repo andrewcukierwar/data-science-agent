@@ -132,6 +132,8 @@ class GeneralistRunner(AnalysisRunner):
                 ledger.audit != generalist_result.audit
                 or ledger.metric_comparisons
                 != generalist_result.candidate.metric_comparisons
+                or ledger.statistical_assessments
+                != generalist_result.candidate.statistical_assessments
                 or any(
                     finding not in ledger.findings
                     for finding in generalist_result.candidate.findings

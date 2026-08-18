@@ -25,6 +25,12 @@ from schemas.generalist import GeneralistResult
 from schemas.lead import LeadResult
 from schemas.metrics import MetricComparison, MetricComparisonType
 from schemas.run_state import ToolEvent, ToolEventStatus
+from schemas.statistics import (
+    CausalInterpretation,
+    ConfidenceInterval,
+    StatisticalAssessment,
+    StatisticalConclusion,
+)
 from schemas.validation import ValidationResult, ValidationStatus
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
@@ -78,7 +84,10 @@ def _context(tmp_path: Path) -> AgentRunContext:
     )
 
 
-def _result() -> GeneralistResult:
+def _result(
+    *,
+    statistical_assessments: list[StatisticalAssessment] | None = None,
+) -> GeneralistResult:
     comparison = MetricComparison(
         metric_key="revenue",
         baseline_period="Q1",
@@ -104,12 +113,34 @@ def _result() -> GeneralistResult:
             answer="Revenue increased by 10 percent in the observed comparison.",
             findings=[finding],
             metric_comparisons=[comparison],
+            statistical_assessments=statistical_assessments or [],
         ),
         validation=ValidationResult(
             status=ValidationStatus.PASS,
             checked_finding_ids=["F1"],
             summary="The candidate is supported by the executed evidence.",
         ),
+    )
+
+
+def _statistical_assessment() -> StatisticalAssessment:
+    return StatisticalAssessment(
+        metric_key="conversion",
+        baseline_period="Q1",
+        comparison_period="Q2",
+        method="two-proportion z test",
+        unit_of_analysis="independently assigned participant",
+        conclusion=StatisticalConclusion.NOT_STATISTICALLY_SIGNIFICANT,
+        confidence_level=0.95,
+        estimate=0.0,
+        confidence_interval=ConfidenceInterval(lower=-0.1, upper=0.1),
+        p_value=0.5,
+        effect_size=0.0,
+        practical_significance_threshold=0.05,
+        practically_significant=False,
+        assumptions_checked=("random assignment",),
+        causal_interpretation=CausalInterpretation.ASSOCIATION_ONLY,
+        evidence_refs=["tool-evidence"],
     )
 
 
@@ -165,7 +196,7 @@ def test_generalist_run_uses_bounded_turns_and_shared_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    expected = _result()
+    expected = _result(statistical_assessments=[_statistical_assessment()])
 
     async def fake_run(agent, prompt, *, context, **kwargs):  # noqa: ANN001
         assert agent.output_type.output_type is GeneralistResult
@@ -181,6 +212,10 @@ def test_generalist_run_uses_bounded_turns_and_shared_provenance(
     assert returned.validation in context.ledger.validation_results
     assert context.ledger.findings == returned.candidate.findings
     assert context.ledger.audit == returned.audit
+    assert (
+        context.ledger.statistical_assessments
+        == expected.candidate.statistical_assessments
+    )
     assert context.ledger.budget.specialist_invocations == 0
     assert context.ledger.budget.sql_executions == 0
     assert context.ledger.budget.python_executions == 0

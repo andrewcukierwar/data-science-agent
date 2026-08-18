@@ -57,7 +57,7 @@ class TextRule:
 
 @dataclass(frozen=True, slots=True)
 class DataQualityPolicy:
-    """Scenario-specific expectations for the persisted Data Auditor result."""
+    """Scenario-specific expectations for the persisted data-audit result."""
 
     required_audit_status: AuditStatus = AuditStatus.COMPLETE
     maximum_issue_severity: IssueSeverity | None = IssueSeverity.LOW
@@ -70,7 +70,6 @@ class DataQualityPolicy:
 class StatisticsPolicy:
     """Scenario-specific expectations for typed statistical work."""
 
-    required_specialist_roles: tuple[str, ...] = ()
     required_report_terms: tuple[str, ...] = ()
     expectations: tuple[StatisticalExpectation, ...] = ()
 
@@ -79,7 +78,6 @@ class StatisticsPolicy:
 class TaskCompletenessPolicy:
     """Common hard completion gates, configurable per scenario."""
 
-    required_agent_roles: tuple[str, ...] = ()
     require_plan: bool = True
     require_hypothesis_history: bool = True
     require_findings: bool = True
@@ -476,17 +474,16 @@ def evaluate_statistics(
     *,
     check_prefix: str = "statistics",
 ) -> tuple[EvaluationCheck, ...]:
-    """Evaluate typed statistical participation and report-level requirements."""
+    """Evaluate typed statistical output and report-level requirements.
 
-    roles = {record.agent_role for record in state.specialist_results}
-    checks = [
-        _check(
-            f"{check_prefix}:role:{role}",
-            role in roles,
-            f"typed specialist output for {role} is present",
-        )
-        for role in policy.required_specialist_roles
-    ]
+    Statistical work is accepted from any architecture.  Multi-agent runs
+    persist assessments inside specialist results, while a generalist can
+    persist the same typed assessments directly on the run state.  The
+    evaluator intentionally inspects the output contract, never the producer
+    role.
+    """
+
+    checks: list[EvaluationCheck] = []
     lowered = report_text.lower()
     checks.extend(
         _check(
@@ -496,11 +493,7 @@ def evaluate_statistics(
         )
         for index, term in enumerate(policy.required_report_terms, start=1)
     )
-    assessments = [
-        assessment
-        for record in state.specialist_results
-        for assessment in record.result.statistical_assessments
-    ]
+    assessments = _statistical_assessments(state)
     for index, expectation in enumerate(policy.expectations, start=1):
         matches = [
             assessment
@@ -528,6 +521,27 @@ def evaluate_statistics(
             "no scenario-specific statistical requirement was declared",
         ),
     )
+
+
+def _statistical_assessments(
+    state: AnalysisRunState,
+) -> tuple[StatisticalAssessment, ...]:
+    """Return unique typed assessments independent of producing architecture."""
+
+    assessments = [*state.statistical_assessments]
+    assessments.extend(
+        assessment
+        for record in state.specialist_results
+        for assessment in record.result.statistical_assessments
+    )
+    unique: list[StatisticalAssessment] = []
+    seen: set[str] = set()
+    for assessment in assessments:
+        identity = assessment.model_dump_json()
+        if identity not in seen:
+            seen.add(identity)
+            unique.append(assessment)
+    return tuple(unique)
 
 
 def _statistical_assessment_matches(
@@ -741,18 +755,15 @@ def evaluate_provenance(
                 f"metric {comparison.metric_key} cites executed evidence",
             )
         )
-    for record in state.specialist_results:
-        for assessment in record.result.statistical_assessments:
-            checks.append(
-                _check(
-                    f"{check_prefix}:statistical_assessment:{assessment.metric_key}",
-                    bool(assessment.evidence_refs)
-                    and all(
-                        reference in refs for reference in assessment.evidence_refs
-                    ),
-                    "statistical assessment cites executed evidence",
-                )
+    for assessment in _statistical_assessments(state):
+        checks.append(
+            _check(
+                f"{check_prefix}:statistical_assessment:{assessment.metric_key}",
+                bool(assessment.evidence_refs)
+                and all(reference in refs for reference in assessment.evidence_refs),
+                "statistical assessment cites executed evidence",
             )
+        )
 
     if state.final_report is None:
         checks.append(
@@ -1032,33 +1043,26 @@ def evaluate_task_completeness(
             "final report file exists",
         )
     )
-    successful_roles = {
-        event.agent_role
-        for event in state.agent_events
-        if event.status is AgentEventStatus.SUCCEEDED
-    }
-    for role in policy.required_agent_roles:
-        checks.append(
-            _check(
-                f"{check_prefix}:agent:{role}",
-                role in successful_roles,
-                f"successful {role} agent trace is present",
-            )
-        )
     if policy.require_agent_trace:
         checks.append(
             _check(
                 f"{check_prefix}:agent_trace",
-                bool(state.agent_events),
-                "agent execution trace is present",
+                any(
+                    event.status is AgentEventStatus.SUCCEEDED
+                    for event in state.agent_events
+                ),
+                "successful agent execution trace is present",
             )
         )
     if policy.require_tool_trace:
         checks.append(
             _check(
                 f"{check_prefix}:tool_trace",
-                bool(state.tool_events),
-                "tool execution trace is present",
+                any(
+                    event.status is ToolEventStatus.SUCCEEDED
+                    for event in state.tool_events
+                ),
+                "successful tool execution trace is present",
             )
         )
     return tuple(checks)

@@ -55,6 +55,10 @@ Required behavior:
    correct population, date basis, observation window, numerator, denominator,
    unit, and exact evidence_refs. Use relative_change_fraction for comparable
    period changes and report 0.10 for +10%.
+   For experiment questions, also return one typed StatisticalAssessment per
+   required estimand in candidate.statistical_assessments, including the method,
+   uncertainty, effect size, assumptions, causal interpretation, and exact
+   evidence_refs.
 5. Distinguish observed association from causal proof. State plausible
    non-drivers, unsupported-claim limits, assumptions, confidence intervals or
    effect sizes, and practical significance when the question is experimental.

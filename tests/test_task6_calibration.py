@@ -162,6 +162,7 @@ def _persist_fixture(
     tmp_path: Path,
     scenario_id: str,
     *,
+    architecture: str = "multi-agent",
     report_suffix: str = "",
     metric_updates: dict[str, dict[str, object]] | None = None,
     audit_issue_ids: tuple[str, ...] | None = None,
@@ -296,6 +297,7 @@ def _persist_fixture(
             )
         ],
         metric_comparisons=metrics,
+        statistical_assessments=(assessments if architecture == "single-agent" else []),
         artifacts=[chart, report],
         validation_results=[
             ValidationResult(
@@ -304,15 +306,19 @@ def _persist_fixture(
                 summary="The hand-authored fixture is complete.",
             )
         ],
-        specialist_results=[
-            SpecialistResultRecord(
-                agent_role="statistician",
-                result=SpecialistResult(
-                    objective="Assess the declared metric and assumptions.",
-                    statistical_assessments=assessments,
+        specialist_results=(
+            [
+                SpecialistResultRecord(
+                    agent_role="statistician",
+                    result=SpecialistResult(
+                        objective="Assess the declared metric and assumptions.",
+                        statistical_assessments=assessments,
+                    ),
                 ),
-            )
-        ],
+            ]
+            if architecture == "multi-agent"
+            else []
+        ),
         tool_events=[
             ToolEvent(
                 id="calibration-sql",
@@ -344,11 +350,15 @@ def _persist_fixture(
                 output_type="fixture",
             )
             for role in (
-                "data_auditor",
-                "lead",
-                "analyst",
-                "statistician",
-                "critic",
+                ("generalist",)
+                if architecture == "single-agent"
+                else (
+                    "data_auditor",
+                    "lead",
+                    "analyst",
+                    "statistician",
+                    "critic",
+                )
             )
         ],
         run_budget=RunBudget(
@@ -390,6 +400,35 @@ def test_fully_correct_persisted_fixture_passes_every_catalog_evaluator(
         for check in evaluation.checks
         if check.status.value == "fail"
     ]
+
+
+def test_semantically_equivalent_architectures_receive_the_same_evaluation_result(
+    tmp_path: Path,
+) -> None:
+    """Role traces must not change the score for equivalent persisted outputs."""
+
+    for scenario_id in (
+        item.scenario_id for item in discover_scenarios().registrations
+    ):
+        multi_workspace = _persist_fixture(
+            tmp_path / "multi-agent",
+            scenario_id,
+            architecture="multi-agent",
+        )
+        single_workspace = _persist_fixture(
+            tmp_path / "single-agent",
+            scenario_id,
+            architecture="single-agent",
+        )
+        rules = rules_for_scenario(scenario_id, "1.0")
+        multi = evaluate_workspace(multi_workspace, rules)
+        single = evaluate_workspace(single_workspace, rules)
+
+        assert multi.result.status is single.result.status
+        assert multi.result.score_breakdown == single.result.score_breakdown
+        assert [
+            (check.check_id, check.status, check.message) for check in multi.checks
+        ] == [(check.check_id, check.status, check.message) for check in single.checks]
 
 
 @pytest.mark.parametrize(

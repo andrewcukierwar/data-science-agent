@@ -700,6 +700,19 @@ def validate_lead_result(
         )
         for comparison in result.metric_comparisons
     ]
+    canonical_statistical_assessments = [
+        assessment.model_copy(
+            update={
+                "evidence_refs": _canonicalize_evidence_refs(
+                    assessment.evidence_refs,
+                    executed_refs=executed_refs,
+                    aliases=aliases,
+                )
+                or assessment.evidence_refs
+            }
+        )
+        for assessment in result.statistical_assessments
+    ]
     canonical_metric_comparisons = _reuse_specialist_metric_comparisons(
         canonical_metric_comparisons,
         ledger,
@@ -718,6 +731,7 @@ def validate_lead_result(
             "hypotheses": canonical_hypotheses,
             "metric_comparisons": compilation.comparisons,
             "metric_conflicts": compilation.conflicts,
+            "statistical_assessments": canonical_statistical_assessments,
         }
     )
     invalid_findings = [
@@ -746,6 +760,11 @@ def validate_lead_result(
         for comparison in result.metric_comparisons
         if not any(reference in executed_refs for reference in comparison.evidence_refs)
     ]
+    invalid_statistical_assessments = [
+        assessment.metric_key
+        for assessment in result.statistical_assessments
+        if not any(reference in executed_refs for reference in assessment.evidence_refs)
+    ]
     invalid_lineage = [
         finding.id
         for finding in result.findings
@@ -757,11 +776,17 @@ def validate_lead_result(
         for comparison in result.metric_comparisons
         if not has_source_lineage(ledger, comparison.evidence_refs)
     )
+    invalid_lineage.extend(
+        f"statistical_assessment:{assessment.metric_key}"
+        for assessment in result.statistical_assessments
+        if not has_source_lineage(ledger, assessment.evidence_refs)
+    )
     if (
         invalid_findings
         or invalid_recommendations
         or invalid_hypotheses
         or invalid_metric_comparisons
+        or invalid_statistical_assessments
         or invalid_lineage
     ):
         details = [
@@ -769,6 +794,10 @@ def validate_lead_result(
             *[f"recommendation:{item}" for item in invalid_recommendations],
             *[f"hypothesis:{item}" for item in invalid_hypotheses],
             *[f"metric_comparison:{item}" for item in invalid_metric_comparisons],
+            *[
+                f"statistical_assessment:{item}"
+                for item in invalid_statistical_assessments
+            ],
             *[f"source_lineage:{item}" for item in invalid_lineage],
         ]
         raise LeadEvidenceError(
@@ -799,6 +828,7 @@ def _persist_result(
     for finding in result.findings:
         context.ledger.upsert_finding(finding)
     context.ledger.replace_metric_comparisons(result.metric_comparisons)
+    context.ledger.replace_statistical_assessments(result.statistical_assessments)
     return result
 
 

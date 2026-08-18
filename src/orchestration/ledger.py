@@ -34,6 +34,7 @@ from schemas.run_state import (
     SpecialistResultRecord,
     ToolEvent,
 )
+from schemas.statistics import StatisticalAssessment
 from schemas.validation import ValidationIssue, ValidationResult
 
 _LEDGER_FILENAME = "analysis_ledger.json"
@@ -136,6 +137,12 @@ class AnalysisLedger(ToolEventLedger):
         """Structured metric comparisons supporting the Lead answer."""
 
         return self._state.metric_comparisons
+
+    @property
+    def statistical_assessments(self) -> list[StatisticalAssessment]:
+        """Typed statistical outputs independent of the producing architecture."""
+
+        return self._state.statistical_assessments
 
     @property
     def artifacts(self) -> list[Artifact]:
@@ -495,6 +502,22 @@ class AnalysisLedger(ToolEventLedger):
         self._state.metric_comparisons = normalized
         self.save()
         return self._state.metric_comparisons
+
+    def replace_statistical_assessments(
+        self,
+        assessments: list[StatisticalAssessment],
+    ) -> list[StatisticalAssessment]:
+        """Persist the canonical typed statistical output for this run."""
+
+        unique: list[StatisticalAssessment] = []
+        for assessment in assessments:
+            if assessment not in unique:
+                unique.append(assessment)
+        if self._state.statistical_assessments == unique:
+            return self._state.statistical_assessments
+        self._state.statistical_assessments = unique
+        self.save()
+        return self._state.statistical_assessments
 
     def add_artifact(self, artifact: Artifact) -> Artifact:
         """Append an artifact reference with a unique identifier."""

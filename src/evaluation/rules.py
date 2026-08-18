@@ -169,18 +169,8 @@ def canonical_rules() -> ScenarioRules:
             maximum_issue_severity=IssueSeverity.LOW,
             forbid_any_issues=True,
         ),
-        statistics_policy=StatisticsPolicy(
-            required_specialist_roles=("statistician",),
-        ),
-        task_policy=TaskCompletenessPolicy(
-            required_agent_roles=(
-                "data_auditor",
-                "lead",
-                "analyst",
-                "statistician",
-                "critic",
-            )
-        ),
+        statistics_policy=StatisticsPolicy(),
+        task_policy=TaskCompletenessPolicy(),
     )
 
 
@@ -203,18 +193,8 @@ def _business_rules(
             maximum_issue_severity=IssueSeverity.LOW,
             forbid_any_issues=True,
         ),
-        statistics_policy=StatisticsPolicy(
-            required_specialist_roles=("statistician",),
-        ),
-        task_policy=TaskCompletenessPolicy(
-            required_agent_roles=(
-                "data_auditor",
-                "lead",
-                "analyst",
-                "statistician",
-                "critic",
-            )
-        ),
+        statistics_policy=StatisticsPolicy(),
+        task_policy=TaskCompletenessPolicy(),
         unsupported_claim_patterns=unsupported_claim_patterns,
     )
 
@@ -251,9 +231,7 @@ def _data_quality_rules(
             forbidden_issue_ids=(forbidden_issue_id,),
             maximum_issue_severity=IssueSeverity.HIGH,
         ),
-        task_policy=TaskCompletenessPolicy(
-            required_agent_roles=("data_auditor", "lead", "analyst", "critic")
-        ),
+        task_policy=TaskCompletenessPolicy(),
     )
 
 
@@ -285,7 +263,6 @@ def _experiment_rules(
             forbid_any_issues=True,
         ),
         statistics_policy=StatisticsPolicy(
-            required_specialist_roles=("statistician",),
             required_report_terms=(
                 "confidence interval",
                 "effect size",
@@ -295,15 +272,7 @@ def _experiment_rules(
             ),
             expectations=(expectation,),
         ),
-        task_policy=TaskCompletenessPolicy(
-            required_agent_roles=(
-                "data_auditor",
-                "lead",
-                "analyst",
-                "statistician",
-                "critic",
-            )
-        ),
+        task_policy=TaskCompletenessPolicy(),
     )
 
 
