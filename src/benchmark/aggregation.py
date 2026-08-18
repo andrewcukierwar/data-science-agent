@@ -23,7 +23,7 @@ from evaluation.contracts import (
     UncertaintyInterval,
 )
 
-AGGREGATION_VERSION = "1.1"
+AGGREGATION_VERSION = "1.2"
 CONFIDENCE_LEVEL = 0.95
 ALPHA = 1.0 - CONFIDENCE_LEVEL
 
@@ -178,6 +178,9 @@ def _aggregate_for_cell(
     )
     failed_runs = len(records) - completed_runs
     evaluated_runs = sum(_evaluable(record) for record in records)
+    evaluator_error_runs = sum(
+        record.evaluator_result.status is EvaluatorStatus.ERROR for record in records
+    )
     missing_repetitions = max(manifest.repetitions - len(records), 0)
     denominator = AggregateDenominator(
         expected_repetitions=manifest.repetitions,
@@ -186,6 +189,7 @@ def _aggregate_for_cell(
         completed_runs=completed_runs,
         failed_runs=failed_runs,
         evaluated_runs=evaluated_runs,
+        evaluator_error_runs=evaluator_error_runs,
         completion_rate=_rounded(completed_runs / manifest.repetitions),
         evaluation_rate=_rounded(evaluated_runs / manifest.repetitions),
     )
@@ -198,6 +202,7 @@ def _aggregate_for_cell(
         completed_runs=completed_runs,
         failed_runs=failed_runs,
         evaluated_runs=evaluated_runs,
+        evaluator_error_runs=evaluator_error_runs,
         mean_scores=mean_scores,
         mean_estimated_cost=cost_distribution.mean,
         mean_elapsed_seconds=latency_distribution.mean or 0.0,
@@ -411,6 +416,7 @@ def build_benchmark_report(manifest: BenchmarkManifest) -> BenchmarkReport:
                 completed_runs=aggregate.completed_runs,
                 failed_runs=aggregate.failed_runs,
                 evaluated_runs=aggregate.evaluated_runs,
+                evaluator_error_runs=aggregate.evaluator_error_runs,
                 completion_rate=(
                     aggregate.denominator.completion_rate
                     if aggregate.denominator is not None

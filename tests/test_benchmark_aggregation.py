@@ -80,7 +80,7 @@ def _evaluation(
         ),
         failure_reasons=("provider failure",) if has_failure else (),
         error_message="provider failure"
-        if status is EvaluatorStatus.NOT_EVALUATED
+        if status in {EvaluatorStatus.ERROR, EvaluatorStatus.NOT_EVALUATED}
         else None,
         evaluated_at=START,
     )
@@ -94,14 +94,16 @@ def _record(
     cost: float | None,
     elapsed: float,
     lifecycle: LifecycleStatus = LifecycleStatus.COMPLETED,
+    evaluator_status: EvaluatorStatus | None = None,
 ) -> BenchmarkRunRecord:
     run_id = f"{architecture}-{repetition}"
+    resolved_status = evaluator_status or (
+        EvaluatorStatus.PASS if score is not None else EvaluatorStatus.NOT_EVALUATED
+    )
     evaluation = _evaluation(
         run_id,
         score=score,
-        status=(
-            EvaluatorStatus.PASS if score is not None else EvaluatorStatus.NOT_EVALUATED
-        ),
+        status=resolved_status,
     )
     outcome = LifecycleOutcome(
         status=lifecycle,
@@ -205,6 +207,7 @@ def test_aggregation_retains_denominators_distributions_and_failure_taxonomy():
         "completed_runs": 2,
         "failed_runs": 1,
         "evaluated_runs": 2,
+        "evaluator_error_runs": 0,
         "completion_rate": pytest.approx(2 / 3),
         "evaluation_rate": pytest.approx(2 / 3),
     }
@@ -227,7 +230,48 @@ def test_aggregation_retains_denominators_distributions_and_failure_taxonomy():
     assert single.denominator.completion_rate == pytest.approx(2 / 3)
     assert single.failure_taxonomy == {"missing": 1}
     assert len(manifest.run_records) == len(records)
-    assert manifest.aggregation_version == "1.1"
+    assert manifest.aggregation_version == "1.2"
+
+
+def test_evaluator_errors_remain_operationally_visible_but_leave_quality_denominators():
+    records = (
+        _record("multi-agent", 1, score=0.5, cost=1.0, elapsed=1.0),
+        _record(
+            "multi-agent",
+            2,
+            score=None,
+            cost=2.0,
+            elapsed=2.0,
+            evaluator_status=EvaluatorStatus.ERROR,
+        ),
+        _record(
+            "multi-agent",
+            3,
+            score=None,
+            cost=None,
+            elapsed=3.0,
+            lifecycle=LifecycleStatus.FAILED,
+        ),
+    )
+    manifest = aggregate_manifest(_manifest(records))
+    aggregate = manifest.aggregates[0]
+
+    assert aggregate.completed_runs == 2
+    assert aggregate.failed_runs == 1
+    assert aggregate.evaluated_runs == 1
+    assert aggregate.evaluator_error_runs == 1
+    assert aggregate.denominator is not None
+    assert aggregate.denominator.evaluator_error_runs == 1
+    assert aggregate.score_distributions["overall_score"].sample_size == 1
+    assert aggregate.mean_scores["overall_score"] == 0.5
+    assert aggregate.failure_taxonomy == {
+        "evaluator:error": 1,
+        "evaluator:not_evaluated": 1,
+        "lifecycle:provider": 1,
+    }
+
+    report = build_benchmark_report(manifest)
+    assert report.table_rows[0].evaluator_error_runs == 1
 
 
 def test_architecture_comparison_separates_descriptive_from_inferential_results():

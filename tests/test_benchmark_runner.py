@@ -100,6 +100,9 @@ def _plan(runner, tmp_path, *, repetitions=3):
         model="fixture-model",
         model_provider="fixture-provider",
         execution_mode=ExecutionMode.DETERMINISTIC,
+        repetition_justification=(
+            "R4 evaluator-error fixture" if repetitions < 3 else None
+        ),
     )
     path = tmp_path / "manifest.json"
     runner.persist_plan(manifest, path)
@@ -305,6 +308,67 @@ def test_offline_rescore_writes_new_manifest_without_rerunning_agents(
         record.evaluator_result.evaluator_version for record in rescored.run_records
     } == {"1.1"}
     assert all(record.score_breakdown is not None for record in rescored.run_records)
+
+
+def test_evaluator_crash_is_recorded_as_error_without_marking_analysis_failed(
+    tmp_path,
+    monkeypatch,
+):
+    def execute(cell, _workspace):
+        return BenchmarkCellResult(
+            lifecycle=LifecycleOutcome(status=LifecycleStatus.COMPLETED),
+            started_at=FIXED_TIME,
+            finished_at=FIXED_TIME,
+        )
+
+    def crash(_workspace, _rules):
+        raise RuntimeError("evaluator crashed")
+
+    monkeypatch.setattr("benchmark.runner.evaluate_workspace", crash)
+    runner = _runner(tmp_path, execute)
+    manifest_path = _plan(runner, tmp_path, repetitions=1)
+
+    summary = runner.execute(manifest_path)
+    record = summary.manifest.run_records[0]
+
+    assert record.lifecycle.status is LifecycleStatus.COMPLETED
+    assert record.evaluator_result.status is EvaluatorStatus.ERROR
+    assert record.evaluator_result.score_breakdown is None
+    assert "evaluator crashed" in (record.evaluator_result.error_message or "")
+    aggregate = summary.manifest.aggregates[0]
+    assert aggregate.completed_runs == 1
+    assert aggregate.failed_runs == 0
+    assert aggregate.evaluated_runs == 0
+    assert aggregate.evaluator_error_runs == 1
+    assert aggregate.mean_scores == {}
+
+
+def test_offline_rescore_evaluator_crash_preserves_completed_run_and_no_zero_score(
+    tmp_path,
+    monkeypatch,
+):
+    runner = _runner(tmp_path, lambda cell, _workspace: _completed(cell))
+    manifest_path = _plan(runner, tmp_path, repetitions=1)
+    runner.execute(manifest_path)
+
+    def crash(_workspace, _rules):
+        raise RuntimeError("rescore evaluator crashed")
+
+    monkeypatch.setattr("benchmark.runner.evaluate_workspace", crash)
+    rescored = runner.rescore(
+        manifest_path,
+        output_path=tmp_path / "rescored.json",
+    )
+    record = rescored.run_records[0]
+
+    assert record.lifecycle.status is LifecycleStatus.COMPLETED
+    assert record.evaluator_result.status is EvaluatorStatus.ERROR
+    assert record.evaluator_result.score_breakdown is None
+    assert "rescore evaluator crashed" in (record.evaluator_result.error_message or "")
+    aggregate = rescored.aggregates[0]
+    assert aggregate.evaluator_error_runs == 1
+    assert aggregate.evaluated_runs == 0
+    assert aggregate.mean_scores == {}
 
 
 def test_live_execution_requires_opt_in_and_credentials_without_loading_dotenv(

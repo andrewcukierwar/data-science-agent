@@ -456,11 +456,11 @@ class BenchmarkRunRecord(ContractModel):
             )
         if (
             self.lifecycle.status is LifecycleStatus.COMPLETED
-            and self.evaluator_result.status
-            in {EvaluatorStatus.ERROR, EvaluatorStatus.NOT_EVALUATED}
+            and self.evaluator_result.status is EvaluatorStatus.NOT_EVALUATED
         ):
             raise ValueError(
-                "completed runs require a successful or failing offline evaluation"
+                "completed runs require a scored, failed, or explicitly errored "
+                "offline evaluation"
             )
         return self
 
@@ -578,6 +578,7 @@ class AggregateDenominator(ContractModel):
     completed_runs: int = Field(ge=0)
     failed_runs: int = Field(ge=0)
     evaluated_runs: int = Field(ge=0)
+    evaluator_error_runs: int = Field(default=0, ge=0)
     completion_rate: BoundedRate
     evaluation_rate: BoundedRate
 
@@ -594,6 +595,12 @@ class AggregateDenominator(ContractModel):
             )
         if self.evaluated_runs > self.completed_runs:
             raise ValueError("evaluated runs cannot exceed completed runs")
+        if self.evaluator_error_runs > self.observed_repetitions:
+            raise ValueError("evaluator error runs cannot exceed observed repetitions")
+        if self.evaluated_runs + self.evaluator_error_runs > self.observed_repetitions:
+            raise ValueError(
+                "evaluated and evaluator-error runs cannot exceed observed repetitions"
+            )
         expected_completion = self.completed_runs / self.expected_repetitions
         expected_evaluation = self.evaluated_runs / self.expected_repetitions
         if abs(self.completion_rate - expected_completion) > 1e-12:
@@ -678,6 +685,7 @@ class BenchmarkTableRow(ContractModel):
     completed_runs: int = Field(ge=0)
     failed_runs: int = Field(ge=0)
     evaluated_runs: int = Field(ge=0)
+    evaluator_error_runs: int = Field(default=0, ge=0)
     completion_rate: BoundedRate
     evaluation_rate: BoundedRate
     overall_score_mean: FiniteFloat | None = None
@@ -710,6 +718,12 @@ class BenchmarkTableRow(ContractModel):
             > 1e-12
         ):
             raise ValueError("table row evaluation rate has the wrong denominator")
+        if self.evaluator_error_runs > self.observed_repetitions:
+            raise ValueError("evaluator error runs cannot exceed observed repetitions")
+        if self.evaluated_runs + self.evaluator_error_runs > self.observed_repetitions:
+            raise ValueError(
+                "evaluated and evaluator-error runs cannot exceed observed repetitions"
+            )
         return self
 
 
@@ -724,6 +738,7 @@ class AggregateBenchmarkResult(ContractModel):
     completed_runs: int = Field(ge=0)
     failed_runs: int = Field(ge=0)
     evaluated_runs: int = Field(ge=0)
+    evaluator_error_runs: int = Field(default=0, ge=0)
     mean_scores: dict[NonEmptyString, BoundedScore] = Field(default_factory=dict)
     mean_estimated_cost: FiniteFloat | None = Field(default=None, ge=0)
     mean_elapsed_seconds: FiniteFloat = Field(ge=0)
@@ -743,6 +758,12 @@ class AggregateBenchmarkResult(ContractModel):
             raise ValueError("completed and failed runs exceed observed repetitions")
         if self.evaluated_runs > self.completed_runs:
             raise ValueError("evaluated_runs cannot exceed completed_runs")
+        if self.evaluator_error_runs > self.observed_repetitions:
+            raise ValueError("evaluator error runs cannot exceed observed repetitions")
+        if self.evaluated_runs + self.evaluator_error_runs > self.observed_repetitions:
+            raise ValueError(
+                "evaluated and evaluator-error runs cannot exceed observed repetitions"
+            )
         if self.evaluated_runs and not self.mean_scores:
             raise ValueError("evaluated aggregates require mean_scores")
         if self.denominator is not None:
@@ -760,6 +781,10 @@ class AggregateBenchmarkResult(ContractModel):
                 raise ValueError("aggregate denominator does not match failed runs")
             if self.denominator.evaluated_runs != self.evaluated_runs:
                 raise ValueError("aggregate denominator does not match evaluated runs")
+            if self.denominator.evaluator_error_runs != self.evaluator_error_runs:
+                raise ValueError(
+                    "aggregate denominator does not match evaluator error runs"
+                )
         if self.score_distributions:
             distribution_means = {
                 key: summary.mean

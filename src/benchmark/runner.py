@@ -700,7 +700,7 @@ class BenchmarkRunner:
                     status=(
                         EvaluatorStatus.NOT_EVALUATED
                         if record.lifecycle.status is not LifecycleStatus.COMPLETED
-                        else EvaluatorStatus.FAIL
+                        else EvaluatorStatus.ERROR
                     ),
                     evaluator_version=current_rules.evaluator_version,
                 )
@@ -915,7 +915,16 @@ class BenchmarkRunner:
                         ).result,
                     )
                 except Exception as error:  # noqa: BLE001
-                    return self._failure_record(cell, error, manifest)
+                    outcome = replace(
+                        outcome,
+                        evaluator_result=_not_evaluated(
+                            cell,
+                            "offline evaluator failed: "
+                            f"{type(error).__name__}: {error}",
+                            status=EvaluatorStatus.ERROR,
+                            evaluated_at=outcome.finished_at,
+                        ),
+                    )
         elif outcome.evaluator_result is None:
             outcome = replace(
                 outcome,
