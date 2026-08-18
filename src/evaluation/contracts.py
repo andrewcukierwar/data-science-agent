@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from scenarios.definitions.models import GroundTruthMetric, InjectedCondition
 from schemas.metrics import MetricComparisonType
+from schemas.statistics import StatisticalExpectation
 
 EVALUATION_CONTRACT_VERSION = "1.0"
 LEGACY_WORKSPACE_VERSION = "legacy"
@@ -103,6 +104,7 @@ class ScenarioEvaluationSpec(ContractModel):
     known_non_drivers: tuple[NonEmptyString, ...] = Field(min_length=1)
     expected_data_quality_findings: tuple[NonEmptyString, ...] = Field(min_length=1)
     ground_truth: tuple[GroundTruthMetric, ...] = Field(min_length=1)
+    statistical_expectation: StatisticalExpectation | None = None
     compatibility: EvaluatorCompatibility = Field(
         default_factory=lambda: EvaluatorCompatibility(
             evaluator_contract_version=EVALUATION_CONTRACT_VERSION,

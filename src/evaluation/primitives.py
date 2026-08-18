@@ -37,6 +37,7 @@ from schemas.run_state import (
     RunStatus,
     ToolEventStatus,
 )
+from schemas.statistics import StatisticalAssessment, StatisticalExpectation
 from schemas.validation import ValidationStatus
 from tools.artifacts import ArtifactManager
 from tools.workspace import Workspace
@@ -62,6 +63,7 @@ class DataQualityPolicy:
     maximum_issue_severity: IssueSeverity | None = IssueSeverity.LOW
     required_issue_ids: tuple[str, ...] = ()
     forbidden_issue_ids: tuple[str, ...] = ()
+    forbid_any_issues: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +72,7 @@ class StatisticsPolicy:
 
     required_specialist_roles: tuple[str, ...] = ()
     required_report_terms: tuple[str, ...] = ()
+    expectations: tuple[StatisticalExpectation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,6 +455,17 @@ def evaluate_data_quality(
                 + ", ".join(issue.id for issue in material),
             )
         )
+    if policy.forbid_any_issues:
+        checks.append(
+            _check(
+                f"{check_prefix}:no_issues",
+                not audit.issues,
+                "clean-data audit contains no data-quality issues"
+                if not audit.issues
+                else "audit reports issues for a clean-data expectation: "
+                + ", ".join(issue.id for issue in audit.issues),
+            )
+        )
     return tuple(checks)
 
 
@@ -482,11 +496,133 @@ def evaluate_statistics(
         )
         for index, term in enumerate(policy.required_report_terms, start=1)
     )
+    assessments = [
+        assessment
+        for record in state.specialist_results
+        for assessment in record.result.statistical_assessments
+    ]
+    for index, expectation in enumerate(policy.expectations, start=1):
+        matches = [
+            assessment
+            for assessment in assessments
+            if _statistical_assessment_matches(assessment, expectation)
+        ]
+        prefix = f"{check_prefix}:expectation:{index}"
+        checks.append(
+            _check(
+                f"{prefix}:present",
+                len(matches) == 1,
+                "exactly one typed statistical assessment is present"
+                if len(matches) == 1
+                else "typed statistical assessment is missing or ambiguous",
+            )
+        )
+        if len(matches) == 1:
+            checks.extend(
+                _evaluate_statistical_assessment(prefix, matches[0], expectation)
+            )
     return tuple(checks) or (
         _check(
             f"{check_prefix}:not_required",
             True,
             "no scenario-specific statistical requirement was declared",
+        ),
+    )
+
+
+def _statistical_assessment_matches(
+    assessment: StatisticalAssessment,
+    expectation: StatisticalExpectation,
+) -> bool:
+    """Match a typed assessment to an expected estimand without using prose."""
+
+    return (
+        normalize_metric_key(assessment.metric_key, assessment.dimensions)
+        == normalize_metric_key(expectation.metric_key, expectation.dimensions)
+        and normalize_metric_dimensions(assessment.dimensions)
+        == normalize_metric_dimensions(expectation.dimensions)
+        and normalize_metric_period(assessment.baseline_period)
+        == normalize_metric_period(expectation.baseline_period)
+        and normalize_metric_period(assessment.comparison_period)
+        == normalize_metric_period(expectation.comparison_period)
+    )
+
+
+def _evaluate_statistical_assessment(
+    prefix: str,
+    assessment: StatisticalAssessment,
+    expectation: StatisticalExpectation,
+) -> tuple[EvaluationCheck, ...]:
+    """Check the V1 statistical conclusion and its supporting quantities."""
+
+    expected_interval = expectation.expected_confidence_interval
+    actual_interval = assessment.confidence_interval
+    assumptions = {item.strip().lower() for item in assessment.assumptions_checked}
+    required_assumptions = {
+        item.strip().lower() for item in expectation.required_assumptions
+    }
+    return (
+        _check(
+            f"{prefix}:conclusion",
+            assessment.conclusion is expectation.expected_conclusion,
+            "statistical conclusion matches the seeded expectation",
+        ),
+        _check(
+            f"{prefix}:confidence_level",
+            abs(assessment.confidence_level - expectation.confidence_level) <= 1e-12,
+            "confidence level is explicit and correct",
+        ),
+        _check(
+            f"{prefix}:estimate",
+            abs(assessment.estimate - expectation.expected_estimate)
+            <= expectation.estimate_tolerance,
+            "estimated effect matches the seeded effect",
+        ),
+        _check(
+            f"{prefix}:confidence_interval",
+            abs(actual_interval.lower - expected_interval.lower)
+            <= expectation.confidence_interval_tolerance
+            and abs(actual_interval.upper - expected_interval.upper)
+            <= expectation.confidence_interval_tolerance,
+            "confidence interval matches the seeded interval",
+        ),
+        _check(
+            f"{prefix}:p_value",
+            abs(assessment.p_value - expectation.expected_p_value)
+            <= expectation.p_value_tolerance,
+            "p-value matches the seeded test result",
+        ),
+        _check(
+            f"{prefix}:effect_size",
+            abs(assessment.effect_size - expectation.expected_effect_size)
+            <= expectation.effect_size_tolerance,
+            "effect size matches the seeded effect size",
+        ),
+        _check(
+            f"{prefix}:practical_threshold",
+            abs(
+                assessment.practical_significance_threshold
+                - expectation.practical_significance_threshold
+            )
+            <= 1e-12,
+            "practical significance threshold is explicit and correct",
+        ),
+        _check(
+            f"{prefix}:practical_significance",
+            assessment.practically_significant
+            is expectation.expected_practically_significant,
+            "practical significance conclusion matches the seeded expectation",
+        ),
+        _check(
+            f"{prefix}:assumptions",
+            required_assumptions.issubset(assumptions),
+            "required statistical assumptions are reported",
+        ),
+        _check(
+            f"{prefix}:causal_restraint",
+            assessment.causal_interpretation
+            is expectation.expected_causal_interpretation,
+            "causal interpretation matches the declared study design",
         ),
     )
 
@@ -605,6 +741,18 @@ def evaluate_provenance(
                 f"metric {comparison.metric_key} cites executed evidence",
             )
         )
+    for record in state.specialist_results:
+        for assessment in record.result.statistical_assessments:
+            checks.append(
+                _check(
+                    f"{check_prefix}:statistical_assessment:{assessment.metric_key}",
+                    bool(assessment.evidence_refs)
+                    and all(
+                        reference in refs for reference in assessment.evidence_refs
+                    ),
+                    "statistical assessment cites executed evidence",
+                )
+            )
 
     if state.final_report is None:
         checks.append(

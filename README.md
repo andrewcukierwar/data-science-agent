@@ -69,7 +69,10 @@ run = scenario.generate_validated()
 The built-in catalog also includes `retention-q2-deterioration`,
 `cogs-q2-margin-deterioration`, and `discount-refund-q2-deterioration`, each at
 version `1.0` with its own deterministic generator, evaluator, and invariant
-suite.
+suite. It also includes `missing-reporting-day`,
+`partial-latest-reporting-day`, `meaningful-ab-treatment-effect`,
+`no-effect-ab-experiment`, and `significant-but-immaterial-ab-effect`, each at
+version `1.0` with deterministic source and evaluator contracts.
 
 The clean synthetic ecommerce baseline remains independently available through
 `SyntheticEcommerceGenerator` and `validate_synthetic_ecommerce_baseline`.

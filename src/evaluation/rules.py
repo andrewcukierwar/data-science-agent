@@ -17,11 +17,14 @@ from evaluation.primitives import (
 from scenarios.definitions import (
     CANONICAL_PROFITABILITY_SCENARIO,
     COGS_MARGIN_DETERIORATION_SCENARIO,
+    DATA_QUALITY_SCENARIOS,
     DISCOUNT_REFUND_DETERIORATION_SCENARIO,
+    EXPERIMENT_SCENARIOS,
     RETENTION_DETERIORATION_SCENARIO,
 )
 from scenarios.definitions.models import ScenarioDefinition
 from schemas.audit import IssueSeverity
+from schemas.statistics import StatisticalExpectation
 
 
 def canonical_rules() -> ScenarioRules:
@@ -163,6 +166,7 @@ def canonical_rules() -> ScenarioRules:
         ),
         data_quality_policy=DataQualityPolicy(
             maximum_issue_severity=IssueSeverity.LOW,
+            forbid_any_issues=True,
         ),
         statistics_policy=StatisticsPolicy(
             required_specialist_roles=("statistician",),
@@ -194,6 +198,7 @@ def _business_rules(
         root_cause_rules=root_cause_rules,
         data_quality_policy=DataQualityPolicy(
             maximum_issue_severity=IssueSeverity.LOW,
+            forbid_any_issues=True,
         ),
         statistics_policy=StatisticsPolicy(
             required_specialist_roles=("statistician",),
@@ -207,6 +212,161 @@ def _business_rules(
                 "critic",
             )
         ),
+    )
+
+
+def _data_quality_rules(
+    definition: ScenarioDefinition,
+    *,
+    required_issue_id: str,
+    forbidden_issue_id: str,
+) -> ScenarioRules:
+    """Build common quality-trap gates with explicit defect recall."""
+
+    evaluation_spec = definition.to_evaluation_spec()
+    return ScenarioRules(
+        scenario_id=evaluation_spec.scenario_id,
+        scenario_version=evaluation_spec.scenario_version,
+        evaluator_version=evaluation_spec.evaluator_version,
+        expected_metrics=evaluation_spec.ground_truth,
+        root_cause_rules=(
+            TextRule(
+                check_id="data_quality_limitation",
+                description=(
+                    "final analysis states the reporting limitation before "
+                    "business interpretation"
+                ),
+                predicate=lambda text: contains_all_concepts(
+                    text,
+                    (r"report|data|source", r"missing|partial|incomplete|coverage"),
+                ),
+            ),
+        ),
+        data_quality_policy=DataQualityPolicy(
+            required_issue_ids=(required_issue_id,),
+            forbidden_issue_ids=(forbidden_issue_id,),
+            maximum_issue_severity=IssueSeverity.HIGH,
+        ),
+        task_policy=TaskCompletenessPolicy(
+            required_agent_roles=("data_auditor", "lead", "analyst", "critic")
+        ),
+    )
+
+
+def _experiment_rules(
+    definition: ScenarioDefinition,
+    *,
+    conclusion_patterns: tuple[str, ...],
+) -> ScenarioRules:
+    """Build common V1 statistical gates around one typed expectation."""
+
+    expectation: StatisticalExpectation | None = definition.statistical_expectation
+    if expectation is None:
+        raise ValueError(f"{definition.scenario_id} has no statistical expectation")
+    evaluation_spec = definition.to_evaluation_spec()
+    return ScenarioRules(
+        scenario_id=evaluation_spec.scenario_id,
+        scenario_version=evaluation_spec.scenario_version,
+        evaluator_version=evaluation_spec.evaluator_version,
+        expected_metrics=evaluation_spec.ground_truth,
+        root_cause_rules=(
+            TextRule(
+                check_id="statistical_conclusion",
+                description="final analysis states the expected statistical decision",
+                predicate=lambda text: contains_all_concepts(text, conclusion_patterns),
+            ),
+        ),
+        data_quality_policy=DataQualityPolicy(
+            maximum_issue_severity=IssueSeverity.LOW,
+            forbid_any_issues=True,
+        ),
+        statistics_policy=StatisticsPolicy(
+            required_specialist_roles=("statistician",),
+            required_report_terms=(
+                "confidence interval",
+                "effect size",
+                "practical significance",
+                "assumption",
+                "causal",
+            ),
+            expectations=(expectation,),
+        ),
+        task_policy=TaskCompletenessPolicy(
+            required_agent_roles=(
+                "data_auditor",
+                "lead",
+                "analyst",
+                "statistician",
+                "critic",
+            )
+        ),
+    )
+
+
+def missing_reporting_day_rules() -> ScenarioRules:
+    """Return evaluator rules for the missing-day data-quality trap."""
+
+    return _data_quality_rules(
+        next(
+            item
+            for item in DATA_QUALITY_SCENARIOS
+            if item.scenario_id == "missing-reporting-day"
+        ),
+        required_issue_id="missing_reporting_day",
+        forbidden_issue_id="partial_latest_reporting_day",
+    )
+
+
+def partial_latest_day_rules() -> ScenarioRules:
+    """Return evaluator rules for the partial-latest-day trap."""
+
+    return _data_quality_rules(
+        next(
+            item
+            for item in DATA_QUALITY_SCENARIOS
+            if item.scenario_id == "partial-latest-reporting-day"
+        ),
+        required_issue_id="partial_latest_reporting_day",
+        forbidden_issue_id="missing_reporting_day",
+    )
+
+
+def meaningful_experiment_rules() -> ScenarioRules:
+    """Return evaluator rules for the practically meaningful experiment."""
+
+    return _experiment_rules(
+        next(
+            item
+            for item in EXPERIMENT_SCENARIOS
+            if item.scenario_id == "meaningful-ab-treatment-effect"
+        ),
+        conclusion_patterns=(r"statistically significant", r"practical"),
+    )
+
+
+def no_effect_experiment_rules() -> ScenarioRules:
+    """Return evaluator rules for the no-effect experiment."""
+
+    return _experiment_rules(
+        next(
+            item
+            for item in EXPERIMENT_SCENARIOS
+            if item.scenario_id == "no-effect-ab-experiment"
+        ),
+        conclusion_patterns=(r"not statistically significant", r"zero|no effect"),
+    )
+
+
+def immaterial_experiment_rules() -> ScenarioRules:
+    """Return evaluator rules for the significant-but-immaterial experiment."""
+
+    return _experiment_rules(
+        next(
+            item
+            for item in EXPERIMENT_SCENARIOS
+            if item.scenario_id == "significant-but-immaterial-ab-effect"
+        ),
+        conclusion_patterns=(r"statistically significant", r"immaterial|not practical"),
     )
 
 
@@ -470,6 +630,11 @@ __all__ = [
     "canonical_rules",
     "cogs_margin_rules",
     "discount_refund_rules",
+    "immaterial_experiment_rules",
+    "meaningful_experiment_rules",
+    "missing_reporting_day_rules",
+    "no_effect_experiment_rules",
+    "partial_latest_day_rules",
     "retention_rules",
     "rules_for_scenario",
 ]

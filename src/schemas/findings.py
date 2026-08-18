@@ -9,6 +9,7 @@ from schemas.common import NonEmptyString
 
 if TYPE_CHECKING:
     from schemas.metrics import MetricComparison
+    from schemas.statistics import StatisticalAssessment
 
 
 class ConfidenceLevel(StrEnum):
@@ -42,6 +43,7 @@ class SpecialistResult(BaseModel):
     objective: NonEmptyString
     findings: list[Finding] = Field(default_factory=list)
     metric_comparisons: list["MetricComparison"] = Field(default_factory=list)
+    statistical_assessments: list["StatisticalAssessment"] = Field(default_factory=list)
     artifacts: list[NonEmptyString] = Field(default_factory=list)
     methods_used: list[NonEmptyString] = Field(default_factory=list)
     follow_up_questions: list[NonEmptyString] = Field(default_factory=list)
@@ -52,8 +54,14 @@ class SpecialistResult(BaseModel):
 # module, so resolving the typed forward reference here does not create a
 # circular import.
 from schemas.metrics import MetricComparison  # noqa: E402
+from schemas.statistics import StatisticalAssessment  # noqa: E402
 
-SpecialistResult.model_rebuild(_types_namespace={"MetricComparison": MetricComparison})
+SpecialistResult.model_rebuild(
+    _types_namespace={
+        "MetricComparison": MetricComparison,
+        "StatisticalAssessment": StatisticalAssessment,
+    }
+)
 
 
 def canonicalize_specialist_result(

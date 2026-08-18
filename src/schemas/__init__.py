@@ -54,6 +54,13 @@ from schemas.run_state import (
     ToolEvent,
     ToolEventStatus,
 )
+from schemas.statistics import (
+    CausalInterpretation,
+    ConfidenceInterval,
+    StatisticalAssessment,
+    StatisticalConclusion,
+    StatisticalExpectation,
+)
 from schemas.validation import (
     CriticCandidate,
     ValidationIssue,
@@ -91,6 +98,8 @@ __all__ = [
     "MetricConflict",
     "MetricDefinitionContext",
     "MetricObservation",
+    "CausalInterpretation",
+    "ConfidenceInterval",
     "compile_metric_comparisons",
     "deduplicate_metric_comparisons",
     "metric_comparison_identity",
@@ -102,6 +111,9 @@ __all__ = [
     "normalize_metric_key",
     "normalize_metric_period",
     "normalize_metric_unit",
+    "StatisticalAssessment",
+    "StatisticalConclusion",
+    "StatisticalExpectation",
     "ModelUsage",
     "ModelPricing",
     "RunBudget",

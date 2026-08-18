@@ -104,6 +104,11 @@ Required workflow:
   dependence, and any relevant robustness or sensitivity analysis.
 - Report confidence intervals, effect sizes, p-values, and practical meaning;
   never treat a p-value as the size or importance of an effect.
+- For a configured experiment expectation, return exactly one typed statistical
+  assessment with the conclusion, estimate, confidence interval, p-value,
+  effect size, practical-significance threshold, checked assumptions, and
+  causal interpretation. Do not omit an assumption merely because the result
+  is statistically significant.
 - Account for multiple comparisons when several segments, metrics, or periods
   are tested. Distinguish planned tests from exploratory results.
 - Treat observational period or channel comparisons as associations. Do not
@@ -216,6 +221,19 @@ def validate_statistician_result(
                     result.metric_comparisons
                 )
             ],
+            "statistical_assessments": [
+                assessment.model_copy(
+                    update={
+                        "evidence_refs": canonicalize_evidence_refs(
+                            assessment.evidence_refs,
+                            executed_refs=executed_refs,
+                            aliases=aliases,
+                        )
+                        or assessment.evidence_refs
+                    }
+                )
+                for assessment in result.statistical_assessments
+            ],
         }
     )
     invalid_findings = [
@@ -238,6 +256,16 @@ def validate_statistician_result(
         raise StatisticianEvidenceError(
             "metric comparisons cite no executed evidence: "
             + ", ".join(invalid_comparisons)
+        )
+    invalid_assessments = [
+        assessment.metric_key
+        for assessment in result.statistical_assessments
+        if not any(reference in executed_refs for reference in assessment.evidence_refs)
+    ]
+    if invalid_assessments:
+        raise StatisticianEvidenceError(
+            "statistical assessments cite no executed evidence: "
+            + ", ".join(invalid_assessments)
         )
     return result
 

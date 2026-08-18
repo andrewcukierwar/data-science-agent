@@ -16,10 +16,13 @@ from evaluation.engine import ScenarioRules
 from scenarios.definitions import (
     BUSINESS_ROOT_CAUSE_SCENARIOS,
     CANONICAL_PROFITABILITY_SCENARIO,
+    DATA_QUALITY_SCENARIOS,
+    EXPERIMENT_SCENARIOS,
 )
 from scenarios.definitions.models import ScenarioDefinition, ScenarioModelContext
 from scenarios.invariants import (
     ScenarioInvariantSuite,
+    experiment_invariant_suite,
     synthetic_ecommerce_invariant_suite,
 )
 from schemas.metrics import MetricComparison
@@ -330,13 +333,142 @@ def _business_registrations() -> tuple[ScenarioRegistration, ...]:
     )
 
 
+def _data_quality_registrations() -> tuple[ScenarioRegistration, ...]:
+    from evaluation.rules import (
+        missing_reporting_day_rules,
+        partial_latest_day_rules,
+    )
+    from scenarios.data_quality_scenarios import (
+        generate_missing_reporting_day_scenario,
+        generate_partial_latest_reporting_day_scenario,
+        observe_missing_reporting_day_ground_truth,
+        observe_partial_latest_reporting_day_ground_truth,
+    )
+
+    definitions = {
+        definition.scenario_id: definition for definition in DATA_QUALITY_SCENARIOS
+    }
+    return (
+        ScenarioRegistration(
+            metadata=definitions["missing-reporting-day"].to_metadata(),
+            evaluation_spec=definitions["missing-reporting-day"].to_evaluation_spec(),
+            model_visible_context=definitions[
+                "missing-reporting-day"
+            ].model_visible_context(),
+            generator_name="generate_missing_reporting_day_scenario",
+            generator=generate_missing_reporting_day_scenario,
+            evaluator_name="missing_reporting_day_rules",
+            evaluator=missing_reporting_day_rules,
+            invariant_suite=synthetic_ecommerce_invariant_suite(
+                expected_metrics=definitions["missing-reporting-day"].ground_truth,
+                metric_observer=observe_missing_reporting_day_ground_truth,
+            ),
+        ),
+        ScenarioRegistration(
+            metadata=definitions["partial-latest-reporting-day"].to_metadata(),
+            evaluation_spec=definitions[
+                "partial-latest-reporting-day"
+            ].to_evaluation_spec(),
+            model_visible_context=definitions[
+                "partial-latest-reporting-day"
+            ].model_visible_context(),
+            generator_name="generate_partial_latest_reporting_day_scenario",
+            generator=generate_partial_latest_reporting_day_scenario,
+            evaluator_name="partial_latest_day_rules",
+            evaluator=partial_latest_day_rules,
+            invariant_suite=synthetic_ecommerce_invariant_suite(
+                expected_metrics=definitions[
+                    "partial-latest-reporting-day"
+                ].ground_truth,
+                metric_observer=observe_partial_latest_reporting_day_ground_truth,
+            ),
+        ),
+    )
+
+
+def _experiment_registrations() -> tuple[ScenarioRegistration, ...]:
+    from evaluation.rules import (
+        immaterial_experiment_rules,
+        meaningful_experiment_rules,
+        no_effect_experiment_rules,
+    )
+    from scenarios.experiment_scenarios import (
+        generate_immaterial_experiment_scenario,
+        generate_meaningful_experiment_scenario,
+        generate_no_effect_experiment_scenario,
+        observe_immaterial_experiment_ground_truth,
+        observe_meaningful_experiment_ground_truth,
+        observe_no_effect_experiment_ground_truth,
+    )
+
+    definitions = {
+        definition.scenario_id: definition for definition in EXPERIMENT_SCENARIOS
+    }
+    registrations = (
+        (
+            "meaningful-ab-treatment-effect",
+            "generate_meaningful_experiment_scenario",
+            generate_meaningful_experiment_scenario,
+            "meaningful_experiment_rules",
+            meaningful_experiment_rules,
+            observe_meaningful_experiment_ground_truth,
+        ),
+        (
+            "no-effect-ab-experiment",
+            "generate_no_effect_experiment_scenario",
+            generate_no_effect_experiment_scenario,
+            "no_effect_experiment_rules",
+            no_effect_experiment_rules,
+            observe_no_effect_experiment_ground_truth,
+        ),
+        (
+            "significant-but-immaterial-ab-effect",
+            "generate_immaterial_experiment_scenario",
+            generate_immaterial_experiment_scenario,
+            "immaterial_experiment_rules",
+            immaterial_experiment_rules,
+            observe_immaterial_experiment_ground_truth,
+        ),
+    )
+    return tuple(
+        ScenarioRegistration(
+            metadata=definitions[scenario_id].to_metadata(),
+            evaluation_spec=definitions[scenario_id].to_evaluation_spec(),
+            model_visible_context=definitions[scenario_id].model_visible_context(),
+            generator_name=generator_name,
+            generator=generator,
+            evaluator_name=evaluator_name,
+            evaluator=evaluator,
+            invariant_suite=experiment_invariant_suite(
+                expected_metrics=definitions[scenario_id].ground_truth,
+                metric_observer=observer,
+            ),
+        )
+        for (
+            scenario_id,
+            generator_name,
+            generator,
+            evaluator_name,
+            evaluator,
+            observer,
+        ) in registrations
+    )
+
+
 def discover_scenarios() -> ScenarioCatalog:
     """Discover all built-in versioned scenario registrations."""
 
     # Keep discovery explicit and deterministic until the catalog is large
     # enough to justify module scanning. Duplicate keys are rejected by the
     # catalog constructor rather than silently shadowed.
-    return ScenarioCatalog((_canonical_registration(), *_business_registrations()))
+    return ScenarioCatalog(
+        (
+            _canonical_registration(),
+            *_business_registrations(),
+            *_data_quality_registrations(),
+            *_experiment_registrations(),
+        )
+    )
 
 
 def get_scenario(

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Annotated
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from schemas.metrics import MetricComparisonType, MetricDefinitionContext
+from schemas.statistics import StatisticalExpectation
 
 if TYPE_CHECKING:
     from evaluation.contracts import (
@@ -67,6 +68,7 @@ class ScenarioDefinition(BaseModel):
     known_non_drivers: tuple[NonEmptyString, ...] = Field(min_length=1)
     expected_data_quality_findings: tuple[NonEmptyString, ...] = Field(min_length=1)
     ground_truth: tuple[GroundTruthMetric, ...] = Field(min_length=1)
+    statistical_expectation: StatisticalExpectation | None = None
 
     @model_validator(mode="after")
     def identities_are_unique(self) -> ScenarioDefinition:
@@ -133,6 +135,7 @@ class ScenarioDefinition(BaseModel):
             known_non_drivers=self.known_non_drivers,
             expected_data_quality_findings=self.expected_data_quality_findings,
             ground_truth=self.ground_truth,
+            statistical_expectation=self.statistical_expectation,
         )
 
     def to_evaluation_spec(self) -> ScenarioEvaluationSpec:

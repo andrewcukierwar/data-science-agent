@@ -656,6 +656,42 @@ def synthetic_ecommerce_invariant_suite(
     )
 
 
+def experiment_invariant_suite(
+    *,
+    expected_metrics: Sequence[GroundTruthMetric] = (),
+    metric_observer: MetricObserver | None = None,
+) -> ScenarioInvariantSuite:
+    """Return common invariants for the deterministic two-arm experiment source."""
+
+    return ScenarioInvariantSuite(
+        dataset_spec=DatasetInvariantSpec(
+            keys=(KeyInvariant("experiment_observations", ("subject_id",)),),
+            row_invariants=(
+                RowInvariant(
+                    "experiment:assignments",
+                    "experiment_observations",
+                    lambda frame: set(frame["assignment"]) == {"control", "treatment"},
+                    "experiment must contain exactly control and treatment arms",
+                ),
+                RowInvariant(
+                    "experiment:binary-outcomes",
+                    "experiment_observations",
+                    lambda frame: set(frame["outcome"]).issubset({0, 1}),
+                    "experiment outcomes must be binary",
+                ),
+                RowInvariant(
+                    "experiment:one-observation-per-subject",
+                    "experiment_observations",
+                    lambda frame: not frame["subject_id"].duplicated().any(),
+                    "each subject must contribute one observation",
+                ),
+            ),
+        ),
+        expected_metrics=tuple(expected_metrics),
+        metric_observer=metric_observer,
+    )
+
+
 def validate_synthetic_ecommerce_baseline(source: object | TableMap) -> InvariantReport:
     """Validate a clean ecommerce dataset independently of any scenario."""
 
@@ -678,6 +714,7 @@ __all__ = [
     "check_dataset_invariants",
     "check_metric_identities",
     "check_observable_ground_truth",
+    "experiment_invariant_suite",
     "synthetic_ecommerce_invariant_suite",
     "validate_synthetic_ecommerce_baseline",
 ]

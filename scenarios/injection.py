@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import ClassVar
+from typing import ClassVar, Protocol
 
 import numpy as np
 import pandas as pd
@@ -68,11 +68,20 @@ class CanonicalScenarioInjectionConfig(BaseModel):
         )
 
 
+class ScenarioDataset(Protocol):
+    """Common source-bundle surface shared by scenario families."""
+
+    business_definitions: str
+
+    def table_map(self) -> dict[str, pd.DataFrame]:
+        """Return named, read-only source tables."""
+
+
 @dataclass(frozen=True, slots=True)
 class ScenarioRun:
     """A transformed dataset paired with evaluator-only scenario metadata."""
 
-    dataset: SyntheticEcommerceDataset
+    dataset: ScenarioDataset
     definition: ScenarioDefinition
     injection_config: BaseModel
 

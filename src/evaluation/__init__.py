@@ -60,7 +60,17 @@ from evaluation.primitives import (
     evaluate_task_completeness,
     evaluate_unsupported_claims,
 )
-from evaluation.rules import canonical_rules, rules_for_scenario
+from evaluation.rules import (
+    canonical_rules,
+    cogs_margin_rules,
+    discount_refund_rules,
+    immaterial_experiment_rules,
+    meaningful_experiment_rules,
+    missing_reporting_day_rules,
+    no_effect_experiment_rules,
+    partial_latest_day_rules,
+    rules_for_scenario,
+)
 
 __all__ = [
     "CanonicalAcceptanceError",
@@ -100,6 +110,8 @@ __all__ = [
     "WorkspaceVersionCompatibilityError",
     "check_workspace_version_compatibility",
     "canonical_rules",
+    "cogs_margin_rules",
+    "discount_refund_rules",
     "compile_final_metric_set",
     "dump_stable_json",
     "evaluate_data_quality",
@@ -116,5 +128,10 @@ __all__ = [
     "evaluate_unsupported_claims",
     "load_manifest",
     "load_workspace_snapshot",
+    "immaterial_experiment_rules",
+    "meaningful_experiment_rules",
+    "missing_reporting_day_rules",
+    "no_effect_experiment_rules",
+    "partial_latest_day_rules",
     "rules_for_scenario",
 ]
