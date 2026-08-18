@@ -236,6 +236,9 @@ class AnalysisRunState(BaseModel):
     # schema understood by the offline evaluation contracts.
     schema_version: str = "1.0"
     run_id: NonEmptyString
+    attempt_number: int = Field(default=0, ge=0)
+    attempt_id: NonEmptyString | None = None
+    attempt_started_at: datetime | None = None
     objective: NonEmptyString
     business_context: NonEmptyString | None = None
     model: NonEmptyString | None = None
@@ -275,6 +278,15 @@ class AnalysisRunState(BaseModel):
                 raise ValueError(f"{field_name} must include timezone information")
         if self.updated_at < self.created_at:
             raise ValueError("updated_at must be on or after created_at")
+        if self.attempt_started_at is not None and (
+            self.attempt_started_at.tzinfo is None
+            or self.attempt_started_at.utcoffset() is None
+        ):
+            raise ValueError("attempt_started_at must include timezone information")
+        if self.attempt_number == 0 and self.attempt_id is not None:
+            raise ValueError("attempt_id requires a positive attempt_number")
+        if self.attempt_number > 0 and self.attempt_id is None:
+            raise ValueError("attempt_number requires an attempt_id")
         return self
 
 

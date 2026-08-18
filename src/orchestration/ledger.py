@@ -238,6 +238,20 @@ class AnalysisLedger(ToolEventLedger):
         self.save()
         return self._state.status
 
+    def begin_attempt(self) -> str:
+        """Start and persist a uniquely identified attempt for this run.
+
+        Resuming an interrupted workspace intentionally reuses its cumulative
+        ledger, but each invocation receives a distinct attempt identity so
+        retries are observable rather than silently masquerading as one call.
+        """
+
+        self._state.attempt_number += 1
+        self._state.attempt_id = f"{self._state.run_id}-attempt-{uuid.uuid4().hex}"
+        self._state.attempt_started_at = datetime.now(UTC)
+        self.save()
+        return self._state.attempt_id
+
     def record_run_metadata(
         self,
         *,
@@ -297,9 +311,11 @@ class AnalysisLedger(ToolEventLedger):
 
         if elapsed_seconds < 0:
             raise ValueError("elapsed_seconds must be non-negative")
-        self._state.elapsed_seconds = elapsed_seconds
+        self._state.elapsed_seconds = (self._state.elapsed_seconds or 0.0) + (
+            elapsed_seconds
+        )
         self.save()
-        return elapsed_seconds
+        return self._state.elapsed_seconds
 
     def record_cost_estimate(
         self,

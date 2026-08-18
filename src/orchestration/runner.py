@@ -179,6 +179,7 @@ class AnalysisRunner:
                 objective=objective,
                 business_context=business_context,
             )
+            ledger.begin_attempt()
             self._configure_ledger(ledger, run_id, business_context)
             ledger.set_status(RunStatus.RUNNING)
 
@@ -662,6 +663,7 @@ class AnalysisRunner:
     ) -> tuple[AgentRunContext, Agent[AgentRunContext]]:
         config = AgentRunConfig(
             run_id=ledger.state.run_id,
+            attempt_id=ledger.state.attempt_id,
             agent_role=role,
             model=self.model,
             model_provider=self.model_provider,

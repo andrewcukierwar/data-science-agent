@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -176,8 +178,24 @@ def test_duplicate_run_ids_are_rejected_at_plan_time(tmp_path):
             scenario_ids=[SCENARIO_ID],
             architectures=("single-agent",),
             repetitions=3,
+            model="fixture-model",
             execution_mode=ExecutionMode.DETERMINISTIC,
         )
+
+
+def test_benchmark_cli_requires_an_explicit_model_for_planning():
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve().parents[1] / "scripts" / "run_benchmark.py"),
+        "dry-run",
+        "--scenario-id",
+        SCENARIO_ID,
+    ]
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+
+    assert result.returncode == 2
+    assert "--model" in result.stderr
+    assert "required" in result.stderr
 
 
 def test_failed_cell_isolated_and_recorded_with_frozen_manifest_identity(tmp_path):
@@ -380,6 +398,7 @@ def test_live_execution_requires_opt_in_and_credentials_without_loading_dotenv(
         scenario_ids=[SCENARIO_ID],
         architectures=("single-agent",),
         repetitions=3,
+        model="configured-model",
         execution_mode=ExecutionMode.LIVE,
     )
     path = tmp_path / "live.json"
@@ -417,13 +436,23 @@ def test_cost_pilot_is_persisted_and_required_before_full_resume(tmp_path):
     assert pilot_path.is_file()
     assert pilot.planned_cells == 3
 
+    with pytest.raises(BenchmarkError, match="unknown-cost"):
+        runner.execute(
+            manifest_path,
+            resume=True,
+            require_pilot=True,
+            pilot_path=pilot_path,
+        )
+
     full = runner.execute(
         manifest_path,
         resume=True,
         require_pilot=True,
         pilot_path=pilot_path,
+        unknown_cost=True,
     )
     assert full.manifest.status.value == "complete"
+    assert full.manifest.unknown_cost_acknowledged is True
     assert len(full.skipped_run_ids) == 1
     assert len(calls) == 3
 

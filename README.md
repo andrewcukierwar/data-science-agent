@@ -85,7 +85,7 @@ Plan the first benchmark with three repetitions per scenario and architecture.
 Planning writes the manifest before any workspace or agent execution:
 
 ```bash
-uv run python scripts/run_benchmark.py plan benchmark.json
+uv run python scripts/run_benchmark.py plan benchmark.json --model gpt-5.6-luna
 ```
 
 Run one paid cost-estimation cell, then resume the remaining immutable cells:
@@ -95,6 +95,10 @@ uv run python scripts/run_benchmark.py pilot benchmark.json --allow-paid
 uv run python scripts/run_benchmark.py run benchmark.json --allow-paid
 ```
 
+If the pilot cannot resolve pricing for the declared model, the full run is
+blocked until that uncertainty is explicitly acknowledged with
+`--unknown-cost`.
+
 Live execution requires `--allow-paid`, `OPENAI_API_KEY`, and a matching
 `OPENAI_DEFAULT_MODEL`. The runner never loads `.env`, never overwrites an
 existing run workspace, and records provider/operational failures separately
@@ -103,7 +107,8 @@ writing it, or `offline-rescore` to produce a new manifest after evaluator
 changes without rerunning agents:
 
 ```bash
-uv run python scripts/run_benchmark.py dry-run --scenario-id canonical-q2-profitability
+uv run python scripts/run_benchmark.py dry-run \
+  --scenario-id canonical-q2-profitability --model gpt-5.6-luna
 uv run python scripts/run_benchmark.py offline-rescore benchmark.json \
   --output benchmark-rescored.json
 

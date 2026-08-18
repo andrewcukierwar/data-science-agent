@@ -836,3 +836,57 @@ def test_runner_marks_failed_and_persists_error_state(tmp_path: Path) -> None:
     assert reloaded.state.status is RunStatus.FAILED
     assert reloaded.state.error == result.error
     assert reloaded.state.elapsed_seconds is not None
+
+
+def test_resumed_runner_attempts_have_distinct_ids_and_cumulative_runtime(
+    tmp_path: Path,
+) -> None:
+    auditor_calls = 0
+
+    async def interrupt_once(context, objective, *, agent):  # noqa: ANN001
+        nonlocal auditor_calls
+        auditor_calls += 1
+        context.record_sdk_usage(_usage())
+        if auditor_calls == 1:
+            raise KeyboardInterrupt
+        return _audit()
+
+    async def lead(context, objective, *, business_context, audit, agent):  # noqa: ANN001
+        context.record_sdk_usage(_usage())
+        return LeadResult(objective=objective, answer="The resumed analysis completed.")
+
+    async def critic(context, candidate, *, agent):  # noqa: ANN001
+        context.record_sdk_usage(_usage())
+        return ValidationResult(status=ValidationStatus.PASS)
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        model="test-model",
+        model_provider="test-provider",
+        input_cost_per_1k_tokens=1.0,
+        output_cost_per_1k_tokens=2.0,
+        auditor_runner=interrupt_once,
+        lead_runner=lead,
+        critic_runner=critic,
+    )
+
+    try:
+        asyncio.run(runner.run("run-resumed", "Explain profitability."))
+    except KeyboardInterrupt:
+        pass
+    else:  # pragma: no cover - the fixture must interrupt the first attempt
+        raise AssertionError("the first attempt should be interrupted")
+
+    workspace = WorkspaceManager(tmp_path / "workspaces").open_workspace("run-resumed")
+    first = AnalysisLedger(workspace).state
+    result = asyncio.run(runner.run("run-resumed", "Explain profitability."))
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.state is not None
+    assert result.state.attempt_number == 2
+    assert result.state.attempt_id != first.attempt_id
+    assert result.state.elapsed_seconds is not None
+    assert first.elapsed_seconds is not None
+    assert result.state.elapsed_seconds >= first.elapsed_seconds
+    assert result.state.usage.requests == 4
+    assert result.state.estimated_cost_usd is not None

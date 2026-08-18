@@ -424,6 +424,7 @@ class BenchmarkRunRecord(ContractModel):
     run_configuration: RunConfiguration
     budgets: BudgetConfiguration
     code_revision: CodeRevision | None = None
+    attempt_id: NonEmptyString | None = None
     seed: int = Field(ge=0)
     workspace_path: NonEmptyString
     lifecycle: LifecycleOutcome
@@ -833,6 +834,7 @@ class BenchmarkManifest(ContractModel):
     repetitions: int = Field(ge=1)
     model: NonEmptyString
     model_provider: NonEmptyString
+    unknown_cost_acknowledged: bool = False
     run_configuration: RunConfiguration
     budgets: BudgetConfiguration
     aggregation_version: VersionString

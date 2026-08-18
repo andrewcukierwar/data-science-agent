@@ -328,7 +328,7 @@ class BenchmarkRunner:
         scenario_versions: Mapping[str, str] | None = None,
         architectures: Sequence[str] = DEFAULT_ARCHITECTURES,
         repetitions: int = DEFAULT_REPETITIONS,
-        model: str = "configured-model",
+        model: str,
         model_provider: str = "openai",
         execution_mode: ExecutionMode = ExecutionMode.LIVE,
         budgets: BudgetConfiguration | None = None,
@@ -447,6 +447,7 @@ class BenchmarkRunner:
         environment: Mapping[str, str] | None = None,
         require_pilot: bool | None = None,
         pilot_path: str | Path | None = None,
+        unknown_cost: bool = False,
         max_cells: int | None = None,
     ) -> BenchmarkExecutionSummary:
         """Execute missing cells, preserving every existing run record."""
@@ -483,7 +484,19 @@ class BenchmarkRunner:
                 environment=environment,
             )
         if require_pilot:
-            self._require_pilot(path, pilot_path)
+            pilot = self._require_pilot(
+                path,
+                pilot_path,
+                allow_unknown_cost=(unknown_cost or manifest.unknown_cost_acknowledged),
+            )
+            if (
+                pilot.observed_cost_usd is None
+                and unknown_cost
+                and not manifest.unknown_cost_acknowledged
+            ):
+                manifest = manifest.model_copy(
+                    update={"unknown_cost_acknowledged": True}
+                )
 
         manifest = self._replace_manifest(manifest, status=ManifestStatus.RUNNING)
         self._persist_manifest(path, manifest, overwrite=True)
@@ -1092,6 +1105,7 @@ class BenchmarkRunner:
             run_configuration=manifest.run_configuration,
             budgets=manifest.budgets,
             code_revision=self.code_revision,
+            attempt_id=getattr(state, "attempt_id", None),
             seed=cell.scenario.metadata.seed,
             workspace_path=str(cell.workspace_path),
             lifecycle=outcome.lifecycle,
@@ -1281,6 +1295,8 @@ class BenchmarkRunner:
     def _require_pilot(
         manifest_path: Path,
         pilot_path: str | Path | None,
+        *,
+        allow_unknown_cost: bool = False,
     ) -> BenchmarkPilotReport:
         path = (
             Path(pilot_path).expanduser().resolve()
@@ -1318,6 +1334,11 @@ class BenchmarkRunner:
             raise BenchmarkError(
                 "cost-estimation pilot did not complete successfully; "
                 "full matrix execution is blocked"
+            )
+        if report.observed_cost_usd is None and not allow_unknown_cost:
+            raise BenchmarkError(
+                "pilot cost is unknown; pass the explicit unknown-cost "
+                "acknowledgement before continuing beyond the pilot"
             )
         return report
 

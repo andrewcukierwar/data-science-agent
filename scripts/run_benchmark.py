@@ -41,7 +41,11 @@ def _common_matrix_arguments(parser: argparse.ArgumentParser) -> None:
         help="Architecture to include; repeat for a subset (default: both).",
     )
     parser.add_argument("--repetitions", type=int, default=3)
-    parser.add_argument("--model", default="configured-model")
+    parser.add_argument(
+        "--model",
+        required=True,
+        help="Exact model identifier to freeze into the benchmark manifest.",
+    )
     parser.add_argument("--model-provider", default="openai")
     parser.add_argument(
         "--execution-mode",
@@ -96,6 +100,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Explicitly authorize live paid execution; credentials are still required."
+        ),
+    )
+    run.add_argument(
+        "--unknown-cost",
+        action="store_true",
+        help=(
+            "Acknowledge that the pilot could not estimate cost and permit "
+            "continuation beyond the pilot."
         ),
     )
 
@@ -202,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
                 allow_paid=args.allow_paid,
                 require_pilot=True,
                 pilot_path=args.pilot,
+                unknown_cost=args.unknown_cost,
             )
             _print_summary(summary)
             return 0 if not summary.failed_run_ids else 1

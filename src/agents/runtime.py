@@ -146,6 +146,7 @@ class AgentRunConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: str = Field(min_length=1)
+    attempt_id: str | None = Field(default=None, min_length=1)
     agent_role: AgentRole
     model: str = Field(default="configured-model", min_length=1)
     model_provider: str = Field(default="openai", min_length=1)
@@ -277,6 +278,11 @@ class AgentRunContext:
                 raise ValueError(f"{service_name} must use this run's ledger")
         if self.run_config.run_id != self.ledger.state.run_id:
             raise ValueError("run_config.run_id must match the ledger run_id")
+        if (
+            self.run_config.attempt_id is not None
+            and self.run_config.attempt_id != self.ledger.state.attempt_id
+        ):
+            raise ValueError("run_config.attempt_id must match the ledger attempt_id")
 
     @property
     def agent_role(self) -> AgentRole:

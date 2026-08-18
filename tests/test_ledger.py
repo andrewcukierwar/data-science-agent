@@ -89,6 +89,23 @@ def test_ledger_persists_typed_work_products_and_reloads(tmp_path: Path) -> None
     assert reloaded.budget.sql_executions == 1
 
 
+def test_resumed_attempts_are_identified_and_elapsed_time_is_cumulative(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path, "run-resume")
+
+    first_attempt = ledger.begin_attempt()
+    ledger.record_elapsed(1.25)
+    reloaded = AnalysisLedger(ledger.state_path)
+    second_attempt = reloaded.begin_attempt()
+    reloaded.record_elapsed(2.5)
+
+    assert first_attempt != second_attempt
+    assert reloaded.state.attempt_number == 2
+    assert reloaded.state.attempt_id == second_attempt
+    assert reloaded.state.elapsed_seconds == pytest.approx(3.75)
+
+
 def test_rejected_hypotheses_are_kept_in_ledger_state(tmp_path: Path) -> None:
     ledger = _ledger(tmp_path)
     hypothesis = Hypothesis(id="H001", statement="AOV declined in Q2.")
