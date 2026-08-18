@@ -24,6 +24,10 @@ def _arguments() -> argparse.Namespace:
         default="canonical-q2-profitability",
         help="Registered deterministic scenario evaluator to use.",
     )
+    parser.add_argument(
+        "--scenario-version",
+        help="Optional registered scenario version; required when versions branch.",
+    )
     return parser.parse_args()
 
 
@@ -32,7 +36,7 @@ def main() -> int:
     try:
         evaluation = evaluate_workspace(
             args.workspace,
-            rules_for_scenario(args.scenario_id),
+            rules_for_scenario(args.scenario_id, args.scenario_version),
         )
     except Exception as error:  # noqa: BLE001
         print(

@@ -36,9 +36,11 @@ def main() -> int:
     manifest_path = args.manifest.expanduser().resolve()
     try:
         manifest = load_manifest(manifest_path)
-        scenario_ids = {record.scenario_id for record in manifest.run_records}
         rules = {
-            scenario_id: rules_for_scenario(scenario_id) for scenario_id in scenario_ids
+            (record.scenario_id, record.scenario_version): rules_for_scenario(
+                record.scenario_id, record.scenario_version
+            )
+            for record in manifest.run_records
         }
         updated, evaluations = evaluate_manifest(
             manifest,

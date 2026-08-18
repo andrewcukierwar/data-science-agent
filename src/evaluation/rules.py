@@ -21,11 +21,12 @@ from schemas.audit import IssueSeverity
 def canonical_rules() -> ScenarioRules:
     """Return evaluator-only rules for the canonical profitability scenario."""
 
+    evaluation_spec = CANONICAL_PROFITABILITY_SCENARIO.to_evaluation_spec()
     return ScenarioRules(
-        scenario_id=CANONICAL_PROFITABILITY_SCENARIO.scenario_id,
-        scenario_version=CANONICAL_PROFITABILITY_SCENARIO.scenario_version,
-        evaluator_version=CANONICAL_PROFITABILITY_SCENARIO.evaluator_version,
-        expected_metrics=CANONICAL_PROFITABILITY_SCENARIO.ground_truth,
+        scenario_id=evaluation_spec.scenario_id,
+        scenario_version=evaluation_spec.scenario_version,
+        evaluator_version=evaluation_spec.evaluator_version,
+        expected_metrics=evaluation_spec.ground_truth,
         root_cause_rules=(
             TextRule(
                 check_id="primary_channel_driver",
@@ -172,14 +173,21 @@ def canonical_rules() -> ScenarioRules:
     )
 
 
-def rules_for_scenario(scenario_id: str) -> ScenarioRules:
-    """Resolve the deterministic evaluator registered for one scenario."""
+def rules_for_scenario(
+    scenario_id: str,
+    scenario_version: str | None = None,
+) -> ScenarioRules:
+    """Resolve the deterministic evaluator through the versioned catalog."""
 
-    rules = {CANONICAL_PROFITABILITY_SCENARIO.scenario_id: canonical_rules()}
+    from scenarios.catalog import get_scenario
+
     try:
-        return rules[scenario_id]
-    except KeyError as exc:
-        raise KeyError(f"no offline evaluator is registered for {scenario_id}") from exc
+        return get_scenario(scenario_id, scenario_version).evaluator_rules()
+    except (KeyError, ValueError) as exc:
+        raise KeyError(
+            f"no offline evaluator is registered for "
+            f"{scenario_id}@{scenario_version or '*'}"
+        ) from exc
 
 
 __all__ = ["canonical_rules", "rules_for_scenario"]

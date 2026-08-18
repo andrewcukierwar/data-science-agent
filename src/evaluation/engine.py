@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -249,7 +249,7 @@ def update_run_record(
 
 def evaluate_manifest(
     manifest: BenchmarkManifest,
-    rules_by_scenario: dict[str, ScenarioRules],
+    rules_by_scenario: Mapping[str | tuple[str, str], ScenarioRules],
     *,
     workspace_base_dir: str | Path | None = None,
 ) -> tuple[BenchmarkManifest, tuple[OfflineEvaluation, ...]]:
@@ -259,10 +259,14 @@ def evaluate_manifest(
     updated_records: list[BenchmarkRunRecord] = []
     for record in manifest.run_records:
         try:
-            rules = rules_by_scenario[record.scenario_id]
+            rules = (
+                rules_by_scenario.get((record.scenario_id, record.scenario_version))
+                or rules_by_scenario[record.scenario_id]
+            )
         except KeyError as exc:
             raise ValueError(
-                f"no offline evaluator is registered for scenario {record.scenario_id}"
+                "no offline evaluator is registered for scenario "
+                f"{record.scenario_id}@{record.scenario_version}"
             ) from exc
         if (
             record.scenario_version != rules.scenario_version

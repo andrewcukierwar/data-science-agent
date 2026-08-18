@@ -1,10 +1,19 @@
 """Pydantic contracts for deterministic scenario metadata."""
 
-from typing import Annotated
+from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from typing import TYPE_CHECKING, Annotated
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from schemas.metrics import MetricComparisonType
+
+if TYPE_CHECKING:
+    from evaluation.contracts import (
+        ModelVisibleScenarioContext,
+        ScenarioEvaluationSpec,
+        ScenarioMetadata,
+    )
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
 VersionString = Annotated[str, Field(pattern=r"^\d+\.\d+$", min_length=3)]
@@ -58,7 +67,20 @@ class ScenarioDefinition(BaseModel):
     expected_data_quality_findings: tuple[NonEmptyString, ...] = Field(min_length=1)
     ground_truth: tuple[GroundTruthMetric, ...] = Field(min_length=1)
 
-    def model_visible_context(self) -> "ScenarioModelContext":
+    @model_validator(mode="after")
+    def identities_are_unique(self) -> ScenarioDefinition:
+        metric_ids = [metric.id for metric in self.ground_truth]
+        comparisons = [metric.comparison for metric in self.ground_truth]
+        if len(set(metric_ids)) != len(metric_ids):
+            raise ValueError("ground_truth metric IDs must be unique")
+        if len(set(comparisons)) != len(comparisons):
+            raise ValueError("ground_truth comparison IDs must be unique")
+        condition_ids = [condition.id for condition in self.injected_conditions]
+        if len(set(condition_ids)) != len(condition_ids):
+            raise ValueError("injected condition IDs must be unique")
+        return self
+
+    def model_visible_context(self) -> ScenarioModelContext:
         """Return the allow-listed context safe to pass to an analysis model.
 
         ``ScenarioDefinition`` remains evaluator-only because it contains
@@ -67,6 +89,62 @@ class ScenarioDefinition(BaseModel):
         """
 
         return ScenarioModelContext(
+            scenario_id=self.scenario_id,
+            scenario_version=self.scenario_version,
+            name=self.name,
+            user_question=self.user_question,
+        )
+
+    def metadata_contract(self) -> ScenarioMetadata:
+        """Project public scenario fields into the generic versioned contract."""
+
+        # Imported lazily because the evaluation contracts intentionally import
+        # these neutral scenario value models for their evaluator-only fields.
+        from evaluation.contracts import ScenarioMetadata
+
+        return ScenarioMetadata(
+            scenario_id=self.scenario_id,
+            scenario_version=self.scenario_version,
+            name=self.name,
+            seed=self.seed,
+            generation_config=self.generation_config,
+            user_question=self.user_question,
+            evaluator_version=self.evaluator_version,
+        )
+
+    def to_metadata(self) -> ScenarioMetadata:
+        """Alias for callers using the generic contract naming convention."""
+
+        return self.metadata_contract()
+
+    def evaluation_contract(self) -> ScenarioEvaluationSpec:
+        """Project evaluator-only fields into the generic versioned contract."""
+
+        from evaluation.contracts import ScenarioEvaluationSpec
+
+        return ScenarioEvaluationSpec(
+            scenario_id=self.scenario_id,
+            scenario_version=self.scenario_version,
+            evaluator_version=self.evaluator_version,
+            injected_conditions=self.injected_conditions,
+            expected_primary_driver=self.expected_primary_driver,
+            expected_secondary_findings=self.expected_secondary_findings,
+            known_non_drivers=self.known_non_drivers,
+            expected_data_quality_findings=self.expected_data_quality_findings,
+            ground_truth=self.ground_truth,
+        )
+
+    def to_evaluation_spec(self) -> ScenarioEvaluationSpec:
+        """Alias for callers using the generic contract naming convention."""
+
+        return self.evaluation_contract()
+
+    def model_visible_contract(self) -> ModelVisibleScenarioContext:
+        """Return the generic allow-listed model-visible projection."""
+
+        from evaluation.contracts import ModelVisibleScenarioContext
+
+        return ModelVisibleScenarioContext(
             scenario_id=self.scenario_id,
             scenario_version=self.scenario_version,
             name=self.name,

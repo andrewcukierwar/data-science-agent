@@ -12,6 +12,22 @@ CANONICAL_PROFITABILITY_SCENARIO = ScenarioDefinition(
     user_question=(
         "Why did profitability decline in Q2, and what should the company do about it?"
     ),
+    generation_config={
+        "baseline": {
+            "num_customers": 50_000,
+            "num_orders": 240_000,
+            "num_sessions": 1_000_000,
+            "num_products": 20,
+            "period_days": 365,
+            "start_date": "2025-01-01",
+        },
+        "injection": {
+            "meta_channel": "Meta",
+            "fallback_channel": "Organic",
+            "meta_q2_conversion_multiplier": 0.82,
+            "meta_q2_spend_multiplier": 1.07,
+        },
+    },
     injected_conditions=(
         InjectedCondition(
             id="meta-q2-conversion-decline",

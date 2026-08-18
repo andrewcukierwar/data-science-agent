@@ -54,3 +54,17 @@ is never overwritten:
 uv run python scripts/evaluate_manifest.py benchmark-manifest.json \
   --output benchmark-rescored.json
 ```
+
+## Versioned scenario catalog
+
+Scenario generation and evaluator rules resolve through the versioned catalog:
+
+```python
+from scenarios import get_scenario
+
+scenario = get_scenario("canonical-q2-profitability", "1.0")
+run = scenario.generate_validated()
+```
+
+The clean synthetic ecommerce baseline remains independently available through
+`SyntheticEcommerceGenerator` and `validate_synthetic_ecommerce_baseline`.

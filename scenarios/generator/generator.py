@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from scenarios.sources import write_deterministic_sources
+
 DEFAULT_CHANNELS = (
     "Meta",
     "Google",
@@ -67,6 +69,16 @@ class SyntheticEcommerceDataset:
         "business_definitions": "business_definitions.md",
     }
 
+    def table_map(self) -> dict[str, pd.DataFrame]:
+        """Return the generated tables keyed by their logical source names."""
+
+        return {
+            "customers": self.customers,
+            "orders": self.orders,
+            "sessions": self.sessions,
+            "marketing_spend": self.marketing_spend,
+        }
+
     def write(
         self,
         output_dir: str | Path,
@@ -75,26 +87,20 @@ class SyntheticEcommerceDataset:
     ) -> dict[str, Path]:
         """Write the generated tables and definitions to a directory."""
 
-        destination = Path(output_dir).expanduser().resolve()
-        destination.mkdir(parents=True, exist_ok=True)
-        paths = {
-            name: destination / filename for name, filename in self._TABLE_FILES.items()
-        }
-        existing = [path for path in paths.values() if path.exists()]
-        if existing and not overwrite:
-            raise FileExistsError(
-                "dataset output already exists: "
-                + ", ".join(str(path) for path in existing)
-            )
-
-        self.customers.to_parquet(paths["customers"], index=False)
-        self.orders.to_parquet(paths["orders"], index=False)
-        self.sessions.to_parquet(paths["sessions"], index=False)
-        self.marketing_spend.to_parquet(paths["marketing_spend"], index=False)
-        paths["business_definitions"].write_text(
-            self.business_definitions, encoding="utf-8"
+        return write_deterministic_sources(
+            output_dir,
+            self.table_map(),
+            {"business_definitions": self.business_definitions},
+            table_filenames={
+                name: filename
+                for name, filename in self._TABLE_FILES.items()
+                if name != "business_definitions"
+            },
+            document_filenames={
+                "business_definitions": self._TABLE_FILES["business_definitions"]
+            },
+            overwrite=overwrite,
         )
-        return paths
 
 
 class SyntheticEcommerceGenerator:

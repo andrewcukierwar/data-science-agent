@@ -15,6 +15,7 @@ from scenarios.generator import (
     SyntheticEcommerceDataset,
     SyntheticEcommerceGenerator,
 )
+from schemas.metrics import MetricComparison
 
 _SCENARIO_DEFINITIONS = """
 
@@ -502,4 +503,69 @@ def generate_canonical_profitability_scenario(
         dataset=transformed,
         definition=CANONICAL_PROFITABILITY_SCENARIO,
         injection_config=injection_config,
+    )
+
+
+def observe_canonical_ground_truth(
+    dataset: SyntheticEcommerceDataset,
+) -> tuple[MetricComparison, ...]:
+    """Measure canonical ground truth directly from generated source tables."""
+
+    customers = dataset.customers
+    sessions = dataset.sessions
+    spend = dataset.marketing_spend
+    channel = "Meta"
+
+    def quarter_mask(values: pd.Series, quarter: int) -> pd.Series:
+        return pd.to_datetime(values).dt.quarter.eq(quarter)
+
+    def customer_ids(quarter: int) -> set[str]:
+        mask = quarter_mask(customers["acquisition_date"], quarter)
+        return set(
+            customers.loc[
+                mask & customers["acquisition_channel"].eq(channel), "customer_id"
+            ]
+        )
+
+    q1_customers = customer_ids(1)
+    q2_customers = customer_ids(2)
+    q1_sessions = quarter_mask(sessions["session_date"], 1) & sessions["channel"].eq(
+        channel
+    )
+    q2_sessions = quarter_mask(sessions["session_date"], 2) & sessions["channel"].eq(
+        channel
+    )
+    q1_spend = quarter_mask(spend["date"], 1) & spend["channel"].eq(channel)
+    q2_spend = quarter_mask(spend["date"], 2) & spend["channel"].eq(channel)
+    conversion_q1 = float(sessions.loc[q1_sessions, "converted"].mean())
+    conversion_q2 = float(sessions.loc[q2_sessions, "converted"].mean())
+    spend_q1 = float(spend.loc[q1_spend, "spend"].sum())
+    spend_q2 = float(spend.loc[q2_spend, "spend"].sum())
+    cac_q1 = spend_q1 / len(q1_customers)
+    cac_q2 = spend_q2 / len(q2_customers)
+    ltv_q1 = CanonicalProfitabilityScenarioInjector._cohort_90_day_ltv(
+        dataset.orders, customers, q1_customers
+    )
+    ltv_q2 = CanonicalProfitabilityScenarioInjector._cohort_90_day_ltv(
+        dataset.orders, customers, q2_customers
+    )
+    changes = {
+        "conversion_rate": conversion_q2 / conversion_q1 - 1.0,
+        "acquired_customers": len(q2_customers) / len(q1_customers) - 1.0,
+        "marketing_spend": spend_q2 / spend_q1 - 1.0,
+        "cac": cac_q2 / cac_q1 - 1.0,
+        "ltv": ltv_q2 / ltv_q1 - 1.0,
+    }
+    return tuple(
+        MetricComparison(
+            metric_key=metric.metric_key,
+            dimensions=metric.dimensions,
+            baseline_period=metric.baseline_period,
+            comparison_period=metric.comparison_period,
+            comparison_type=metric.comparison_type,
+            value=changes[metric.metric_key],
+            unit=metric.value_unit,
+            evidence_refs=[f"generated-ground-truth:{metric.id}"],
+        )
+        for metric in CANONICAL_PROFITABILITY_SCENARIO.ground_truth
     )
