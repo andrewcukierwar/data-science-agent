@@ -18,6 +18,10 @@ uv run ruff format --check .
 The planned architecture and implementation sequence are documented in
 [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
 
+Implementation decisions and the Phase 1 hardening handoff are recorded in
+[`docs/decisions/`](docs/decisions/README.md) and
+[`docs/phase1-lessons.md`](docs/phase1-lessons.md).
+
 ## Canonical Phase 1 live acceptance
 
 The full no-steering canonical run requires Docker, `OPENAI_API_KEY`, and
