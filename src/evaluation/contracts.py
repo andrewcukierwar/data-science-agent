@@ -33,6 +33,7 @@ NonEmptyString = Annotated[str, Field(min_length=1)]
 VersionString = Annotated[str, Field(pattern=r"^\d+\.\d+$", min_length=3)]
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 BoundedScore = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+BoundedRate = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 JsonObject = dict[str, JsonValue]
 
 
@@ -415,6 +416,244 @@ class ScenarioReference(ContractModel):
     seed: int = Field(ge=0)
 
 
+class UncertaintyInterval(ContractModel):
+    """A confidence interval with an explicit method and sample size."""
+
+    confidence_level: float = Field(gt=0, lt=1, allow_inf_nan=False)
+    lower: FiniteFloat
+    upper: FiniteFloat
+    sample_size: int = Field(ge=2)
+    method: Literal["student_t"] = "student_t"
+
+    @model_validator(mode="after")
+    def bounds_are_ordered(self) -> UncertaintyInterval:
+        if self.lower > self.upper:
+            raise ValueError("uncertainty interval lower bound exceeds upper bound")
+        return self
+
+
+class DistributionSummary(ContractModel):
+    """Deterministic descriptive statistics for one observed metric."""
+
+    sample_size: int = Field(ge=0)
+    mean: FiniteFloat | None = None
+    stddev: FiniteFloat | None = Field(default=None, ge=0)
+    minimum: FiniteFloat | None = None
+    maximum: FiniteFloat | None = None
+    quantiles: dict[NonEmptyString, FiniteFloat] = Field(default_factory=dict)
+    uncertainty: UncertaintyInterval | None = None
+    uncertainty_status: Literal["estimable", "insufficient_sample", "no_observations"]
+
+    @model_validator(mode="after")
+    def statistics_match_sample_size(self) -> DistributionSummary:
+        if self.sample_size == 0:
+            if any(
+                value is not None
+                for value in (self.mean, self.stddev, self.minimum, self.maximum)
+            ):
+                raise ValueError("empty distributions cannot contain statistics")
+            if self.quantiles or self.uncertainty is not None:
+                raise ValueError("empty distributions cannot contain estimates")
+            if self.uncertainty_status != "no_observations":
+                raise ValueError("empty distributions require no_observations status")
+        elif self.sample_size == 1:
+            if any(value is None for value in (self.mean, self.minimum, self.maximum)):
+                raise ValueError(
+                    "one-observation distributions require location statistics"
+                )
+            if self.stddev is not None or self.uncertainty is not None:
+                raise ValueError(
+                    "one-observation distributions cannot estimate variance or "
+                    "uncertainty"
+                )
+            if self.uncertainty_status != "insufficient_sample":
+                raise ValueError(
+                    "one-observation distributions require insufficient_sample status"
+                )
+        else:
+            if any(
+                value is None
+                for value in (
+                    self.mean,
+                    self.stddev,
+                    self.minimum,
+                    self.maximum,
+                )
+            ):
+                raise ValueError("multi-observation distributions require statistics")
+            if self.uncertainty is None:
+                raise ValueError(
+                    "multi-observation distributions require an uncertainty interval"
+                )
+            if self.uncertainty.sample_size != self.sample_size:
+                raise ValueError("uncertainty sample size must match distribution")
+            if self.uncertainty_status != "estimable":
+                raise ValueError(
+                    "multi-observation distributions require estimable status"
+                )
+        if self.sample_size > 0 and not {"p25", "p50", "p75"}.issubset(self.quantiles):
+            raise ValueError(
+                "observed distributions require p25, p50, and p75 quantiles"
+            )
+        if (
+            self.minimum is not None
+            and self.maximum is not None
+            and self.minimum > self.maximum
+        ):
+            raise ValueError("distribution minimum exceeds maximum")
+        if self.quantiles and self.minimum is not None and self.maximum is not None:
+            if any(
+                value < self.minimum or value > self.maximum
+                for value in self.quantiles.values()
+            ):
+                raise ValueError("quantiles must lie within distribution bounds")
+        return self
+
+
+class AggregateDenominator(ContractModel):
+    """Counts and rates whose denominator is the declared matrix cell count."""
+
+    expected_repetitions: int = Field(ge=1)
+    observed_repetitions: int = Field(ge=0)
+    missing_repetitions: int = Field(ge=0)
+    completed_runs: int = Field(ge=0)
+    failed_runs: int = Field(ge=0)
+    evaluated_runs: int = Field(ge=0)
+    completion_rate: BoundedRate
+    evaluation_rate: BoundedRate
+
+    @model_validator(mode="after")
+    def counts_use_declared_denominator(self) -> AggregateDenominator:
+        if (
+            self.observed_repetitions + self.missing_repetitions
+            != self.expected_repetitions
+        ):
+            raise ValueError("observed and missing repetitions must equal expected")
+        if self.completed_runs + self.failed_runs != self.observed_repetitions:
+            raise ValueError(
+                "completed and failed runs must equal observed repetitions"
+            )
+        if self.evaluated_runs > self.completed_runs:
+            raise ValueError("evaluated runs cannot exceed completed runs")
+        expected_completion = self.completed_runs / self.expected_repetitions
+        expected_evaluation = self.evaluated_runs / self.expected_repetitions
+        if abs(self.completion_rate - expected_completion) > 1e-12:
+            raise ValueError(
+                "completion_rate must use expected_repetitions denominator"
+            )
+        if abs(self.evaluation_rate - expected_evaluation) > 1e-12:
+            raise ValueError(
+                "evaluation_rate must use expected_repetitions denominator"
+            )
+        return self
+
+
+class ArchitectureMetricComparison(ContractModel):
+    """Descriptive and paired statistical comparison for one metric."""
+
+    metric_key: NonEmptyString
+    left_architecture: NonEmptyString
+    right_architecture: NonEmptyString
+    difference_definition: NonEmptyString
+    left_sample_size: int = Field(ge=0)
+    right_sample_size: int = Field(ge=0)
+    paired_sample_size: int = Field(ge=0)
+    paired_repetitions: tuple[int, ...] = Field(default_factory=tuple)
+    mean_left: FiniteFloat | None = None
+    mean_right: FiniteFloat | None = None
+    mean_difference: FiniteFloat | None = None
+    paired_difference_distribution: DistributionSummary
+    alpha: float = Field(gt=0, lt=1, allow_inf_nan=False)
+    p_value: FiniteFloat | None = Field(default=None, ge=0, le=1)
+    test_method: Literal["paired_t", "not_estimable"]
+    conclusion: Literal["supported_difference", "not_supported", "insufficient_sample"]
+
+    @model_validator(mode="after")
+    def comparison_is_consistent(self) -> ArchitectureMetricComparison:
+        if self.paired_sample_size != len(self.paired_repetitions):
+            raise ValueError("paired sample size must match paired repetitions")
+        if self.paired_sample_size > min(self.left_sample_size, self.right_sample_size):
+            raise ValueError("paired sample size cannot exceed either side")
+        if self.paired_difference_distribution.sample_size != self.paired_sample_size:
+            raise ValueError("paired distribution size must match paired sample size")
+        if self.mean_difference != self.paired_difference_distribution.mean:
+            raise ValueError("mean_difference must match paired distribution mean")
+        if self.paired_sample_size < 2:
+            if self.test_method != "not_estimable" or self.p_value is not None:
+                raise ValueError("small paired samples cannot have a statistical test")
+            if self.conclusion != "insufficient_sample":
+                raise ValueError("small paired samples require insufficient_sample")
+        elif self.test_method != "paired_t" or self.p_value is None:
+            raise ValueError("estimable paired samples require a paired_t result")
+        return self
+
+
+class ArchitectureComparison(ContractModel):
+    """Scenario comparison with descriptive and inferential fields separated."""
+
+    scenario_id: NonEmptyString
+    scenario_version: VersionString
+    left_architecture: NonEmptyString
+    right_architecture: NonEmptyString
+    pairing_definition: NonEmptyString
+    metrics: tuple[ArchitectureMetricComparison, ...] = Field(default_factory=tuple)
+
+    @model_validator(mode="after")
+    def architectures_are_distinct(self) -> ArchitectureComparison:
+        if self.left_architecture == self.right_architecture:
+            raise ValueError(
+                "architecture comparisons require two distinct architectures"
+            )
+        return self
+
+
+class BenchmarkTableRow(ContractModel):
+    """Flat machine-readable row suitable for README/table generation."""
+
+    scenario_id: NonEmptyString
+    scenario_version: VersionString
+    architecture: NonEmptyString
+    expected_repetitions: int = Field(ge=1)
+    observed_repetitions: int = Field(ge=0)
+    missing_repetitions: int = Field(ge=0)
+    completed_runs: int = Field(ge=0)
+    failed_runs: int = Field(ge=0)
+    evaluated_runs: int = Field(ge=0)
+    completion_rate: BoundedRate
+    evaluation_rate: BoundedRate
+    overall_score_mean: FiniteFloat | None = None
+    overall_score_ci_lower: FiniteFloat | None = None
+    overall_score_ci_upper: FiniteFloat | None = None
+    mean_estimated_cost: FiniteFloat | None = Field(default=None, ge=0)
+    mean_elapsed_seconds: FiniteFloat | None = Field(default=None, ge=0)
+    failure_taxonomy: dict[NonEmptyString, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def row_counts_are_consistent(self) -> BenchmarkTableRow:
+        if (
+            self.observed_repetitions + self.missing_repetitions
+            != self.expected_repetitions
+        ):
+            raise ValueError(
+                "table row observed and missing counts must equal expected"
+            )
+        if self.completed_runs + self.failed_runs != self.observed_repetitions:
+            raise ValueError(
+                "table row completed and failed counts must equal observed"
+            )
+        if (
+            abs(self.completion_rate - self.completed_runs / self.expected_repetitions)
+            > 1e-12
+        ):
+            raise ValueError("table row completion rate has the wrong denominator")
+        if (
+            abs(self.evaluation_rate - self.evaluated_runs / self.expected_repetitions)
+            > 1e-12
+        ):
+            raise ValueError("table row evaluation rate has the wrong denominator")
+        return self
+
+
 class AggregateBenchmarkResult(ContractModel):
     """Deterministic aggregate for one scenario and architecture cell."""
 
@@ -429,6 +668,13 @@ class AggregateBenchmarkResult(ContractModel):
     mean_scores: dict[NonEmptyString, BoundedScore] = Field(default_factory=dict)
     mean_estimated_cost: FiniteFloat | None = Field(default=None, ge=0)
     mean_elapsed_seconds: FiniteFloat = Field(ge=0)
+    denominator: AggregateDenominator | None = None
+    score_distributions: dict[NonEmptyString, DistributionSummary] = Field(
+        default_factory=dict
+    )
+    cost_distribution: DistributionSummary | None = None
+    latency_distribution: DistributionSummary | None = None
+    failure_taxonomy: dict[NonEmptyString, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def aggregate_counts_are_consistent(self) -> AggregateBenchmarkResult:
@@ -440,6 +686,29 @@ class AggregateBenchmarkResult(ContractModel):
             raise ValueError("evaluated_runs cannot exceed completed_runs")
         if self.evaluated_runs and not self.mean_scores:
             raise ValueError("evaluated aggregates require mean_scores")
+        if self.denominator is not None:
+            if self.denominator.expected_repetitions != self.expected_repetitions:
+                raise ValueError(
+                    "aggregate denominator does not match expected repetitions"
+                )
+            if self.denominator.observed_repetitions != self.observed_repetitions:
+                raise ValueError(
+                    "aggregate denominator does not match observed repetitions"
+                )
+            if self.denominator.completed_runs != self.completed_runs:
+                raise ValueError("aggregate denominator does not match completed runs")
+            if self.denominator.failed_runs != self.failed_runs:
+                raise ValueError("aggregate denominator does not match failed runs")
+            if self.denominator.evaluated_runs != self.evaluated_runs:
+                raise ValueError("aggregate denominator does not match evaluated runs")
+        if self.score_distributions:
+            distribution_means = {
+                key: summary.mean
+                for key, summary in self.score_distributions.items()
+                if summary.mean is not None
+            }
+            if distribution_means != self.mean_scores:
+                raise ValueError("mean_scores must match score distribution means")
         return self
 
 
@@ -448,6 +717,23 @@ class ManifestStatus(StrEnum):
     RUNNING = "running"
     COMPLETE = "complete"
     ABORTED = "aborted"
+
+
+class BenchmarkReport(ContractModel):
+    """Portable aggregate report; raw records remain in the source manifest."""
+
+    report_version: Literal["1.0"] = "1.0"
+    manifest_id: NonEmptyString
+    manifest_status: ManifestStatus
+    aggregation_version: VersionString
+    expected_matrix_cells: int = Field(ge=1)
+    observed_raw_records: int = Field(ge=0)
+    missing_matrix_cells: int = Field(ge=0)
+    aggregates: tuple[AggregateBenchmarkResult, ...] = Field(min_length=1)
+    architecture_comparisons: tuple[ArchitectureComparison, ...] = Field(
+        default_factory=tuple
+    )
+    table_rows: tuple[BenchmarkTableRow, ...] = Field(min_length=1)
 
 
 class BenchmarkManifest(ContractModel):
@@ -468,6 +754,9 @@ class BenchmarkManifest(ContractModel):
     aggregation_version: VersionString
     run_records: tuple[BenchmarkRunRecord, ...] = Field(default_factory=tuple)
     aggregates: tuple[AggregateBenchmarkResult, ...] = Field(default_factory=tuple)
+    architecture_comparisons: tuple[ArchitectureComparison, ...] = Field(
+        default_factory=tuple
+    )
 
     @model_validator(mode="after")
     def manifest_has_unique_and_matching_cells(self) -> BenchmarkManifest:
@@ -540,6 +829,37 @@ class BenchmarkManifest(ContractModel):
         }
         if not set(aggregate_keys).issubset(allowed_aggregate_keys):
             raise ValueError("aggregate references an undeclared benchmark cell")
+
+        comparison_keys = [
+            (
+                item.scenario_id,
+                item.scenario_version,
+                item.left_architecture,
+                item.right_architecture,
+            )
+            for item in self.architecture_comparisons
+        ]
+        if len(set(comparison_keys)) != len(comparison_keys):
+            raise ValueError("architecture comparisons must be unique")
+        allowed_comparison_scenarios = {
+            (reference.scenario_id, reference.scenario_version)
+            for reference in self.scenario_references
+        }
+        for comparison in self.architecture_comparisons:
+            if (
+                comparison.scenario_id,
+                comparison.scenario_version,
+            ) not in allowed_comparison_scenarios:
+                raise ValueError(
+                    "architecture comparison references an undeclared scenario"
+                )
+            if (
+                comparison.left_architecture not in self.architectures
+                or comparison.right_architecture not in self.architectures
+            ):
+                raise ValueError(
+                    "architecture comparison references an undeclared architecture"
+                )
         if self.status is ManifestStatus.COMPLETE:
             expected_cells = {
                 (
@@ -610,13 +930,19 @@ def check_workspace_version_compatibility(workspace_path: str | Path) -> str:
 
 
 __all__ = [
+    "AggregateDenominator",
     "AggregateBenchmarkResult",
+    "ArchitectureComparison",
+    "ArchitectureMetricComparison",
+    "BenchmarkReport",
+    "BenchmarkTableRow",
     "BenchmarkManifest",
     "BenchmarkRunRecord",
     "BudgetConfiguration",
     "CodeRevision",
     "CostAvailability",
     "CostSummary",
+    "DistributionSummary",
     "EVALUATION_CONTRACT_VERSION",
     "EvaluationCheck",
     "EvaluationCheckStatus",
@@ -636,6 +962,7 @@ __all__ = [
     "ScenarioReference",
     "ScoreBreakdown",
     "SUPPORTED_WORKSPACE_VERSIONS",
+    "UncertaintyInterval",
     "UsageSummary",
     "WorkspaceVersionCompatibilityError",
     "check_workspace_version_compatibility",

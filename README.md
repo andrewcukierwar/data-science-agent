@@ -82,7 +82,19 @@ changes without rerunning agents:
 uv run python scripts/run_benchmark.py dry-run --scenario-id canonical-q2-profitability
 uv run python scripts/run_benchmark.py offline-rescore benchmark.json \
   --output benchmark-rescored.json
+
+# Generate deterministic README-ready rows and architecture comparisons
+uv run python scripts/run_benchmark.py report benchmark.json \
+  --output benchmark-report.json
 ```
+
+Benchmark reports retain raw records in the source manifest and expose
+per-scenario/architecture denominators, completion and evaluation rates, score
+distributions, Student-t intervals when sample size permits, cost/latency
+summaries, failure taxonomy, and paired architecture differences. A paired
+result is labeled `supported_difference`, `not_supported`, or
+`insufficient_sample`; descriptive means are never presented as proof of an
+architecture advantage.
 
 ## Versioned scenario catalog
 

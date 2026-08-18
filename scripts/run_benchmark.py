@@ -17,9 +17,13 @@ for import_root in (REPOSITORY_ROOT / "src", REPOSITORY_ROOT):
     if str(import_root) not in sys.path:
         sys.path.insert(0, str(import_root))
 
-from benchmark import BenchmarkError, BenchmarkRunner  # noqa: E402
+from benchmark import (  # noqa: E402
+    BenchmarkError,
+    BenchmarkRunner,
+    build_benchmark_report,
+)
 from evaluation.contracts import ExecutionMode  # noqa: E402
-from evaluation.engine import dump_stable_json  # noqa: E402
+from evaluation.engine import dump_stable_json, load_manifest  # noqa: E402
 
 
 def _common_matrix_arguments(parser: argparse.ArgumentParser) -> None:
@@ -103,6 +107,13 @@ def _parser() -> argparse.ArgumentParser:
     offline.add_argument("--output", type=Path)
     offline.add_argument("--workspace-base", type=Path)
 
+    report = subparsers.add_parser(
+        "report",
+        help="Write a deterministic README-ready report from a manifest.",
+    )
+    report.add_argument("manifest", type=Path)
+    report.add_argument("--output", type=Path)
+
     return parser
 
 
@@ -137,6 +148,14 @@ def _print_summary(summary) -> None:
         ),
         end="",
     )
+
+
+def _write_exclusive(path: Path, text: str) -> None:
+    path = path.expanduser().resolve()
+    if path.exists():
+        raise BenchmarkError(f"refusing to overwrite existing report: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -200,6 +219,16 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 else 1
             )
+
+        if args.command == "report":
+            manifest = load_manifest(args.manifest)
+            report = build_benchmark_report(manifest)
+            output = dump_stable_json(report.model_dump(mode="json"))
+            if args.output is None:
+                print(output, end="")
+            else:
+                _write_exclusive(args.output, output)
+            return 0
     except (BenchmarkError, ValueError, OSError) as error:
         print(f"BENCHMARK ERROR: {type(error).__name__}: {error}", file=sys.stderr)
         return 2

@@ -22,8 +22,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from benchmark.aggregation import AGGREGATION_VERSION, aggregate_manifest
 from evaluation.contracts import (
-    AggregateBenchmarkResult,
     BenchmarkManifest,
     BenchmarkRunRecord,
     BudgetConfiguration,
@@ -274,88 +274,6 @@ def _failure_category(message: str) -> FailureCategory:
     return FailureCategory.OTHER
 
 
-def _aggregate_for_cell(
-    manifest: BenchmarkManifest,
-    scenario_id: str,
-    scenario_version: str,
-    architecture: str,
-    records: Sequence[BenchmarkRunRecord],
-) -> AggregateBenchmarkResult:
-    scores: dict[str, list[float]] = {}
-    known_costs: list[float] = []
-    elapsed: list[float] = []
-    for record in records:
-        if record.score_breakdown is not None:
-            for key, value in record.score_breakdown.dimensions.items():
-                scores.setdefault(key, []).append(value)
-            scores.setdefault("overall_score", []).append(
-                record.score_breakdown.overall_score
-            )
-        if record.cost.estimated_cost_usd is not None:
-            known_costs.append(record.cost.estimated_cost_usd)
-        elapsed.append(record.latency.elapsed_seconds)
-    mean_scores = {
-        key: round(sum(values) / len(values), 12)
-        for key, values in sorted(scores.items())
-    }
-    return AggregateBenchmarkResult(
-        scenario_id=scenario_id,
-        scenario_version=scenario_version,
-        architecture=architecture,
-        expected_repetitions=manifest.repetitions,
-        observed_repetitions=len(records),
-        completed_runs=sum(
-            record.lifecycle.status is LifecycleStatus.COMPLETED for record in records
-        ),
-        failed_runs=sum(
-            record.lifecycle.status is not LifecycleStatus.COMPLETED
-            for record in records
-        ),
-        evaluated_runs=sum(
-            record.lifecycle.status is LifecycleStatus.COMPLETED
-            and record.evaluator_result.status
-            in {EvaluatorStatus.PASS, EvaluatorStatus.FAIL}
-            for record in records
-        ),
-        mean_scores=mean_scores,
-        mean_estimated_cost=(
-            round(sum(known_costs) / len(known_costs), 12) if known_costs else None
-        ),
-        mean_elapsed_seconds=(
-            round(sum(elapsed) / len(elapsed), 12) if elapsed else 0.0
-        ),
-    )
-
-
-def aggregate_manifest(manifest: BenchmarkManifest) -> BenchmarkManifest:
-    """Recompute deterministic aggregate cells from immutable raw records."""
-
-    by_cell: dict[tuple[str, str, str], list[BenchmarkRunRecord]] = {}
-    for record in manifest.run_records:
-        by_cell.setdefault(
-            (record.scenario_id, record.scenario_version, record.architecture),
-            [],
-        ).append(record)
-    aggregates = tuple(
-        _aggregate_for_cell(
-            manifest,
-            reference.scenario_id,
-            reference.scenario_version,
-            architecture,
-            by_cell.get(
-                (reference.scenario_id, reference.scenario_version, architecture),
-                [],
-            ),
-        )
-        for reference in manifest.scenario_references
-        for architecture in manifest.architectures
-    )
-    return BenchmarkManifest.model_validate(
-        manifest.model_dump(mode="json")
-        | {"aggregates": [item.model_dump(mode="json") for item in aggregates]}
-    )
-
-
 class BenchmarkRunner:
     """Plan, execute, resume, pilot, and rescore a benchmark matrix."""
 
@@ -498,7 +416,7 @@ class BenchmarkRunner:
                 parameters=parameters,
             ),
             budgets=budgets or _default_budgets(),
-            aggregation_version="1.0",
+            aggregation_version=AGGREGATION_VERSION,
         )
 
     def persist_plan(

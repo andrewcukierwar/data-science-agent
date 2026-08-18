@@ -1,5 +1,10 @@
-"""Resumable benchmark matrix planning and execution."""
+"""Resumable benchmark matrix planning, execution, and reporting."""
 
+from benchmark.aggregation import (
+    AGGREGATION_VERSION,
+    aggregate_manifest,
+    build_benchmark_report,
+)
 from benchmark.runner import (
     BenchmarkCell,
     BenchmarkCellResult,
@@ -7,7 +12,6 @@ from benchmark.runner import (
     BenchmarkExecutionSummary,
     BenchmarkPilotReport,
     BenchmarkRunner,
-    aggregate_manifest,
 )
 
 __all__ = [
@@ -17,5 +21,7 @@ __all__ = [
     "BenchmarkExecutionSummary",
     "BenchmarkPilotReport",
     "BenchmarkRunner",
+    "AGGREGATION_VERSION",
     "aggregate_manifest",
+    "build_benchmark_report",
 ]
