@@ -1,12 +1,49 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-18  
-**Implementation:** Tasks 1–9 complete  
+**Implementation:** Tasks 1–9 complete
+
+**Remediation:** R1–R6 pending before Task 10
+
 **Experiment:** Task 10 not started; no results published
 
-This document records the Phase 2 work completed before any paid benchmark and
-the exact boundary between tested infrastructure and empirical results. It is a
-handoff record, not a benchmark report.
+This document records the Phase 2 work completed before any paid benchmark, the
+required pre-benchmark remediation, and the exact boundary between tested
+infrastructure and empirical results. It is a handoff record, not a benchmark
+report.
+
+## Phase 2 Pre-Benchmark Remediation: R1–R6
+
+The following remediation tasks must be completed and deterministically
+verified before Task 10 begins:
+
+1. **R1 — Make the evaluator architecture-neutral [P0].** Remove
+   role-presence requirements from scoring and replace them with
+   capability/output requirements. Add regression tests proving semantically
+   equivalent single-agent and multi-agent outputs receive the same result.
+2. **R2 — Harden evidence provenance [P1].** Only successful executions and
+   successfully materialized/verified artifacts establish evidence. Add
+   adversarial failed-SQL, failed-Python, failed-artifact, and unrelated-success
+   tests.
+3. **R3 — Cryptographically/deterministically bind workspaces to scenarios
+   [P1].** Persist scenario ID/version, seed, expected source paths and hashes,
+   and preferably benchmark/code revision; reject mismatches during offline
+   evaluation.
+4. **R4 — Separate evaluator errors from analytical failures [P1].** Add an
+   evaluator-error state, propagate it through contracts and aggregation, keep
+   it in operational/reliability counts, and exclude it from analytical-quality
+   denominators without silently discarding it.
+5. **R5 — Harden benchmark-run execution semantics [P2/P2/P3].** Use clean
+   state or explicit attempt IDs with cumulative accounting on resume; require
+   known pricing or an explicit `unknown-cost` acknowledgement beyond the
+   pilot; and remove the misleading `configured-model` CLI default.
+6. **R6 — Fix scenario-document integrity + full preflight.** Remove the false
+   model-visible clean/no-injection assertion, test that injected scenarios do
+   not retain baseline-only assertions, and run the complete deterministic
+   preflight: tests, Ruff, architecture-neutral fixtures, workspace mismatch,
+   failed evidence, evaluator exceptions, interrupted resume, unknown pricing,
+   all 10 × 2 × 3 dry-run cells, and a benchmark-validity-focused Sol High code
+   review.
 
 ## What is implemented
 
@@ -132,12 +169,13 @@ passed. Deterministic fake-run coverage includes resume, interruption,
 duplicate IDs, failed cells, immutable workspaces, paid-execution guards, pilot
 enforcement, and offline rescoring.
 
-## Task 10 is intentionally still pending
+## Task 10 is intentionally blocked pending R1–R6
 
 No Phase 2 benchmark manifest currently exists. No paid pilot or single-agent
 versus five-agent matrix has been executed, evaluated, or aggregated. Existing
 canonical MVP workspaces were created under the earlier acceptance workflow and
-are not valid substitutes for declared Phase 2 cells.
+are not valid substitutes for declared Phase 2 cells. Task 10 must not begin
+until R1–R6 are complete and the full deterministic preflight is green.
 
 Therefore there are currently no honest Phase 2 values for task success,
 numerical accuracy, unsupported claims, operational reliability, cost, latency,
@@ -223,4 +261,3 @@ After reopening VS Code with inherited credentials:
 10. Publish real results and limitations, including denominators, failed runs,
     sample size, model specificity, evaluator limitations, uncertainty, cost,
     and latency—regardless of which architecture performs better.
-

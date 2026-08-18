@@ -1439,11 +1439,12 @@ full local verification completed with 312 passed, 3 skipped, and 13 opt-in live
 tests deselected; Ruff lint and formatting checks passed. This status describes
 the implementation, not an architecture-performance result.
 
-Task 10 remains open. No Phase 2 benchmark manifest has been frozen, no paid
-cost pilot or declared matrix has run, and no aggregate architecture comparison
-has been published. Existing canonical MVP workspaces are legacy acceptance
-artifacts rather than Phase 2 benchmark records. The live handoff and exact
-environment constraints are recorded in `docs/phase2-status.md`.
+R1–R6 remain open and must be completed before Task 10. No Phase 2 benchmark
+manifest has been frozen, no paid cost pilot or declared matrix has run, and no
+aggregate architecture comparison has been published. Existing canonical MVP
+workspaces are legacy acceptance artifacts rather than Phase 2 benchmark
+records. The live handoff and exact environment constraints are recorded in
+`docs/phase2-status.md`.
 
 | Task | Status | Implemented outcome |
 | ---: | --- | --- |
@@ -1615,11 +1616,91 @@ Acceptance:
   architecture differences;
 - output can feed README tables later without manually transcribing values.
 
+### Phase 2 Pre-Benchmark Remediation: R1–R6
+
+#### R1 — Make the evaluator architecture-neutral [P0]
+
+Remove role-presence requirements from scoring. Replace them with
+capability/output requirements: was the data audited, were required metrics
+calculated, was statistical analysis performed when required, was critique or
+validation performed, etc.
+
+Most importantly, add regression tests showing that semantically equivalent
+outputs from the single-agent and multi-agent architectures receive the same
+evaluation result. This is the highest-priority fix.
+
+#### R2 — Harden evidence provenance [P1]
+
+Only successful tool executions and successfully materialized/verified
+artifacts should establish evidence. A failed query should never support a
+finding merely because some unrelated query succeeded elsewhere in the run.
+
+Add adversarial tests for:
+
+- citing a failed SQL execution;
+- citing a failed Python execution;
+- citing an artifact from a failed event;
+- having an unrelated successful execution present.
+
+#### R3 — Cryptographically/deterministically bind workspaces to scenarios [P1]
+
+Persist enough identity with every workspace to prove what generated it: at a
+minimum scenario ID/version, seed, expected source paths and hashes, and
+preferably the benchmark/code revision. Offline evaluation should refuse to
+score a workspace if this identity does not match the manifest.
+
+This is particularly important because the entire Phase 2 design relies on
+immutable persisted workspaces and offline rescoring.
+
+#### R4 — Separate evaluator errors from analytical failures [P1]
+
+An evaluator crash is not evidence that an agent gave a bad answer. Introduce
+an actual evaluator-error state and propagate that through the contracts and
+aggregation layer.
+
+The denominator semantics matter here: preserve the run in
+operational/reliability counts, but exclude evaluator failures from
+analytical-quality denominators. Do not silently discard them either.
+
+#### R5 — Harden benchmark-run execution semantics [P2/P2/P3]
+
+Combine the interrupted-resume, pricing-gate, and model-default findings
+because they concern benchmark execution rather than analytical validity:
+
+- make resumed attempts use clean state or explicit attempt IDs with cumulative
+  cost/latency accounting;
+- require known model pricing or an explicit `unknown-cost` acknowledgement
+  before proceeding beyond the pilot;
+- remove the misleading `configured-model` CLI default and require/pass the
+  intended model explicitly.
+
+The last issue is visible in the current CLI: `--model` defaults to
+`"configured-model"`, while the README planning example does not specify
+`--model`.
+
+#### R6 — Fix scenario-document integrity + full preflight
+
+Fix the false model-visible “clean/no injection” statement and add tests
+ensuring injected scenarios never retain baseline-only assertions. Then
+perform a complete deterministic benchmark preflight:
+
+- all unit/integration tests;
+- Ruff;
+- architecture-neutral evaluator fixtures;
+- corrupted/mismatched-workspace tests;
+- failed-evidence tests;
+- evaluator-exception tests;
+- interrupted-resume tests;
+- unknown-pricing tests;
+- dry-run of all 10 × 2 × 3 declared cells;
+- another Sol High code review focused specifically on benchmark validity.
+
 #### Task 10 — Execute and publish the Phase 2 benchmark
 
-Freeze a benchmark manifest, run the declared single-agent and five-agent
-matrix, evaluate every persisted workspace offline, inspect failures without
-changing rules mid-experiment, and publish the actual results and limitations.
+After R1–R6 are complete, freeze a benchmark manifest, run the declared
+single-agent and five-agent matrix, evaluate every persisted workspace offline,
+inspect failures without changing rules mid-experiment, and publish the actual
+results and limitations.
 If a defect requires code/evaluator changes, version the benchmark and rerun the
 affected declared matrix rather than silently patching scores.
 
@@ -1649,6 +1730,8 @@ Do not invent results before running the benchmark.
 
 ### Phase 2 done when
 
+- R1–R6 pre-benchmark remediation is complete and its deterministic regression
+  suite is green;
 - approximately 10 deterministic, versioned scenarios cover root cause, data
   quality, statistical reasoning, evidence grounding, and non-driver rejection;
 - every scenario has tested evaluator-only ground truth and an offline evaluator;

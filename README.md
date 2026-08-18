@@ -3,9 +3,11 @@
 Foundation for an evidence-backed, multi-agent business analytics system.
 
 Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
-complete. Phase 2 Tasks 1–9 are implemented and deterministically tested. Task
-10—the paid single-agent versus five-agent benchmark—has not yet run, so this
-repository does not claim benchmark results. See
+complete. Phase 2 Tasks 1–9 are implemented and deterministically tested, but
+the required Phase 2 Pre-Benchmark Remediation R1–R6 is not yet complete. Task
+10—the paid single-agent versus five-agent benchmark—must wait for that
+remediation and has not yet run, so this repository does not claim benchmark
+results. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, and live-run handoff.
 
@@ -34,9 +36,16 @@ benchmark runner, and deterministic aggregation/reporting. The latest full
 deterministic verification completed with **312 passed, 3 skipped, and 13 live
 tests deselected**; Ruff lint and formatting checks passed.
 
+Before Task 10, complete the six documented remediation tasks in
+[`PROJECT_PLAN.md`](PROJECT_PLAN.md): architecture-neutral evaluation (R1),
+hardened evidence provenance (R2), scenario-bound workspaces (R3), explicit
+evaluator errors (R4), hardened benchmark execution semantics (R5), and
+scenario-document integrity plus full deterministic preflight (R6).
+
 No Phase 2 experiment manifest has been frozen and no paid matrix cells have
 been executed. Existing canonical MVP workspaces predate the declared Phase 2
-matrix and must not be presented as its results.
+matrix and must not be presented as its results. Do not begin paid benchmark
+execution until R1–R6 are complete and verified.
 
 ## Canonical Phase 1 live acceptance
 
