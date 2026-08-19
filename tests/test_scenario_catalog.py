@@ -83,6 +83,9 @@ def test_clean_baseline_is_independently_validated_and_source_bytes_are_stable(
     dataset = SyntheticEcommerceGenerator(_small_config()).generate()
     report = validate_synthetic_ecommerce_baseline(dataset)
     assert report.passed, report.violations
+    document = dataset.business_definitions.lower()
+    assert "clean baseline" not in document
+    assert "no business or data-quality scenario is injected" not in document
 
     first_dir = tmp_path / "first"
     second_dir = tmp_path / "second"
@@ -96,6 +99,30 @@ def test_clean_baseline_is_independently_validated_and_source_bytes_are_stable(
         == sha256((second_dir / name).read_bytes()).digest()
         for name in first_files
     )
+
+
+@pytest.mark.parametrize(
+    "scenario_id",
+    (
+        "canonical-q2-profitability",
+        "retention-q2-deterioration",
+        "cogs-q2-margin-deterioration",
+        "discount-refund-q2-deterioration",
+        "missing-reporting-day",
+        "partial-latest-reporting-day",
+        "channel-mix-confounding",
+    ),
+)
+def test_injected_scenario_documents_do_not_retain_baseline_only_assertions(
+    scenario_id: str,
+) -> None:
+    """Scenario source documents must not claim that no injection occurred."""
+
+    generated = get_scenario(scenario_id, "1.0").generate_validated(_small_config())
+    document = generated.dataset.business_definitions.lower()
+
+    assert "clean baseline" not in document
+    assert "no business or data-quality scenario is injected" not in document
 
 
 def test_common_invariants_reject_keys_dates_nulls_and_economic_identities() -> None:

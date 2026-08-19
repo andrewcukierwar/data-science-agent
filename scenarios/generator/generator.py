@@ -418,8 +418,6 @@ class SyntheticEcommerceGenerator:
   added later, canceled orders should be excluded from revenue and order-count
   metrics.
 - Dates are calendar dates interpreted in the UTC reporting timezone.
-- This dataset is a clean baseline. No business or data-quality scenario is
-  injected during generation.
 """
 
 

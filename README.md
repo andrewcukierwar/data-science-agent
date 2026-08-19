@@ -3,12 +3,10 @@
 Foundation for an evidence-backed, multi-agent business analytics system.
 
 Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
-complete. Phase 2 Tasks 1–9 are implemented and deterministically tested, and
-remediations R7–R12 are implemented, but
-the required Phase 2 Pre-Benchmark Remediation R1–R12 is not yet complete. Task
-10—the paid single-agent versus five-agent benchmark—must wait for that
-remediation and has not yet run, so this repository does not claim benchmark
-results. See
+complete. Phase 2 Tasks 1–9 and remediations R1–R12 are implemented and
+deterministically verified. Task 10—the paid single-agent versus five-agent
+benchmark—has not yet run, so this repository does not claim benchmark results.
+See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, and live-run handoff.
 
@@ -34,12 +32,11 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **359 passed, 3 Docker tests skipped,
-and 13 live tests deselected**; Ruff lint and formatting checks passed, and the
-10 × 2 × 3 matrix
+deterministic verification completed with **369 passed and 13 live tests
+deselected**; Ruff lint and formatting checks passed, and the 10 × 2 × 3 matrix
 dry-run produced 60 unique cells.
 
-Before Task 10, complete the twelve documented remediation tasks in
+Before Task 10, review the twelve documented remediation tasks in
 [`PROJECT_PLAN.md`](PROJECT_PLAN.md): architecture-neutral evaluation (R1),
 hardened evidence provenance (R2), scenario-bound workspaces (R3), explicit
 evaluator errors (R4), hardened benchmark execution semantics (R5), and
@@ -49,16 +46,18 @@ workspace binding (R8), canonical aggregation-safe rescoring (R9), pilot/run
 binding (R10), durable attempt history (R11), and non-destructive offline
 outputs (R12).
 
-R7, R8, R9, R10, R11, and R12 are implemented and covered by capability/tool-mix,
-workspace identity, evaluator-error, lifecycle, aggregation-safe rescore,
-pilot/run-record binding, append-only attempt reconciliation, and exclusive
-atomic offline-output fixtures. Only the final R6 preflight remains outstanding.
-The catalog evaluator version is now `1.1` for these scoring changes.
+R1–R12 are implemented and covered by architecture-equivalence, capability/tool-
+mix, failed-evidence, workspace identity, evaluator-error, lifecycle,
+aggregation-safe rescore, pilot/run-record binding, append-only attempt
+reconciliation, scenario-document integrity, and exclusive atomic offline-output
+fixtures. The final R6 preflight passed, including all Docker-backed integration
+tests and all 60 declared dry-run cells. The catalog evaluator version is now
+`1.1` for these scoring changes.
 
 No Phase 2 experiment manifest has been frozen and no paid matrix cells have
 been executed. Existing canonical MVP workspaces predate the declared Phase 2
-matrix and must not be presented as its results. Do not begin paid benchmark
-execution until R1–R12 are complete and verified.
+matrix and must not be presented as its results. Freeze a fresh manifest and
+obtain explicit paid-execution authorization before starting Task 10.
 
 ## Canonical Phase 1 live acceptance
 

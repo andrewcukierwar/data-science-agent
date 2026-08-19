@@ -1,10 +1,9 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-19
-**Implementation:** Tasks 1–9 complete; R7–R12 implemented
+**Implementation:** Tasks 1–9 complete; R1–R12 implemented and final R6 preflight verified
 
-**Remediation:** R2, R7, R8, R9, R10, R11, and R12 verified; R1/R4/R5 partial;
-R3 closed by R8; R6 pending before Task 10
+**Remediation:** R1–R12 verified; final pre-benchmark gate passed
 
 **Experiment:** Task 10 not started; no results published
 
@@ -15,7 +14,7 @@ report.
 
 ## Phase 2 Pre-Benchmark Remediation: R1–R12
 
-The following remediation tasks must be completed and deterministically
+The following remediation tasks have been completed and deterministically
 verified before Task 10 begins:
 
 1. **R1 — Make the evaluator architecture-neutral [P0].** Remove
@@ -38,7 +37,7 @@ verified before Task 10 begins:
    state or explicit attempt IDs with cumulative accounting on resume; require
    known pricing or an explicit `unknown-cost` acknowledgement beyond the
    pilot; and remove the misleading `configured-model` CLI default.
-6. **R6 — Fix scenario-document integrity + full preflight.** Remove the false
+6. **R6 — Fix scenario-document integrity + full preflight (verified).** Remove the false
    model-visible clean/no-injection assertion, test that injected scenarios do
    not retain baseline-only assertions, and run the complete deterministic
    preflight: tests, Ruff, architecture-neutral fixtures, workspace mismatch,
@@ -72,18 +71,18 @@ verified before Task 10 begins:
 
 | Remediation | Current disposition | Required closure |
 | --- | --- | --- |
-| R1 | Partial | R7 capability/tool-mix regressions |
+| R1 | Verified | R7 capability/tool-mix and architecture-equivalence regressions |
 | R2 | Verified | Retain all four failed-evidence adversarial fixtures |
-| R3 | Implemented | Retain identity mismatch and source-tamper regressions in final R6 preflight |
-| R4 | Partial | Retain evaluator-error denominator and taxonomy regressions in final R6 preflight |
-| R5 | Partial | — |
-| R6 | Pending | Remove false documents and rerun the final preflight after R7–R12 |
-| R7 | Implemented | Retain capability/tool-mix regressions; rerun them in final R6 preflight |
-| R8 | Implemented | Retain identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
-| R9 | Implemented | Retain multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
-| R10 | Implemented | Retain pilot/run-record digest, metadata, cost, latency, and unknown-cost acknowledgement regressions |
-| R11 | Implemented | Retain append-only attempt, event-attribution, reconciliation, and interrupted-resume regressions |
-| R12 | Implemented | Retain same-path/alias, existing-output, evaluator-failure, and exclusive-publication regressions |
+| R3 | Verified | Identity mismatch and source-tamper regressions |
+| R4 | Verified | Evaluator-error denominator and taxonomy regressions |
+| R5 | Verified | Explicit model, pricing gate, cumulative resume, and pilot semantics |
+| R6 | Verified | False-document removal, injected-scenario regressions, and complete preflight |
+| R7 | Verified | Capability/tool-mix and architecture-equivalence regressions |
+| R8 | Verified | Identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
+| R9 | Verified | Multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
+| R10 | Verified | Pilot/run-record digest, metadata, cost, latency, and unknown-cost acknowledgement regressions |
+| R11 | Verified | Append-only attempt, event-attribution, reconciliation, and interrupted-resume regressions |
+| R12 | Verified | Same-path/alias, existing-output, evaluator-failure, and exclusive-publication regressions |
 
 ## What is implemented
 
@@ -241,26 +240,30 @@ for later README tables without manual transcription.
 The latest full deterministic review run completed with:
 
 ```text
-359 passed, 3 skipped, 13 deselected
+369 passed, 13 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
 passed, and the complete 10 × 2 × 3 declaration produced 60 unique cells and
 workspace paths. Deterministic fake-run coverage includes resume, interruption,
 duplicate IDs, failed cells, immutable workspaces, paid-execution guards, pilot
-enforcement, and offline rescoring. The follow-up review is now covered by
-tool-mix neutrality, workspace identity mismatch/tamper, and multi-record
-aggregation-safe rescore fixtures; pilot/run-record tamper and unknown-cost
-acknowledgement fixtures cover R10; attempt history, event attribution, cost
-reconciliation, and interrupted-before-record/partial-write fixtures cover R11.
+enforcement, and offline rescoring. The final preflight also ran the
+architecture-equivalence and tool-mix fixtures, corrupted/mismatched-workspace
+and failed-evidence adversarial suites, evaluator-exception and aggregation
+checks, interrupted-resume and unknown-pricing checks, and the scenario-document
+integrity regressions. Docker-backed integration tests passed with Docker access.
+The benchmark-validity-focused Sol High review found no additional
+release-blocking defects in the evaluated identity, provenance, aggregation,
+pilot, attempt-history, or offline-output paths.
 
-## Task 10 is intentionally blocked pending R1–R12
+## Task 10 has not started
 
 No Phase 2 benchmark manifest currently exists. No paid pilot or single-agent
 versus five-agent matrix has been executed, evaluated, or aggregated. Existing
 canonical MVP workspaces were created under the earlier acceptance workflow and
-are not valid substitutes for declared Phase 2 cells. Task 10 must not begin
-until R1–R12 are complete and the full deterministic preflight is green.
+are not valid substitutes for declared Phase 2 cells. Task 10 may begin only
+after a fresh manifest is frozen from this verified implementation and the
+paid-execution authorization is explicitly provided.
 
 Therefore there are currently no honest Phase 2 values for task success,
 numerical accuracy, unsupported claims, operational reliability, cost, latency,

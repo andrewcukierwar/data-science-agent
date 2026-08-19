@@ -2,8 +2,8 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R7–R12
-remediations implemented; paid benchmark pending.
+**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R1–R12
+remediations implemented and final R6 preflight verified; paid benchmark pending.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1436,17 +1436,15 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 359 passed, 3 Docker integration tests
-skipped, and 13 opt-in live tests deselected; Ruff lint and formatting checks
-passed. This status describes the
+full local verification completed with 369 passed and 13 opt-in live tests
+deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
-R1–R5 have initial implementations, but the 2026-08-18 follow-up review found
-residual validity gaps. R2 meets its current acceptance criteria; R1, R4, and
-R5 remains partial, while R3 is closed by R8. R7, R8, R9, R10, R11, and R12 are
-implemented with deterministic capability, identity, evaluator-error,
-aggregation, pilot-binding, attempt-reconciliation, and exclusive-output
-regressions. Only R6 remains before Task 10.
+R1–R12 are implemented and verified with deterministic architecture-equivalence,
+capability, evidence, workspace-identity, evaluator-error, aggregation,
+pilot-binding, attempt-reconciliation, scenario-document, and exclusive-output
+regressions. The final R6 preflight passed, including Docker-backed integration
+tests and the complete 10 × 2 × 3 dry-run.
 No Phase 2 benchmark manifest
 has been frozen, no paid cost pilot or declared matrix has run, and no
 aggregate architecture comparison has been published. Existing canonical MVP
@@ -1686,7 +1684,7 @@ The last issue is visible in the current CLI: `--model` defaults to
 `"configured-model"`, while the README planning example does not specify
 `--model`.
 
-#### R6 — Fix scenario-document integrity + full preflight
+#### R6 — Fix scenario-document integrity + full preflight — Implemented/Verified
 
 Fix the false model-visible “clean/no injection” statement and add tests
 ensuring injected scenarios never retain baseline-only assertions. Then
@@ -1706,6 +1704,11 @@ perform a complete deterministic benchmark preflight:
 R6 is the final pre-benchmark gate. Its complete preflight must be rerun after
 R7–R12 are implemented; an earlier green test run does not close R6.
 
+Status: implemented and verified on 2026-08-19. The false model-visible
+clean/no-injection assertion was removed, injected-scenario document
+regressions were added, and the final preflight passed with 369 tests, Ruff,
+all declared adversarial fixtures, and 60 dry-run cells.
+
 ### Phase 2 Follow-up Review Remediation: R7–R12
 
 The post-R5 code review identified residual gaps not covered by the original
@@ -1714,8 +1717,8 @@ immutability requirements for offline outputs.
 
 #### R7 — Make tool use capability-driven rather than mandatory [P0]
 
-Status: implemented in the evaluator and catalog rules; final R6 preflight is
-still pending. The catalog evaluator version is `1.1` so this semantic change
+Status: implemented and verified in the evaluator and catalog rules. The final
+R6 preflight passed; the catalog evaluator version is `1.1` so this semantic change
 cannot be confused with earlier `1.0` scoring.
 
 Remove unconditional SQL- and Python-presence checks from generic provenance
@@ -1737,8 +1740,8 @@ Acceptance:
 
 #### R8 — Enforce workspace identity at every offline evaluation boundary [P1]
 
-Status: implemented in the offline engine, standalone workspace CLI, manifest
-rescore API, and benchmark runner. Final R6 preflight remains pending.
+Status: implemented and verified in the offline engine, standalone workspace
+CLI, manifest rescore API, and benchmark runner.
 
 Make persisted identity authoritative wherever it exists. The supplied or
 resolved evaluator rules must match the workspace scenario ID, scenario
@@ -1762,8 +1765,8 @@ Acceptance:
 
 #### R9 — Consolidate offline rescoring and make it aggregation-safe [P1]
 
-Status: implemented through the shared manifest-rescore engine, benchmark API,
-and both offline CLIs. Final R6 preflight remains pending.
+Status: implemented and verified through the shared manifest-rescore engine,
+benchmark API, and both offline CLIs.
 
 Use one canonical manifest-rescore implementation for the Python API and both
 CLIs. Isolate evaluator exceptions per record, retain operational outcomes,
@@ -1786,8 +1789,8 @@ Acceptance:
 
 #### R10 — Bind the cost pilot to its recorded benchmark cell [P2] — Implemented
 
-Status: implemented in the benchmark runner and manifest contracts; final R6
-preflight remains pending.
+Status: implemented and verified in the benchmark runner and manifest
+contracts.
 
 Treat the pilot report as a derived view of an immutable run record, not an
 independent source of truth. Bind it to the manifest/model/configuration and a
@@ -1806,8 +1809,8 @@ Acceptance:
 
 #### R11 — Persist append-only attempt history and reconcile totals [P2] — Implemented
 
-Status: implemented in the run-state schema, persistent ledger, orchestration
-lifecycle, and benchmark record contract; final R6 preflight remains pending.
+Status: implemented and verified in the run-state schema, persistent ledger,
+orchestration lifecycle, and benchmark record contract.
 
 Replace the single overwritten attempt ID with typed, append-only attempt
 records. Each attempt should retain its identity, timestamps, terminal outcome,
@@ -1828,9 +1831,8 @@ Acceptance:
 
 #### R12 — Make every offline output non-destructive and atomic [P2] — Implemented
 
-Status: implemented through the shared exclusive atomic writer, canonical
-rescore/report entry points, and legacy manifest CLI delegation; final R6
-preflight remains pending.
+Status: implemented and verified through the shared exclusive atomic writer,
+canonical rescore/report entry points, and legacy manifest CLI delegation.
 
 All offline evaluation, rescore, and report writers must refuse the input path
 and existing output files. Consolidate exclusive/atomic writing behavior and
