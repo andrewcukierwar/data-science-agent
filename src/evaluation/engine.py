@@ -36,8 +36,9 @@ from evaluation.primitives import (
     evaluate_unsupported_claims,
 )
 from evaluation.workspace_identity import (
+    verify_identity_matches_rules,
     verify_workspace_identity,
-    verify_workspace_identity_integrity,
+    verify_workspace_identity_for_rules,
     workspace_identity_path,
 )
 from orchestration.ledger import AnalysisLedger
@@ -158,13 +159,33 @@ def evaluate_workspace(
     *,
     expected_identity: WorkspaceIdentity | None = None,
 ) -> OfflineEvaluation:
-    """Evaluate one persisted workspace using only deterministic primitives."""
+    """Evaluate one persisted workspace using only deterministic primitives.
+
+    A persisted identity is always verified and must select the supplied
+    scenario/version/evaluator rules. ``expected_identity`` additionally binds
+    the complete benchmark manifest identity for rescore callers.
+    """
 
     snapshot = load_workspace_snapshot(workspace)
     if expected_identity is not None:
-        verify_workspace_identity(snapshot.workspace, expected_identity)
-    elif workspace_identity_path(snapshot.workspace).is_file():
-        verify_workspace_identity_integrity(snapshot.workspace)
+        identity = verify_workspace_identity(snapshot.workspace, expected_identity)
+    else:
+        identity = None
+        identity_path = workspace_identity_path(snapshot.workspace)
+        if identity_path.is_symlink() or identity_path.exists():
+            identity = verify_workspace_identity_for_rules(
+                snapshot.workspace,
+                scenario_id=rules.scenario_id,
+                scenario_version=rules.scenario_version,
+                evaluator_version=rules.evaluator_version,
+            )
+    if identity is not None:
+        verify_identity_matches_rules(
+            identity,
+            scenario_id=rules.scenario_id,
+            scenario_version=rules.scenario_version,
+            evaluator_version=rules.evaluator_version,
+        )
     state = snapshot.state
     checks: list[EvaluationCheck] = []
     checks.extend(evaluate_lifecycle(state))
@@ -306,15 +327,23 @@ def evaluate_manifest(
             if item.scenario_id == record.scenario_id
             and item.scenario_version == record.scenario_version
         )
+        if reference.evaluator_version != record.evaluator_version:
+            raise ValueError(
+                f"record {record.run_id} does not match its manifest evaluator version"
+            )
+        if reference.seed != record.seed:
+            raise ValueError(
+                f"record {record.run_id} does not match its manifest scenario seed"
+            )
         expected_identity = WorkspaceIdentity(
             benchmark_manifest_id=manifest.manifest_id,
             run_id=record.run_id,
             scenario_id=record.scenario_id,
             scenario_version=record.scenario_version,
-            evaluator_version=record.evaluator_version,
+            evaluator_version=reference.evaluator_version,
             architecture=record.architecture,
             repetition=record.repetition,
-            seed=record.seed,
+            seed=reference.seed,
             source_files=reference.source_files,
             code_revision=record.code_revision,
         )

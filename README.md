@@ -33,8 +33,9 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **336 passed and 13 live tests
-deselected**; Ruff lint and formatting checks passed, and the 10 × 2 × 3 matrix
+deterministic verification completed with **339 passed, 3 Docker tests skipped,
+and 13 live tests deselected**; Ruff lint and formatting checks passed, and the
+10 × 2 × 3 matrix
 dry-run produced 60 unique cells.
 
 Before Task 10, complete the twelve documented remediation tasks in
@@ -47,10 +48,10 @@ workspace binding (R8), canonical aggregation-safe rescoring (R9), pilot/run
 binding (R10), durable attempt history (R11), and non-destructive offline
 outputs (R12).
 
-R7 is implemented and covered by SQL-only, SQL-plus-Python, statistical typed
-output, and missing-capability regression fixtures. R8–R12 and the final R6
-preflight remain outstanding. The catalog evaluator version is now `1.1` for
-this scoring change.
+R7 and R8 are implemented and covered by capability/tool-mix and workspace
+identity mismatch, tamper, missing/corrupt, and non-completed-rescore refusal
+fixtures. R9–R12 and the final R6 preflight remain outstanding. The catalog
+evaluator version is now `1.1` for these scoring changes.
 
 No Phase 2 experiment manifest has been frozen and no paid matrix cells have
 been executed. Existing canonical MVP workspaces predate the declared Phase 2
@@ -78,12 +79,16 @@ calls:
 
 ```bash
 uv run python scripts/evaluate_workspace.py \
-  .runs/canonical-mvp/canonical-q2-mvp
+  .runs/canonical-mvp/canonical-q2-mvp \
+  --legacy-diagnostic \
+  --scenario-id canonical-q2-profitability \
+  --scenario-version 1.0
 ```
 
-The standalone evaluator is currently a diagnostic interface. Until R8 is
-complete, do not use it to score a benchmark workspace without independently
-verifying that the selected rules match the persisted workspace identity.
+The standalone evaluator derives scenario rules from a bound workspace identity
+and refuses explicit rule mismatches. An unbound legacy workspace requires
+`--legacy-diagnostic` plus explicit `--scenario-id` and `--scenario-version`;
+that path is diagnostic-only and cannot enter a benchmark manifest.
 
 For benchmark manifests, use the benchmark runner's rescore path, which refuses
 to overwrite the input manifest:

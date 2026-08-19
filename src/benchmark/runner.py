@@ -690,25 +690,55 @@ class BenchmarkRunner:
             workspace_path = Path(record.workspace_path)
             if not workspace_path.is_absolute():
                 workspace_path = base_dir / workspace_path
-            if record.lifecycle.status is LifecycleStatus.COMPLETED:
-                try:
-                    expected_identity = self._workspace_identity(
-                        manifest,
-                        self._cell_from_record(manifest, record, workspace_path),
-                        code_revision=record.code_revision,
-                    )
-                    verify_workspace_identity(workspace_path, expected_identity)
-                except WorkspaceIdentityError as error:
-                    raise BenchmarkError(
-                        f"offline rescore refused for {record.run_id}: {error}"
-                    ) from error
+            cell = self._cell_from_record(manifest, record, workspace_path)
             try:
-                evaluation = evaluate_workspace(workspace_path, current_rules)
+                expected_identity = self._workspace_identity(
+                    manifest,
+                    cell,
+                    code_revision=record.code_revision,
+                )
+                if record.evaluator_version != expected_identity.evaluator_version:
+                    raise WorkspaceIdentityError(
+                        "record evaluator version does not match manifest scenario "
+                        "identity"
+                    )
+                if record.seed != expected_identity.seed:
+                    raise WorkspaceIdentityError(
+                        "record seed does not match manifest scenario identity"
+                    )
+                if (
+                    current_rules.scenario_id != expected_identity.scenario_id
+                    or current_rules.scenario_version
+                    != expected_identity.scenario_version
+                    or current_rules.evaluator_version
+                    != expected_identity.evaluator_version
+                ):
+                    raise WorkspaceIdentityError(
+                        "selected evaluator rules do not match manifest workspace "
+                        "identity"
+                    )
+                # Verify every record before evaluation or error classification,
+                # including interrupted and otherwise non-completed records.
+                verify_workspace_identity(workspace_path, expected_identity)
+            except WorkspaceIdentityError as error:
+                raise BenchmarkError(
+                    f"offline rescore refused for {record.run_id}: {error}"
+                ) from error
+            try:
+                evaluation = evaluate_workspace(
+                    workspace_path,
+                    current_rules,
+                    expected_identity=expected_identity,
+                )
                 evaluator_result = evaluation.result
+            except WorkspaceIdentityError as error:
+                raise BenchmarkError(
+                    f"offline rescore refused for {record.run_id}: {error}"
+                ) from error
             except Exception as error:  # noqa: BLE001
                 message = f"offline rescore failed: {type(error).__name__}: {error}"
                 evaluator_result = _not_evaluated(
-                    self._cell_from_record(manifest, record, workspace_path),
+                    cell,
                     message,
                     status=(
                         EvaluatorStatus.NOT_EVALUATED

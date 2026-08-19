@@ -3,7 +3,7 @@
 **Status date:** 2026-08-19
 **Implementation:** Tasks 1–9 complete
 
-**Remediation:** R2 and R7 verified; R1/R3/R4/R5 partial; R6 and R8–R12
+**Remediation:** R2, R7, and R8 verified; R1/R3/R4/R5 partial; R6 and R9–R12
 pending before Task 10
 
 **Experiment:** Task 10 not started; no results published
@@ -48,7 +48,7 @@ verified before Task 10 begins:
 7. **R7 — Make tool use capability-driven [P0] (implemented).** Remove unconditional SQL and
    Python presence gates. Express requirements as scenario-specific typed
    capabilities and test equivalent outputs across different valid tool mixes.
-8. **R8 — Enforce identity at every offline boundary [P1].** Match persisted
+8. **R8 — Enforce identity at every offline boundary [P1] (implemented).** Match persisted
    workspace identity to selected rules and complete manifest identity for
    standalone, completed, and non-completed rescore paths. Keep unbound legacy
    evaluation explicitly outside benchmark use.
@@ -76,6 +76,7 @@ verified before Task 10 begins:
 | R5 | Partial | R10 pilot binding and R11 durable attempt history |
 | R6 | Pending | Remove false documents and rerun the final preflight after R7–R12 |
 | R7 | Implemented | Retain capability/tool-mix regressions; rerun them in final R6 preflight |
+| R8 | Implemented | Retain identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
 
 ## What is implemented
 
@@ -103,11 +104,19 @@ analysis, critique, and verified evidence. Generic provenance no longer requires
 both SQL and Python; valid tool mixes are covered by calibration fixtures.
 The catalog evaluator version is `1.1` for this scoring change.
 
-`scripts/evaluate_workspace.py` evaluates one persisted workspace and
-`scripts/evaluate_manifest.py` evaluates a manifest. These paths do not load
-`.env`, invoke agents, or make API calls. Until R8, R9, and R12 are complete,
-they are diagnostic interfaces rather than approved benchmark-rescore paths;
-benchmark manifests should use `scripts/run_benchmark.py offline-rescore`.
+R8 makes persisted workspace identity authoritative at offline boundaries:
+selected rules must match scenario/version/evaluator identity, and manifest
+rescoring verifies manifest, run, architecture, repetition, seed, source, and
+code-revision fields before any result classification.
+
+`scripts/evaluate_workspace.py` evaluates one persisted workspace and derives
+its scenario/version from the persisted identity, or requires an explicit
+`--legacy-diagnostic --scenario-id ... --scenario-version ...` selection for
+unbound legacy workspaces. Bound workspaces refuse selected-rule mismatches.
+The benchmark runner and manifest evaluator verify the complete identity for
+every record before scoring or classifying evaluator errors; benchmark
+manifests should use `scripts/run_benchmark.py offline-rescore` until R9 and
+R12 consolidate the remaining diagnostic paths.
 Stable serialization supports
 byte-for-byte repeatability where timestamps or equivalent semantics do not
 require normalization. The final report, Critic, and evaluator use the same
@@ -202,16 +211,16 @@ for later README tables without manual transcription.
 The latest full deterministic review run completed with:
 
 ```text
-336 passed, 13 deselected
+339 passed, 3 skipped, 13 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
 passed, and the complete 10 × 2 × 3 declaration produced 60 unique cells and
 workspace paths. Deterministic fake-run coverage includes resume, interruption,
 duplicate IDs, failed cells, immutable workspaces, paid-execution guards, pilot
-enforcement, and offline rescoring. The follow-up review also demonstrated that
-the green suite does not yet cover tool-mix neutrality, standalone scenario
-identity mismatch, tampered pilot cost, or non-empty legacy batch rescoring.
+enforcement, and offline rescoring. The follow-up review is now covered by
+tool-mix neutrality and workspace identity mismatch/tamper regression fixtures;
+tampered pilot cost and non-empty legacy batch rescoring remain follow-up gaps.
 
 ## Task 10 is intentionally blocked pending R1–R12
 

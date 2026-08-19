@@ -2,7 +2,8 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-18 — Phase 2 Tasks 1–9 implemented; paid benchmark pending.
+**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R7–R8 remediations
+implemented; paid benchmark pending.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1435,16 +1436,17 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 336 passed and 13 opt-in live tests
-deselected; Ruff lint and formatting checks passed. This status describes the
+full local verification completed with 339 passed, 3 Docker integration tests
+skipped, and 13 opt-in live tests deselected; Ruff lint and formatting checks
+passed. This status describes the
 implementation, not an architecture-performance result.
 
 R1–R5 have initial implementations, but the 2026-08-18 follow-up review found
 residual validity gaps. R2 meets its current acceptance criteria; R1, R3, R4,
-and R5 remain partial. R7 is implemented with deterministic tool-mix and
-capability regressions. R6 and follow-up tasks R8–R12 must be completed before
-Task 10. No Phase 2 benchmark manifest has been frozen, no paid cost pilot or
-declared matrix has run, and no
+and R5 remain partial. R7 and R8 are implemented with deterministic capability,
+tool-mix, identity-mismatch, and unbound-workspace regressions. R6 and follow-up
+tasks R9–R12 must be completed before Task 10. No Phase 2 benchmark manifest
+has been frozen, no paid cost pilot or declared matrix has run, and no
 aggregate architecture comparison has been published. Existing canonical MVP
 workspaces are legacy acceptance artifacts rather than Phase 2 benchmark
 records. The live handoff and exact environment constraints are recorded in
@@ -1700,7 +1702,7 @@ perform a complete deterministic benchmark preflight:
 - another Sol High code review focused specifically on benchmark validity.
 
 R6 is the final pre-benchmark gate. Its complete preflight must be rerun after
-R7–R12 are implemented; an earlier green test run does not close R6.
+R7–R12 must be implemented; an earlier green test run does not close R6.
 
 ### Phase 2 Follow-up Review Remediation: R7–R12
 
@@ -1732,6 +1734,9 @@ Acceptance:
   scenario-specific check.
 
 #### R8 — Enforce workspace identity at every offline evaluation boundary [P1]
+
+Status: implemented in the offline engine, standalone workspace CLI, manifest
+rescore API, and benchmark runner. Final R6 preflight remains pending.
 
 Make persisted identity authoritative wherever it exists. The supplied or
 resolved evaluator rules must match the workspace scenario ID, scenario

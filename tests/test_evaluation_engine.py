@@ -6,6 +6,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from evaluation.contracts import (
     BenchmarkManifest,
     BudgetConfiguration,
@@ -13,6 +15,7 @@ from evaluation.contracts import (
     ExecutionMode,
     RunConfiguration,
     ScenarioReference,
+    WorkspaceIdentity,
 )
 from evaluation.engine import ScenarioRules, dump_stable_json, evaluate_workspace
 from evaluation.primitives import (
@@ -26,6 +29,11 @@ from evaluation.primitives import (
     numeric_ground_truth_failures,
 )
 from evaluation.rules import canonical_rules
+from evaluation.workspace_identity import (
+    WorkspaceIdentityError,
+    persist_workspace_identity,
+    source_file_identities,
+)
 from orchestration.ledger import AnalysisLedger
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
 from schemas.audit import AuditStatus
@@ -164,6 +172,106 @@ def test_repeated_offline_evaluation_is_byte_stable(tmp_path: Path) -> None:
     assert first.result.evaluated_at == datetime.fromisoformat(
         first.result.evaluated_at.isoformat()
     ).astimezone(UTC)
+
+
+def _bound_fixture_workspace(tmp_path: Path):
+    source_inputs = tmp_path / "source-inputs"
+    source_docs = tmp_path / "source-docs"
+    source_inputs.mkdir()
+    source_docs.mkdir()
+    (source_inputs / "fixture.parquet").write_bytes(b"fixture")
+    (source_docs / "README.md").write_text("fixture\n", encoding="utf-8")
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(
+        "bound",
+        inputs_source=source_inputs,
+        docs_source=source_docs,
+    )
+    AnalysisLedger(workspace, run_id="bound", objective="fixture")
+    persist_workspace_identity(
+        workspace,
+        WorkspaceIdentity(
+            benchmark_manifest_id="manifest",
+            run_id="bound",
+            scenario_id=CANONICAL_PROFITABILITY_SCENARIO.scenario_id,
+            scenario_version="1.0",
+            evaluator_version="1.1",
+            architecture="single-agent",
+            repetition=1,
+            seed=42,
+            source_files=source_file_identities(workspace),
+        ),
+    )
+    return workspace
+
+
+def test_bound_workspace_refuses_rules_with_different_scenario_or_evaluator(
+    tmp_path: Path,
+) -> None:
+    workspace = _bound_fixture_workspace(tmp_path)
+    rules = ScenarioRules(
+        scenario_id="different-scenario",
+        scenario_version="1.0",
+        evaluator_version="1.1",
+    )
+
+    with pytest.raises(WorkspaceIdentityError, match="does not match evaluator rules"):
+        evaluate_workspace(workspace, rules)
+
+
+def test_standalone_cli_requires_identity_or_explicit_legacy_diagnostic(
+    tmp_path: Path,
+) -> None:
+    unbound = WorkspaceManager(tmp_path / "workspaces").create_workspace("unbound")
+    script = Path(__file__).resolve().parents[1] / "scripts" / "evaluate_workspace.py"
+
+    refused = subprocess.run(
+        [sys.executable, str(script), str(unbound.root)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert refused.returncode == 2
+    assert "workspace identity is missing" in refused.stderr
+
+    legacy_without_selection = subprocess.run(
+        [sys.executable, str(script), str(unbound.root), "--legacy-diagnostic"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert legacy_without_selection.returncode == 2
+    assert "requires --scenario-id and --scenario-version" in (
+        legacy_without_selection.stderr
+    )
+
+
+def test_standalone_cli_rejects_explicit_selection_mismatch(tmp_path: Path) -> None:
+    workspace = _bound_fixture_workspace(tmp_path)
+    script = Path(__file__).resolve().parents[1] / "scripts" / "evaluate_workspace.py"
+    derived = subprocess.run(
+        [sys.executable, str(script), str(workspace.root)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert derived.returncode == 1
+    assert "OFFLINE EVALUATION ERROR" not in derived.stderr
+
+    refused = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(workspace.root),
+            "--scenario-id",
+            "meaningful-ab-treatment-effect",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert refused.returncode == 2
+    assert "does not match persisted workspace identity" in refused.stderr
 
 
 def test_offline_provenance_rejects_failed_event_even_with_unrelated_success(

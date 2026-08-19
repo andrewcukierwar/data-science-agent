@@ -97,6 +97,12 @@ def load_workspace_identity(workspace: Workspace | str | Path) -> WorkspaceIdent
     """Load and validate the persisted workspace identity."""
 
     path = workspace_identity_path(workspace)
+    if not path.exists():
+        raise WorkspaceIdentityError(f"workspace identity is missing: {path}")
+    if path.is_symlink() or not path.is_file():
+        raise WorkspaceIdentityError(
+            f"workspace identity is not a regular file: {path}"
+        )
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -184,6 +190,52 @@ def verify_workspace_identity_integrity(
     return identity
 
 
+def verify_identity_matches_rules(
+    identity: WorkspaceIdentity,
+    *,
+    scenario_id: str,
+    scenario_version: str,
+    evaluator_version: str,
+) -> WorkspaceIdentity:
+    """Require selected evaluator rules to match a persisted identity."""
+
+    expected = {
+        "scenario_id": scenario_id,
+        "scenario_version": scenario_version,
+        "evaluator_version": evaluator_version,
+    }
+    actual = {name: getattr(identity, name) for name in expected}
+    mismatches = [
+        f"{name}={actual[name]!r} (rules require {expected[name]!r})"
+        for name in expected
+        if actual[name] != expected[name]
+    ]
+    if mismatches:
+        raise WorkspaceIdentityError(
+            "workspace identity does not match evaluator rules: "
+            + ", ".join(mismatches)
+        )
+    return identity
+
+
+def verify_workspace_identity_for_rules(
+    workspace: Workspace | str | Path,
+    *,
+    scenario_id: str,
+    scenario_version: str,
+    evaluator_version: str,
+) -> WorkspaceIdentity:
+    """Verify source integrity and that persisted identity selects these rules."""
+
+    identity = verify_workspace_identity_integrity(workspace)
+    return verify_identity_matches_rules(
+        identity,
+        scenario_id=scenario_id,
+        scenario_version=scenario_version,
+        evaluator_version=evaluator_version,
+    )
+
+
 __all__ = [
     "WORKSPACE_IDENTITY_FILENAME",
     "WorkspaceIdentityError",
@@ -191,7 +243,9 @@ __all__ = [
     "persist_workspace_identity",
     "source_file_identities",
     "source_file_identities_for_roots",
+    "verify_identity_matches_rules",
     "verify_workspace_identity",
+    "verify_workspace_identity_for_rules",
     "verify_workspace_identity_integrity",
     "workspace_identity_path",
 ]

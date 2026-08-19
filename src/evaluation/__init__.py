@@ -88,7 +88,9 @@ from evaluation.workspace_identity import (
     WorkspaceIdentityError,
     load_workspace_identity,
     persist_workspace_identity,
+    verify_identity_matches_rules,
     verify_workspace_identity,
+    verify_workspace_identity_for_rules,
 )
 
 __all__ = [
@@ -169,5 +171,7 @@ __all__ = [
     "partial_latest_day_rules",
     "rules_for_scenario",
     "persist_workspace_identity",
+    "verify_identity_matches_rules",
     "verify_workspace_identity",
+    "verify_workspace_identity_for_rules",
 ]

@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from benchmark import BenchmarkCellResult, BenchmarkError, BenchmarkRunner
 from evaluation.contracts import (
@@ -18,6 +19,7 @@ from evaluation.contracts import (
     EvaluatorResult,
     EvaluatorStatus,
     ExecutionMode,
+    FailureCategory,
     LifecycleOutcome,
     LifecycleStatus,
     ScoreBreakdown,
@@ -293,7 +295,7 @@ def test_offline_rescore_writes_new_manifest_without_rerunning_agents(
         evaluator_version="1.1",
     )
 
-    def fake_evaluate(workspace, rules):
+    def fake_evaluate(workspace, rules, **_kwargs):
         run_id = Path(workspace).name
         return SimpleNamespace(
             result=_evaluated(
@@ -339,7 +341,7 @@ def test_evaluator_crash_is_recorded_as_error_without_marking_analysis_failed(
             finished_at=FIXED_TIME,
         )
 
-    def crash(_workspace, _rules):
+    def crash(_workspace, _rules, **_kwargs):
         raise RuntimeError("evaluator crashed")
 
     monkeypatch.setattr("benchmark.runner.evaluate_workspace", crash)
@@ -369,7 +371,7 @@ def test_offline_rescore_evaluator_crash_preserves_completed_run_and_no_zero_sco
     manifest_path = _plan(runner, tmp_path, repetitions=1)
     runner.execute(manifest_path)
 
-    def crash(_workspace, _rules):
+    def crash(_workspace, _rules, **_kwargs):
         raise RuntimeError("rescore evaluator crashed")
 
     monkeypatch.setattr("benchmark.runner.evaluate_workspace", crash)
@@ -499,4 +501,52 @@ def test_offline_rescore_refuses_tampered_workspace_metadata(tmp_path):
     identity_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(BenchmarkError, match="offline rescore refused"):
+        runner.rescore(manifest_path, output_path=tmp_path / "rescored.json")
+
+
+@pytest.mark.parametrize("identity_state", ["missing", "corrupt"])
+def test_offline_rescore_refuses_unbound_noncompleted_record(
+    tmp_path,
+    identity_state,
+):
+    def execute(cell, _workspace):
+        return BenchmarkCellResult(
+            lifecycle=LifecycleOutcome(
+                status=LifecycleStatus.FAILED,
+                failure_category=FailureCategory.AGENT,
+                failure_message="fixture failed before completion",
+            ),
+            evaluator_result=_evaluated(cell),
+            started_at=FIXED_TIME,
+            finished_at=FIXED_TIME,
+        )
+
+    runner = _runner(tmp_path, execute)
+    manifest_path = _plan(runner, tmp_path, repetitions=1)
+    runner.execute(manifest_path)
+    record = load_manifest(manifest_path).run_records[0]
+    identity_path = workspace_identity_path(record.workspace_path)
+    if identity_state == "missing":
+        identity_path.unlink()
+    else:
+        identity_path.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(BenchmarkError, match="offline rescore refused"):
+        runner.rescore(manifest_path, output_path=tmp_path / "rescored.json")
+
+
+def test_offline_rescore_refuses_record_seed_tampered_against_manifest_identity(
+    tmp_path,
+):
+    runner = _runner(tmp_path, lambda cell, _workspace: _completed(cell))
+    manifest_path = _plan(runner, tmp_path, repetitions=1)
+    runner.execute(manifest_path)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["run_records"][0]["seed"] += 1
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        ValidationError,
+        match="run seed differs from scenario reference",
+    ):
         runner.rescore(manifest_path, output_path=tmp_path / "rescored.json")

@@ -14,6 +14,11 @@ for import_root in (REPOSITORY_ROOT / "src", REPOSITORY_ROOT):
 
 from evaluation.engine import dump_stable_json, evaluate_workspace  # noqa: E402
 from evaluation.rules import rules_for_scenario  # noqa: E402
+from evaluation.workspace_identity import (  # noqa: E402
+    WorkspaceIdentityError,
+    load_workspace_identity,
+    workspace_identity_path,
+)
 
 
 def _arguments() -> argparse.Namespace:
@@ -21,12 +26,21 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("workspace", type=Path)
     parser.add_argument(
         "--scenario-id",
-        default="canonical-q2-profitability",
-        help="Registered deterministic scenario evaluator to use.",
+        help=(
+            "Explicit scenario evaluator; otherwise derive it from workspace identity."
+        ),
     )
     parser.add_argument(
         "--scenario-version",
         help="Optional registered scenario version; required when versions branch.",
+    )
+    parser.add_argument(
+        "--legacy-diagnostic",
+        action="store_true",
+        help=(
+            "Allow diagnostic-only evaluation of an unbound legacy workspace; "
+            "requires explicit --scenario-id and --scenario-version."
+        ),
     )
     return parser.parse_args()
 
@@ -34,9 +48,38 @@ def _arguments() -> argparse.Namespace:
 def main() -> int:
     args = _arguments()
     try:
+        identity_path = workspace_identity_path(args.workspace)
+        if identity_path.is_symlink() or identity_path.exists():
+            identity = load_workspace_identity(args.workspace)
+            scenario_id = args.scenario_id or identity.scenario_id
+            scenario_version = args.scenario_version or identity.scenario_version
+            if scenario_id != identity.scenario_id:
+                raise WorkspaceIdentityError(
+                    "selected scenario_id does not match persisted workspace identity"
+                )
+            if scenario_version != identity.scenario_version:
+                raise WorkspaceIdentityError(
+                    "selected scenario_version does not match persisted workspace "
+                    "identity"
+                )
+        else:
+            if not args.legacy_diagnostic:
+                raise WorkspaceIdentityError(
+                    "workspace identity is missing; use --legacy-diagnostic with "
+                    "explicit --scenario-id and --scenario-version for "
+                    "diagnostic-only evaluation"
+                )
+            if not args.scenario_id or not args.scenario_version:
+                raise WorkspaceIdentityError(
+                    "legacy diagnostic evaluation requires --scenario-id and "
+                    "--scenario-version"
+                )
+            scenario_id = args.scenario_id
+            scenario_version = args.scenario_version
+        rules = rules_for_scenario(scenario_id, scenario_version)
         evaluation = evaluate_workspace(
             args.workspace,
-            rules_for_scenario(args.scenario_id, args.scenario_version),
+            rules,
         )
     except Exception as error:  # noqa: BLE001
         print(
