@@ -33,7 +33,7 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **339 passed, 3 Docker tests skipped,
+deterministic verification completed with **340 passed, 3 Docker tests skipped,
 and 13 live tests deselected**; Ruff lint and formatting checks passed, and the
 10 × 2 × 3 matrix
 dry-run produced 60 unique cells.
@@ -48,10 +48,10 @@ workspace binding (R8), canonical aggregation-safe rescoring (R9), pilot/run
 binding (R10), durable attempt history (R11), and non-destructive offline
 outputs (R12).
 
-R7 and R8 are implemented and covered by capability/tool-mix and workspace
-identity mismatch, tamper, missing/corrupt, and non-completed-rescore refusal
-fixtures. R9–R12 and the final R6 preflight remain outstanding. The catalog
-evaluator version is now `1.1` for these scoring changes.
+R7, R8, and R9 are implemented and covered by capability/tool-mix, workspace
+identity, evaluator-error, lifecycle, and aggregation-safe rescore fixtures.
+R10–R12 and the final R6 preflight remain outstanding. The catalog evaluator
+version is now `1.1` for these scoring changes.
 
 No Phase 2 experiment manifest has been frozen and no paid matrix cells have
 been executed. Existing canonical MVP workspaces predate the declared Phase 2
@@ -98,8 +98,8 @@ uv run python scripts/run_benchmark.py offline-rescore benchmark-manifest.json \
   --output benchmark-rescored.json
 ```
 
-The legacy `scripts/evaluate_manifest.py` path remains diagnostic-only until it
-is consolidated under R9 and its output handling is hardened under R12.
+The legacy `scripts/evaluate_manifest.py` path now delegates to the same
+canonical rescorer; its output handling remains diagnostic-only until R12.
 
 ## Resumable benchmark matrix
 

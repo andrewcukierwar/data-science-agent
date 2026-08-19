@@ -3,8 +3,8 @@
 **Status date:** 2026-08-19
 **Implementation:** Tasks 1–9 complete
 
-**Remediation:** R2, R7, and R8 verified; R1/R3/R4/R5 partial; R6 and R9–R12
-pending before Task 10
+**Remediation:** R2, R7, R8, and R9 verified; R1/R4/R5 partial; R3 closed by
+R8; R6 and R10–R12 pending before Task 10
 
 **Experiment:** Task 10 not started; no results published
 
@@ -52,7 +52,7 @@ verified before Task 10 begins:
    workspace identity to selected rules and complete manifest identity for
    standalone, completed, and non-completed rescore paths. Keep unbound legacy
    evaluation explicitly outside benchmark use.
-9. **R9 — Consolidate aggregation-safe rescoring [P1].** Route APIs and CLIs
+9. **R9 — Consolidate aggregation-safe rescoring [P1] (implemented).** Route APIs and CLIs
    through one per-record error-isolated implementation, then recompute
    aggregates and paired comparisons from the rescored records.
 10. **R10 — Bind the pilot to its run record [P2].** Verify a canonical run-record
@@ -71,12 +71,13 @@ verified before Task 10 begins:
 | --- | --- | --- |
 | R1 | Partial | R7 capability/tool-mix regressions |
 | R2 | Verified | Retain all four failed-evidence adversarial fixtures |
-| R3 | Partial | R8 enforcement across every offline entry point |
-| R4 | Partial | R9 canonical per-record error isolation and reaggregation |
+| R3 | Implemented | Retain identity mismatch and source-tamper regressions in final R6 preflight |
+| R4 | Partial | Retain evaluator-error denominator and taxonomy regressions in final R6 preflight |
 | R5 | Partial | R10 pilot binding and R11 durable attempt history |
 | R6 | Pending | Remove false documents and rerun the final preflight after R7–R12 |
 | R7 | Implemented | Retain capability/tool-mix regressions; rerun them in final R6 preflight |
 | R8 | Implemented | Retain identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
+| R9 | Implemented | Retain multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
 
 ## What is implemented
 
@@ -114,9 +115,11 @@ its scenario/version from the persisted identity, or requires an explicit
 `--legacy-diagnostic --scenario-id ... --scenario-version ...` selection for
 unbound legacy workspaces. Bound workspaces refuse selected-rule mismatches.
 The benchmark runner and manifest evaluator verify the complete identity for
-every record before scoring or classifying evaluator errors; benchmark
-manifests should use `scripts/run_benchmark.py offline-rescore` until R9 and
-R12 consolidate the remaining diagnostic paths.
+every record before scoring or classifying evaluator errors. Both manifest
+rescore entry points delegate to the same canonical per-record rescorer, which
+rebuilds aggregates and paired comparisons from the rescored raw records.
+Benchmark manifests should use `scripts/run_benchmark.py offline-rescore` until
+R12 consolidates the remaining output handling.
 Stable serialization supports
 byte-for-byte repeatability where timestamps or equivalent semantics do not
 require normalization. The final report, Critic, and evaluator use the same
@@ -211,7 +214,7 @@ for later README tables without manual transcription.
 The latest full deterministic review run completed with:
 
 ```text
-339 passed, 3 skipped, 13 deselected
+340 passed, 3 skipped, 13 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
@@ -219,8 +222,8 @@ passed, and the complete 10 × 2 × 3 declaration produced 60 unique cells and
 workspace paths. Deterministic fake-run coverage includes resume, interruption,
 duplicate IDs, failed cells, immutable workspaces, paid-execution guards, pilot
 enforcement, and offline rescoring. The follow-up review is now covered by
-tool-mix neutrality and workspace identity mismatch/tamper regression fixtures;
-tampered pilot cost and non-empty legacy batch rescoring remain follow-up gaps.
+tool-mix neutrality, workspace identity mismatch/tamper, and multi-record
+aggregation-safe rescore fixtures; tampered pilot cost remains a follow-up gap.
 
 ## Task 10 is intentionally blocked pending R1–R12
 

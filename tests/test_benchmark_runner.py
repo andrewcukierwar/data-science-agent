@@ -95,11 +95,17 @@ def _runner(tmp_path, executor):
     )
 
 
-def _plan(runner, tmp_path, *, repetitions=3):
+def _plan(
+    runner,
+    tmp_path,
+    *,
+    repetitions=3,
+    architectures=("single-agent",),
+):
     manifest = runner.build_manifest(
         manifest_id="fixture-manifest",
         scenario_ids=[SCENARIO_ID],
-        architectures=("single-agent",),
+        architectures=architectures,
         repetitions=repetitions,
         model="fixture-model",
         model_provider="fixture-provider",
@@ -389,6 +395,110 @@ def test_offline_rescore_evaluator_crash_preserves_completed_run_and_no_zero_sco
     assert aggregate.evaluator_error_runs == 1
     assert aggregate.evaluated_runs == 0
     assert aggregate.mean_scores == {}
+
+
+def test_canonical_rescore_isolates_crashes_and_rebuilds_aggregates(
+    tmp_path,
+    monkeypatch,
+):
+    def execute(cell, _workspace):
+        if cell.architecture == "single-agent" and cell.repetition == 2:
+            return BenchmarkCellResult(
+                lifecycle=LifecycleOutcome(
+                    status=LifecycleStatus.FAILED,
+                    failure_category=FailureCategory.PROVIDER,
+                    failure_message="fixture provider failure",
+                ),
+                started_at=FIXED_TIME,
+                finished_at=FIXED_TIME,
+            )
+        return _completed(cell)
+
+    runner = BenchmarkRunner(
+        tmp_path / "workspaces",
+        architecture_executors={
+            "multi-agent": execute,
+            "single-agent": execute,
+        },
+        source_preparer=_sources,
+    )
+    manifest_path = _plan(
+        runner,
+        tmp_path,
+        repetitions=2,
+        architectures=("multi-agent", "single-agent"),
+    )
+    runner.execute(manifest_path)
+    before = load_manifest(manifest_path)
+    before_aggregates = before.aggregates
+    before_comparisons = before.architecture_comparisons
+
+    def fake_evaluate(workspace, rules, **_kwargs):
+        run_id = Path(workspace).name
+        if run_id.endswith("-multi-agent-r1") or run_id.endswith("-single-agent-r2"):
+            raise RuntimeError("fixture evaluator crash")
+        return SimpleNamespace(
+            result=_evaluated(
+                SimpleNamespace(
+                    run_id=run_id,
+                    scenario=SimpleNamespace(
+                        scenario_id=SCENARIO_ID,
+                        scenario_version="1.0",
+                        metadata=SimpleNamespace(evaluator_version="1.1"),
+                    ),
+                ),
+                evaluator_version=rules.evaluator_version,
+                score=0.25,
+            )
+        )
+
+    monkeypatch.setattr("benchmark.runner.evaluate_workspace", fake_evaluate)
+    rescored = runner.rescore(
+        manifest_path,
+        output_path=tmp_path / "rescored.json",
+    )
+
+    records = {record.run_id: record for record in rescored.run_records}
+    crashed_completed = next(
+        record
+        for record in records.values()
+        if record.run_id.endswith("-multi-agent-r1")
+    )
+    crashed_failed = next(
+        record
+        for record in records.values()
+        if record.run_id.endswith("-single-agent-r2")
+    )
+    assert crashed_completed.lifecycle.status is LifecycleStatus.COMPLETED
+    assert crashed_completed.evaluator_result.status is EvaluatorStatus.ERROR
+    assert crashed_completed.score_breakdown is None
+    assert crashed_failed.lifecycle.status is LifecycleStatus.FAILED
+    assert crashed_failed.evaluator_result.status is EvaluatorStatus.NOT_EVALUATED
+    assert crashed_failed.score_breakdown is None
+
+    multi = next(
+        item for item in rescored.aggregates if item.architecture == "multi-agent"
+    )
+    single = next(
+        item for item in rescored.aggregates if item.architecture == "single-agent"
+    )
+    assert multi.evaluated_runs == 1
+    assert multi.evaluator_error_runs == 1
+    assert multi.mean_scores["overall_score"] == 0.25
+    assert single.evaluated_runs == 1
+    assert single.evaluator_error_runs == 0
+    assert single.failure_taxonomy == {
+        "evaluator:fail": 1,
+        "evaluator:not_evaluated": 1,
+        "lifecycle:provider": 1,
+    }
+    comparison = rescored.architecture_comparisons[0]
+    overall = next(
+        metric for metric in comparison.metrics if metric.metric_key == "overall_score"
+    )
+    assert overall.paired_sample_size == 0
+    assert rescored.aggregates != before_aggregates
+    assert rescored.architecture_comparisons != before_comparisons
 
 
 def test_live_execution_requires_opt_in_and_credentials_without_loading_dotenv(

@@ -52,6 +52,7 @@ from evaluation.engine import (
     dump_stable_json,
     evaluate_workspace,
     load_manifest,
+    rescore_manifest,
 )
 from evaluation.workspace_identity import (
     WorkspaceIdentityError,
@@ -672,106 +673,17 @@ class BenchmarkRunner:
             ).evaluator_rules()
             for reference in manifest.scenario_references
         }
-        updated_references: list[ScenarioReference] = []
-        for reference in manifest.scenario_references:
-            current_rules = self._rules_for(
-                rules, reference.scenario_id, reference.scenario_version
+        try:
+            rescored, _ = rescore_manifest(
+                manifest,
+                rules,
+                workspace_base_dir=base_dir,
+                evaluator=evaluate_workspace,
             )
-            updated_references.append(
-                reference.model_copy(
-                    update={"evaluator_version": current_rules.evaluator_version}
-                )
-            )
-        updated_records: list[BenchmarkRunRecord] = []
-        for record in manifest.run_records:
-            current_rules = self._rules_for(
-                rules, record.scenario_id, record.scenario_version
-            )
-            workspace_path = Path(record.workspace_path)
-            if not workspace_path.is_absolute():
-                workspace_path = base_dir / workspace_path
-            cell = self._cell_from_record(manifest, record, workspace_path)
-            try:
-                expected_identity = self._workspace_identity(
-                    manifest,
-                    cell,
-                    code_revision=record.code_revision,
-                )
-                if record.evaluator_version != expected_identity.evaluator_version:
-                    raise WorkspaceIdentityError(
-                        "record evaluator version does not match manifest scenario "
-                        "identity"
-                    )
-                if record.seed != expected_identity.seed:
-                    raise WorkspaceIdentityError(
-                        "record seed does not match manifest scenario identity"
-                    )
-                if (
-                    current_rules.scenario_id != expected_identity.scenario_id
-                    or current_rules.scenario_version
-                    != expected_identity.scenario_version
-                    or current_rules.evaluator_version
-                    != expected_identity.evaluator_version
-                ):
-                    raise WorkspaceIdentityError(
-                        "selected evaluator rules do not match manifest workspace "
-                        "identity"
-                    )
-                # Verify every record before evaluation or error classification,
-                # including interrupted and otherwise non-completed records.
-                verify_workspace_identity(workspace_path, expected_identity)
-            except WorkspaceIdentityError as error:
-                raise BenchmarkError(
-                    f"offline rescore refused for {record.run_id}: {error}"
-                ) from error
-            try:
-                evaluation = evaluate_workspace(
-                    workspace_path,
-                    current_rules,
-                    expected_identity=expected_identity,
-                )
-                evaluator_result = evaluation.result
-            except WorkspaceIdentityError as error:
-                raise BenchmarkError(
-                    f"offline rescore refused for {record.run_id}: {error}"
-                ) from error
-            except Exception as error:  # noqa: BLE001
-                message = f"offline rescore failed: {type(error).__name__}: {error}"
-                evaluator_result = _not_evaluated(
-                    cell,
-                    message,
-                    status=(
-                        EvaluatorStatus.NOT_EVALUATED
-                        if record.lifecycle.status is not LifecycleStatus.COMPLETED
-                        else EvaluatorStatus.ERROR
-                    ),
-                    evaluator_version=current_rules.evaluator_version,
-                )
-            values = record.model_dump(mode="json")
-            values.update(
-                {
-                    "evaluator_version": current_rules.evaluator_version,
-                    "evaluator_result": evaluator_result.model_dump(mode="json"),
-                    "score_breakdown": (
-                        evaluator_result.score_breakdown.model_dump(mode="json")
-                        if evaluator_result.score_breakdown is not None
-                        else None
-                    ),
-                }
-            )
-            updated_records.append(BenchmarkRunRecord.model_validate(values))
-        rescored = BenchmarkManifest.model_validate(
-            manifest.model_dump(mode="json")
-            | {
-                "scenario_references": [
-                    item.model_dump(mode="json") for item in updated_references
-                ],
-                "run_records": [
-                    item.model_dump(mode="json") for item in updated_records
-                ],
-            }
-        )
-        rescored = aggregate_manifest(rescored)
+        except WorkspaceIdentityError as error:
+            raise BenchmarkError(f"offline rescore refused: {error}") from error
+        except ValueError as error:
+            raise BenchmarkError(f"offline rescore refused: {error}") from error
         self._persist_manifest(output, rescored, overwrite=False)
         return rescored
 

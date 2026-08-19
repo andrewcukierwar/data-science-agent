@@ -37,10 +37,10 @@ def main() -> int:
     try:
         manifest = load_manifest(manifest_path)
         rules = {
-            (record.scenario_id, record.scenario_version): rules_for_scenario(
-                record.scenario_id, record.scenario_version
+            (reference.scenario_id, reference.scenario_version): rules_for_scenario(
+                reference.scenario_id, reference.scenario_version
             )
-            for record in manifest.run_records
+            for reference in manifest.scenario_references
         }
         updated, evaluations = evaluate_manifest(
             manifest,
@@ -63,7 +63,14 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    return 0 if all(evaluation.passed for evaluation in evaluations) else 1
+    return (
+        0
+        if all(
+            record.evaluator_result.status.value == "pass"
+            for record in updated.run_records
+        )
+        else 1
+    )
 
 
 if __name__ == "__main__":

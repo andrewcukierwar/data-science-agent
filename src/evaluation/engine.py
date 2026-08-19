@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,6 +14,7 @@ from evaluation.contracts import (
     EvaluationCheckStatus,
     EvaluatorResult,
     EvaluatorStatus,
+    LifecycleStatus,
     ScoreBreakdown,
     WorkspaceIdentity,
     check_workspace_version_compatibility,
@@ -36,6 +37,7 @@ from evaluation.primitives import (
     evaluate_unsupported_claims,
 )
 from evaluation.workspace_identity import (
+    WorkspaceIdentityError,
     verify_identity_matches_rules,
     verify_workspace_identity,
     verify_workspace_identity_for_rules,
@@ -290,43 +292,109 @@ def update_run_record(
     return BenchmarkRunRecord.model_validate(values)
 
 
-def evaluate_manifest(
-    manifest: BenchmarkManifest,
+def _rules_for_manifest_record(
+    record: BenchmarkRunRecord,
     rules_by_scenario: Mapping[str | tuple[str, str], ScenarioRules],
-    *,
-    workspace_base_dir: str | Path | None = None,
-) -> tuple[BenchmarkManifest, tuple[OfflineEvaluation, ...]]:
-    """Offline-rescore every persisted run record in a manifest."""
+) -> ScenarioRules:
+    try:
+        rules = (
+            rules_by_scenario.get((record.scenario_id, record.scenario_version))
+            or rules_by_scenario[record.scenario_id]
+        )
+    except KeyError as exc:
+        raise ValueError(
+            "no offline evaluator is registered for scenario "
+            f"{record.scenario_id}@{record.scenario_version}"
+        ) from exc
+    if (
+        rules.scenario_id != record.scenario_id
+        or rules.scenario_version != record.scenario_version
+        or record.evaluator_version != rules.evaluator_version
+    ):
+        raise ValueError(
+            f"record {record.run_id} does not match the selected evaluator rules"
+        )
+    return rules
 
-    evaluations: list[OfflineEvaluation] = []
-    updated_records: list[BenchmarkRunRecord] = []
-    for record in manifest.run_records:
-        try:
-            rules = (
-                rules_by_scenario.get((record.scenario_id, record.scenario_version))
-                or rules_by_scenario[record.scenario_id]
-            )
-        except KeyError as exc:
-            raise ValueError(
-                "no offline evaluator is registered for scenario "
-                f"{record.scenario_id}@{record.scenario_version}"
-            ) from exc
-        if (
-            record.scenario_version != rules.scenario_version
-            or record.evaluator_version != rules.evaluator_version
-        ):
-            raise ValueError(
-                f"record {record.run_id} does not match evaluator rule versions"
-            )
-        workspace_path = Path(record.workspace_path)
-        if workspace_base_dir is not None and not workspace_path.is_absolute():
-            workspace_path = Path(workspace_base_dir) / workspace_path
-        reference = next(
+
+def _manifest_reference(
+    manifest: BenchmarkManifest,
+    record: BenchmarkRunRecord,
+):
+    try:
+        return next(
             item
             for item in manifest.scenario_references
             if item.scenario_id == record.scenario_id
             and item.scenario_version == record.scenario_version
         )
+    except StopIteration as exc:
+        raise ValueError(
+            f"record {record.run_id} has no matching manifest scenario reference"
+        ) from exc
+
+
+def _evaluator_exception_result(
+    record: BenchmarkRunRecord,
+    rules: ScenarioRules,
+    error: Exception,
+) -> EvaluatorResult:
+    """Represent one evaluator crash without turning it into an analysis failure."""
+
+    message = f"offline rescore failed: {type(error).__name__}: {error}"
+    status = (
+        EvaluatorStatus.ERROR
+        if record.lifecycle.status is LifecycleStatus.COMPLETED
+        else EvaluatorStatus.NOT_EVALUATED
+    )
+    check_id = (
+        "offline:evaluator_error"
+        if status is EvaluatorStatus.ERROR
+        else "offline:not_evaluated"
+    )
+    return EvaluatorResult(
+        result_id=f"{record.run_id}-{rules.evaluator_version}",
+        run_id=record.run_id,
+        scenario_id=rules.scenario_id,
+        scenario_version=rules.scenario_version,
+        evaluator_version=rules.evaluator_version,
+        status=status,
+        checks=(
+            EvaluationCheck(
+                check_id=check_id,
+                status=EvaluationCheckStatus.FAIL,
+                message=message,
+            ),
+        ),
+        error_message=message,
+        evaluated_at=record.latency.finished_at,
+    )
+
+
+def rescore_manifest(
+    manifest: BenchmarkManifest,
+    rules_by_scenario: Mapping[str | tuple[str, str], ScenarioRules],
+    *,
+    workspace_base_dir: str | Path | None = None,
+    evaluator: Callable[..., OfflineEvaluation] | None = None,
+) -> tuple[BenchmarkManifest, tuple[OfflineEvaluation, ...]]:
+    """Canonical offline-rescore path shared by APIs and both CLIs.
+
+    Workspace identity is verified before each record is evaluated. Analytical
+    evaluator exceptions are isolated to that record; operational lifecycle
+    outcomes remain untouched, and aggregates/comparisons are rebuilt from the
+    resulting raw records before the manifest is returned.
+    """
+
+    evaluations: list[OfflineEvaluation] = []
+    updated_records: list[BenchmarkRunRecord] = []
+    evaluate = evaluator or evaluate_workspace
+    for record in manifest.run_records:
+        rules = _rules_for_manifest_record(record, rules_by_scenario)
+        workspace_path = Path(record.workspace_path)
+        if workspace_base_dir is not None and not workspace_path.is_absolute():
+            workspace_path = Path(workspace_base_dir) / workspace_path
+        reference = _manifest_reference(manifest, record)
         if reference.evaluator_version != record.evaluator_version:
             raise ValueError(
                 f"record {record.run_id} does not match its manifest evaluator version"
@@ -347,23 +415,115 @@ def evaluate_manifest(
             source_files=reference.source_files,
             code_revision=record.code_revision,
         )
-        evaluation = evaluate_workspace(
-            workspace_path,
-            rules,
-            expected_identity=expected_identity,
+        try:
+            # Identity refusal is a manifest-integrity error, never an
+            # evaluator outcome that may be converted into not_evaluated.
+            verify_workspace_identity(workspace_path, expected_identity)
+            try:
+                evaluation = evaluate(
+                    workspace_path,
+                    rules,
+                    expected_identity=expected_identity,
+                )
+            except WorkspaceIdentityError:
+                raise
+            except Exception as error:  # noqa: BLE001
+                evaluator_result = _evaluator_exception_result(record, rules, error)
+                try:
+                    snapshot = load_workspace_snapshot(workspace_path)
+                except Exception:  # noqa: BLE001
+                    snapshot = None
+                if snapshot is not None:
+                    evaluations.append(
+                        OfflineEvaluation(
+                            result=evaluator_result,
+                            snapshot=snapshot,
+                            checks=evaluator_result.checks,
+                        )
+                    )
+            else:
+                snapshot = getattr(evaluation, "snapshot", None)
+                if snapshot is None:
+                    try:
+                        snapshot = load_workspace_snapshot(workspace_path)
+                    except Exception:  # noqa: BLE001
+                        snapshot = None
+                if snapshot is not None and snapshot.state.run_id != record.run_id:
+                    raise ValueError(
+                        f"workspace run ID {snapshot.state.run_id} does not match "
+                        f"record {record.run_id}"
+                    )
+                evaluator_result = evaluation.result
+                if snapshot is not None:
+                    evaluations.append(
+                        evaluation
+                        if isinstance(evaluation, OfflineEvaluation)
+                        else OfflineEvaluation(
+                            result=evaluator_result,
+                            snapshot=snapshot,
+                            checks=evaluator_result.checks,
+                        )
+                    )
+        except WorkspaceIdentityError:
+            raise
+        values = record.model_dump(mode="json")
+        values.update(
+            {
+                "evaluator_version": rules.evaluator_version,
+                "evaluator_result": evaluator_result.model_dump(mode="json"),
+                "score_breakdown": (
+                    evaluator_result.score_breakdown.model_dump(mode="json")
+                    if evaluator_result.score_breakdown is not None
+                    else None
+                ),
+            }
         )
-        if evaluation.snapshot.state.run_id != record.run_id:
-            raise ValueError(
-                f"workspace run ID {evaluation.snapshot.state.run_id} does not match "
-                f"record {record.run_id}"
-            )
-        evaluations.append(evaluation)
-        updated_records.append(update_run_record(record, evaluation))
+        updated_records.append(BenchmarkRunRecord.model_validate(values))
 
+    updated_references = []
+    for reference in manifest.scenario_references:
+        selected_rules = rules_by_scenario.get(
+            (reference.scenario_id, reference.scenario_version)
+        ) or rules_by_scenario.get(reference.scenario_id)
+        updated_references.append(
+            reference.model_copy(
+                update=(
+                    {"evaluator_version": selected_rules.evaluator_version}
+                    if selected_rules is not None
+                    else {}
+                )
+            )
+        )
     values = manifest.model_dump()
-    values["run_records"] = [record.model_dump() for record in updated_records]
+    values["scenario_references"] = [
+        reference.model_dump(mode="json") for reference in updated_references
+    ]
+    values["run_records"] = [
+        record.model_dump(mode="json") for record in updated_records
+    ]
     updated = BenchmarkManifest.model_validate(values)
-    return updated, tuple(evaluations)
+    # Import lazily to avoid the benchmark package importing its runner while
+    # this evaluation module is still being initialized.
+    from benchmark.aggregation import aggregate_manifest
+
+    return aggregate_manifest(updated), tuple(evaluations)
+
+
+def evaluate_manifest(
+    manifest: BenchmarkManifest,
+    rules_by_scenario: Mapping[str | tuple[str, str], ScenarioRules],
+    *,
+    workspace_base_dir: str | Path | None = None,
+    evaluator: Callable[..., OfflineEvaluation] | None = None,
+) -> tuple[BenchmarkManifest, tuple[OfflineEvaluation, ...]]:
+    """Backward-compatible alias for the canonical manifest rescorer."""
+
+    return rescore_manifest(
+        manifest,
+        rules_by_scenario,
+        workspace_base_dir=workspace_base_dir,
+        evaluator=evaluator,
+    )
 
 
 def load_manifest(path: str | Path) -> BenchmarkManifest:
@@ -390,5 +550,6 @@ __all__ = [
     "evaluate_workspace",
     "load_manifest",
     "load_workspace_snapshot",
+    "rescore_manifest",
     "update_run_record",
 ]

@@ -53,6 +53,7 @@ from evaluation.engine import (
     evaluate_workspace,
     load_manifest,
     load_workspace_snapshot,
+    rescore_manifest,
 )
 from evaluation.primitives import (
     AnalyticalCapability,
@@ -156,6 +157,7 @@ __all__ = [
     "evaluate_canonical_run",
     "evaluate_canonical_workspace",
     "evaluate_workspace",
+    "rescore_manifest",
     "evaluate_provenance",
     "evaluate_root_cause",
     "evaluate_statistics",

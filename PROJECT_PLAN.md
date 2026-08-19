@@ -2,7 +2,7 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R7–R8 remediations
+**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R7–R9 remediations
 implemented; paid benchmark pending.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
@@ -1436,16 +1436,17 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 339 passed, 3 Docker integration tests
+full local verification completed with 340 passed, 3 Docker integration tests
 skipped, and 13 opt-in live tests deselected; Ruff lint and formatting checks
 passed. This status describes the
 implementation, not an architecture-performance result.
 
 R1–R5 have initial implementations, but the 2026-08-18 follow-up review found
-residual validity gaps. R2 meets its current acceptance criteria; R1, R3, R4,
-and R5 remain partial. R7 and R8 are implemented with deterministic capability,
-tool-mix, identity-mismatch, and unbound-workspace regressions. R6 and follow-up
-tasks R9–R12 must be completed before Task 10. No Phase 2 benchmark manifest
+residual validity gaps. R2 meets its current acceptance criteria; R1, R4, and
+R5 remain partial, while R3 is closed by R8. R7, R8, and R9 are implemented
+with deterministic capability, identity, evaluator-error, and aggregation
+regressions. R6 and follow-up tasks R10–R12 must be completed before Task 10.
+No Phase 2 benchmark manifest
 has been frozen, no paid cost pilot or declared matrix has run, and no
 aggregate architecture comparison has been published. Existing canonical MVP
 workspaces are legacy acceptance artifacts rather than Phase 2 benchmark
@@ -1702,7 +1703,7 @@ perform a complete deterministic benchmark preflight:
 - another Sol High code review focused specifically on benchmark validity.
 
 R6 is the final pre-benchmark gate. Its complete preflight must be rerun after
-R7–R12 must be implemented; an earlier green test run does not close R6.
+R7–R12 are implemented; an earlier green test run does not close R6.
 
 ### Phase 2 Follow-up Review Remediation: R7–R12
 
@@ -1759,6 +1760,9 @@ Acceptance:
   and cannot enter a benchmark manifest.
 
 #### R9 — Consolidate offline rescoring and make it aggregation-safe [P1]
+
+Status: implemented through the shared manifest-rescore engine, benchmark API,
+and both offline CLIs. Final R6 preflight remains pending.
 
 Use one canonical manifest-rescore implementation for the Python API and both
 CLIs. Isolate evaluator exceptions per record, retain operational outcomes,
