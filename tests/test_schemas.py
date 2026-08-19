@@ -16,6 +16,7 @@ from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.metrics import (
     MetricComparison,
     MetricComparisonType,
+    MetricDimension,
     MetricObservation,
     deduplicate_metric_comparisons,
     normalize_metric_comparison,
@@ -89,7 +90,7 @@ def test_metric_observation_and_comparison_are_generic_and_typed() -> None:
         evidence_refs=["tool-sql-2"],
     )
 
-    assert observation.dimensions == {"channel": "Meta"}
+    assert observation.dimensions == [MetricDimension(name="channel", value="Meta")]
     assert comparison.comparison_type is MetricComparisonType.RELATIVE_CHANGE
 
     with pytest.raises(ValidationError):
@@ -120,7 +121,7 @@ def test_metric_comparison_normalization_keeps_segment_out_of_metric_key() -> No
     normalized = normalize_metric_comparison(comparison)
 
     assert normalized.metric_key == "marketing_spend"
-    assert normalized.dimensions == {"channel": "Meta"}
+    assert normalized.dimensions == [MetricDimension(name="channel", value="Meta")]
     assert normalized.baseline_period == "Q1 2025"
     assert normalized.unit == "relative_change_fraction"
 

@@ -6,11 +6,16 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
-from agents import Agent, AgentOutputSchema, Runner
+from agents import Agent, Runner
 from agents.evidence import (
     canonicalize_evidence_refs,
     executed_references,
     finding_reference_aliases,
+)
+from agents.output_contract import (
+    STRUCTURED_DIMENSION_GUIDANCE,
+    require_strict_output,
+    strict_output_type,
 )
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
@@ -145,6 +150,7 @@ Required workflow:
   comparison from prose or use evaluator-specific metric IDs.
 
 Return only a valid SpecialistResult. Keep findings concise and decision-useful.
+{STRUCTURED_DIMENSION_GUIDANCE}
 
 Procedural skill guidance:
 {_skill_guidance()}
@@ -189,14 +195,7 @@ def build_analyst_agent(
         model=selected_model,
         tools=tools_for_role(AgentRole.ANALYST),
         handoffs=[],
-        # Metric dimensions are intentionally open-ended (for example channel,
-        # cohort, or device). The SDK's strict schema mode rejects dynamic JSON
-        # object keys, so retain typed Pydantic validation while opting this
-        # structured output into non-strict schema mode.
-        output_type=AgentOutputSchema(
-            SpecialistResult,
-            strict_json_schema=False,
-        ),
+        output_type=strict_output_type(SpecialistResult),
     )
 
 
@@ -372,9 +371,11 @@ async def run_analyst(
     )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)
-    output = result.final_output
-    if not isinstance(output, SpecialistResult):
-        output = SpecialistResult.model_validate(output)
+    output = require_strict_output(
+        result.final_output,
+        SpecialistResult,
+        agent_name=selected_agent.name,
+    )
     output = persist_analyst_result(output, context)
     context.ledger.record_specialist_result(AgentRole.ANALYST.value, output)
     return output

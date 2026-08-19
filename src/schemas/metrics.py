@@ -1,8 +1,10 @@
 """Generic typed metric observations used across business-analysis tasks."""
 
 import re
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from math import isclose, isfinite
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -17,13 +19,82 @@ class MetricComparisonType(StrEnum):
     RELATIVE_CHANGE = "relative_change"
 
 
-class MetricObservation(BaseModel):
+class MetricDimension(BaseModel):
+    """One named segment dimension attached to a metric measurement.
+
+    Segment dimensions are analytically open-ended (channel, cohort, device,
+    experiment arm, ...), but a strict JSON Schema cannot express dynamic
+    object keys. Naming the dimension in a typed field keeps the estimand
+    identical while giving every analytical agent a strict output contract.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: NonEmptyString
+    value: NonEmptyString
+
+
+def coerce_metric_dimensions(value: Any) -> Any:
+    """Accept the strict typed list or the legacy persisted mapping form.
+
+    The strict wire contract is a list of ``MetricDimension`` objects. Run
+    ledgers and benchmark records written before R13 persisted an open-ended
+    ``{name: value}`` mapping, so offline evaluation of retained evidence must
+    still load them. Both forms produce exactly the same typed dimensions.
+    """
+
+    if isinstance(value, Mapping):
+        return [
+            {"name": name, "value": dimension_value}
+            for name, dimension_value in value.items()
+        ]
+    return value
+
+
+def _validate_unique_dimension_names(
+    dimensions: list[MetricDimension],
+) -> list[MetricDimension]:
+    """Reject ambiguous repeated dimension names in one measurement."""
+
+    seen: set[str] = set()
+    for dimension in dimensions:
+        identity = _slug(dimension.name)
+        if identity in seen:
+            raise ValueError(f"duplicate metric dimension name: {dimension.name}")
+        seen.add(identity)
+    return dimensions
+
+
+MetricDimensions = Annotated[
+    list[MetricDimension],
+    Field(default_factory=list),
+]
+
+
+class _DimensionedModel(BaseModel):
+    """Shared strict validation for typed segment dimensions."""
+
+    @field_validator("dimensions", mode="before", check_fields=False)
+    @classmethod
+    def accept_legacy_dimension_mapping(cls, value: Any) -> Any:
+        return coerce_metric_dimensions(value)
+
+    @field_validator("dimensions", check_fields=False)
+    @classmethod
+    def dimension_names_are_unique(
+        cls,
+        value: list[MetricDimension],
+    ) -> list[MetricDimension]:
+        return _validate_unique_dimension_names(value)
+
+
+class MetricObservation(_DimensionedModel):
     """One metric value for a period and optional segment dimensions."""
 
     model_config = ConfigDict(extra="forbid")
 
     metric_key: NonEmptyString
-    dimensions: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
+    dimensions: MetricDimensions
     period: NonEmptyString
     value: float
     unit: NonEmptyString
@@ -50,13 +121,13 @@ class MetricDefinitionContext(BaseModel):
     definition_ref: NonEmptyString | None = None
 
 
-class MetricComparison(BaseModel):
+class MetricComparison(_DimensionedModel):
     """A reproducible period/segment comparison supporting a conclusion."""
 
     model_config = ConfigDict(extra="forbid")
 
     metric_key: NonEmptyString
-    dimensions: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
+    dimensions: MetricDimensions
     baseline_period: NonEmptyString
     comparison_period: NonEmptyString
     comparison_type: MetricComparisonType
@@ -73,13 +144,13 @@ class MetricComparison(BaseModel):
         return value
 
 
-class MetricConflict(BaseModel):
+class MetricConflict(_DimensionedModel):
     """Materially different values reported for one analytical estimand."""
 
     model_config = ConfigDict(extra="forbid")
 
     metric_key: NonEmptyString
-    dimensions: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
+    dimensions: MetricDimensions
     baseline_period: NonEmptyString
     comparison_period: NonEmptyString
     comparison_type: MetricComparisonType
@@ -138,21 +209,56 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
 
 
-def normalize_metric_dimensions(
-    dimensions: dict[str, str],
+def dimension_mapping(
+    dimensions: Sequence[MetricDimension],
 ) -> dict[str, str]:
-    """Normalize generic dimension names without changing their values."""
+    """Return the ``{name: value}`` view used for deterministic comparisons.
 
+    Later entries win, matching the mapping form these dimensions previously
+    used, so the estimand seen by the evaluator is unchanged.
+    """
+
+    return {dimension.name: dimension.value for dimension in dimensions}
+
+
+def normalize_metric_dimensions(
+    dimensions: Sequence[MetricDimension] | Mapping[str, str],
+) -> list[MetricDimension]:
+    """Normalize generic dimension names without changing their values.
+
+    The result is sorted by normalized name so an equivalent measurement always
+    round-trips to exactly one canonical typed representation.
+    """
+
+    coerced = [
+        item
+        if isinstance(item, MetricDimension)
+        else MetricDimension.model_validate(item)
+        for item in coerce_metric_dimensions(dimensions)
+    ]
     normalized: dict[str, str] = {}
-    for key, value in dimensions.items():
-        normalized_key = _DIMENSION_ALIASES.get(_slug(key), _slug(key))
-        normalized[normalized_key] = value.strip()
-    return normalized
+    for dimension in coerced:
+        normalized_name = _DIMENSION_ALIASES.get(
+            _slug(dimension.name), _slug(dimension.name)
+        )
+        normalized[normalized_name] = dimension.value.strip()
+    return [
+        MetricDimension(name=name, value=value)
+        for name, value in sorted(normalized.items())
+    ]
+
+
+def normalized_dimension_mapping(
+    dimensions: Sequence[MetricDimension] | Mapping[str, str],
+) -> dict[str, str]:
+    """Return the normalized dimensions as a deterministic mapping."""
+
+    return dimension_mapping(normalize_metric_dimensions(dimensions))
 
 
 def normalize_metric_key(
     metric_key: str,
-    dimensions: dict[str, str],
+    dimensions: Sequence[MetricDimension] | Mapping[str, str],
 ) -> str:
     """Normalize aliases and remove redundant dimension-value prefixes.
 
@@ -164,7 +270,11 @@ def normalize_metric_key(
     normalized_key = _slug(metric_key)
     normalized_dimensions = normalize_metric_dimensions(dimensions)
     prefixes = sorted(
-        {_slug(value) for value in normalized_dimensions.values() if _slug(value)},
+        {
+            _slug(dimension.value)
+            for dimension in normalized_dimensions
+            if _slug(dimension.value)
+        },
         key=len,
         reverse=True,
     )
@@ -257,8 +367,8 @@ def metric_comparison_scope_identity(
         comparison.metric_key,
         tuple(
             sorted(
-                (key, value.strip().lower())
-                for key, value in comparison.dimensions.items()
+                (dimension.name, dimension.value.strip().lower())
+                for dimension in comparison.dimensions
             )
         ),
         comparison.baseline_period,
@@ -522,7 +632,10 @@ __all__ = [
     "MetricComparisonType",
     "MetricConflict",
     "MetricDefinitionContext",
+    "MetricDimension",
+    "MetricDimensions",
     "MetricObservation",
+    "coerce_metric_dimensions",
     "compile_metric_comparisons",
     "deduplicate_metric_comparisons",
     "metric_comparison_identity",
@@ -533,6 +646,8 @@ __all__ = [
     "normalize_metric_comparison",
     "normalize_metric_dimensions",
     "normalize_metric_key",
+    "normalized_dimension_mapping",
+    "dimension_mapping",
     "normalize_metric_period",
     "normalize_metric_unit",
 ]

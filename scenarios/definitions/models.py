@@ -4,9 +4,21 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 
-from schemas.metrics import MetricComparisonType, MetricDefinitionContext
+from schemas.metrics import (
+    MetricComparisonType,
+    MetricDefinitionContext,
+    MetricDimensions,
+    coerce_metric_dimensions,
+)
 from schemas.statistics import StatisticalExpectation
 
 if TYPE_CHECKING:
@@ -40,7 +52,7 @@ class GroundTruthMetric(BaseModel):
     description: NonEmptyString
     comparison: NonEmptyString
     metric_key: NonEmptyString
-    dimensions: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
+    dimensions: MetricDimensions
     baseline_period: NonEmptyString
     comparison_period: NonEmptyString
     comparison_type: MetricComparisonType
@@ -48,6 +60,13 @@ class GroundTruthMetric(BaseModel):
     definition_context: MetricDefinitionContext | None = None
     expected_relative_change: float
     tolerance: float = Field(ge=0)
+
+    @field_validator("dimensions", mode="before")
+    @classmethod
+    def accept_legacy_dimension_mapping(cls, value: object) -> object:
+        """Keep evaluator ground truth on the shared typed representation."""
+
+        return coerce_metric_dimensions(value)
 
 
 class ScenarioDefinition(BaseModel):

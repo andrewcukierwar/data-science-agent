@@ -5,9 +5,10 @@ Foundation for an evidence-backed, multi-agent business analytics system.
 Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
 complete. Phase 2 Tasks 1–9 and remediations R1–R12 are implemented. Task
 10—the paid single-agent versus five-agent benchmark—was attempted on
-2026-08-19, but the retained pilots exposed additional release blockers now
-tracked as R13–R19. The paid matrix remains blocked, the final R6 gate is open
-again, and no complete benchmark result is claimed. See
+2026-08-19, but the retained pilots exposed additional release blockers tracked
+as R13–R19. R13 (strict analytical output schemas) is now implemented; R14–R19
+remain open. The paid matrix remains blocked, the final R6 gate is open again,
+and no complete benchmark result is claimed. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, retained run artifacts, and the blocked live-run report.
 
@@ -47,11 +48,20 @@ workspace binding (R8), canonical aggregation-safe rescoring (R9), pilot/run
 binding (R10), durable attempt history (R11), and non-destructive offline
 outputs (R12).
 
-The post-pilot review adds strict analytical output schemas (R13), failure-safe
+The post-pilot review adds strict analytical output schemas (R13, implemented),
+failure-safe
 usage and cost accounting (R14), complete single-agent attempt lifecycle (R15),
 interrupted-cell retention and resume (R16), outcome-sensitive preflight tests
 (R17), accurate blocked-run taxonomy (R18), and representative pilot
 calibration across architectures/workload classes (R19).
+
+R13 replaces every open-ended dimension map with a typed `MetricDimension`
+list, so all six production agent output types compile through the Agents SDK
+strict-schema converter with no `strict_json_schema=False` opt-out. Malformed,
+truncated, or extra-field model output now raises an explicit
+`AgentOutputContractError` instead of being re-parsed permissively. Two opt-in
+live canaries — one per architecture — must complete their strict top-level
+output contract before a paid pilot is attempted.
 
 R1–R12 are implemented and covered by architecture-equivalence, capability/tool-
 mix, failed-evidence, workspace identity, evaluator-error, lifecycle,
@@ -60,8 +70,8 @@ reconciliation, scenario-document integrity, and exclusive atomic offline-output
 fixtures. The final R6 preflight passed, including all Docker-backed integration
 tests and all 60 declared dry-run cells. The catalog evaluator version is now
 `1.1` for these scoring changes. That historical preflight does not close the
-new gate: R13–R19 must be implemented and the complete R6 preflight rerun before
-another Task 10 manifest is frozen.
+new gate: R14–R19 must still be implemented and the complete R6 preflight rerun
+before another Task 10 manifest is frozen.
 
 Task 10 execution is currently blocked before the paid matrix. Four immutable
 attempts were retained under `.runs/phase2-task10-20260819/`: three attempts
@@ -76,7 +86,7 @@ pilot reports, workspaces, offline-rescored manifests, and aggregate reports
 are retained.
 Because no pilot completed, the full 60-cell matrix was not started. Existing
 canonical MVP workspaces predate the declared Phase 2 matrix and are not
-substitutes for its results. R13–R19 must be completed, the reopened R6 gate
+substitutes for its results. R14–R19 must be completed, the reopened R6 gate
 must pass, and then a new manifest version and pilot set must be frozen.
 
 ### Task 10 execution record (blocked)
@@ -154,7 +164,7 @@ uv run python scripts/run_benchmark.py plan benchmark.json --model gpt-5.6-luna
 ```
 
 The paid commands below are the current CLI surface, but **must not be run again
-until R13–R19 are complete and the reopened R6 gate passes**. R19 will replace
+until R14–R19 are complete and the reopened R6 gate passes**. R19 will replace
 the single first-cell estimate with a declared pilot set containing at least one
 cell per architecture before the remaining immutable cells can resume:
 

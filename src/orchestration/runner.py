@@ -960,7 +960,8 @@ class AnalysisRunner:
                     comparison_type=item.comparison_type.value,
                     dimensions=(
                         ", ".join(
-                            f"{key}={value}" for key, value in item.dimensions.items()
+                            f"{dimension.name}={dimension.value}"
+                            for dimension in item.dimensions
                         )
                         or "all segments"
                     ),

@@ -151,7 +151,7 @@ def test_generalist_has_all_primitives_but_no_specialist_surface() -> None:
     assert agent.name == "Generalist Data Scientist"
     assert agent.model == "test-model"
     assert agent.output_type.output_type is GeneralistResult
-    assert agent.output_type.is_strict_json_schema() is False
+    assert agent.output_type.is_strict_json_schema() is True
     assert agent.handoffs == []
     assert names == [
         "inspect_workspace",

@@ -24,6 +24,7 @@ from schemas.findings import SpecialistResult
 from schemas.lead import LeadResult
 from schemas.metrics import (
     MetricComparison,
+    MetricDimension,
     compile_metric_comparisons,
     metric_definition_contexts_match,
     normalize_metric_comparison,
@@ -31,6 +32,7 @@ from schemas.metrics import (
     normalize_metric_key,
     normalize_metric_period,
     normalize_metric_unit,
+    normalized_dimension_mapping,
 )
 from schemas.run_state import (
     AgentEventStatus,
@@ -214,10 +216,12 @@ def _normalized_period(period: str) -> str:
     return normalize_metric_period(period).lower()
 
 
-def _normalized_dimensions(dimensions: dict[str, str]) -> dict[str, str]:
+def _normalized_dimensions(
+    dimensions: Sequence[MetricDimension],
+) -> dict[str, str]:
     return {
         key: value.lower()
-        for key, value in normalize_metric_dimensions(dimensions).items()
+        for key, value in normalized_dimension_mapping(dimensions).items()
     }
 
 

@@ -5,6 +5,11 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from schemas.common import NonEmptyString
+from schemas.metrics import (
+    MetricDimension,
+    MetricDimensions,
+    coerce_metric_dimensions,
+)
 
 
 class StatisticalConclusion(StrEnum):
@@ -37,13 +42,38 @@ class ConfidenceInterval(BaseModel):
         return self
 
 
-class StatisticalExpectation(BaseModel):
+class _DimensionedStatistic(BaseModel):
+    """Shared strict validation for typed statistical segment dimensions."""
+
+    @field_validator("dimensions", mode="before", check_fields=False)
+    @classmethod
+    def accept_legacy_dimension_mapping(cls, value: object) -> object:
+        return coerce_metric_dimensions(value)
+
+    @field_validator("dimensions", check_fields=False)
+    @classmethod
+    def dimension_names_are_unique(
+        cls,
+        value: list[MetricDimension],
+    ) -> list[MetricDimension]:
+        seen: set[str] = set()
+        for dimension in value:
+            identity = dimension.name.strip().lower()
+            if identity in seen:
+                raise ValueError(
+                    f"duplicate statistical dimension name: {dimension.name}"
+                )
+            seen.add(identity)
+        return value
+
+
+class StatisticalExpectation(_DimensionedStatistic):
     """Evaluator-only expected result for one basic statistical estimand."""
 
     model_config = ConfigDict(extra="forbid")
 
     metric_key: NonEmptyString
-    dimensions: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
+    dimensions: MetricDimensions
     baseline_period: NonEmptyString
     comparison_period: NonEmptyString
     expected_conclusion: StatisticalConclusion
@@ -64,13 +94,13 @@ class StatisticalExpectation(BaseModel):
     )
 
 
-class StatisticalAssessment(BaseModel):
+class StatisticalAssessment(_DimensionedStatistic):
     """Typed statistician output required for a configured expectation."""
 
     model_config = ConfigDict(extra="forbid")
 
     metric_key: NonEmptyString
-    dimensions: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
+    dimensions: MetricDimensions
     baseline_period: NonEmptyString
     comparison_period: NonEmptyString
     method: NonEmptyString

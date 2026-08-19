@@ -29,7 +29,7 @@ def test_data_auditor_is_structured_and_cannot_delegate() -> None:
 
     assert agent.name == "Data Auditor"
     assert agent.model == "test-model"
-    assert agent.output_type is AuditResult
+    assert agent.output_type.output_type is AuditResult
     assert agent.handoffs == []
     assert [tool.name for tool in agent.tools] == [
         "inspect_workspace",
@@ -117,7 +117,7 @@ def test_data_auditor_persists_typed_result_in_ledger(
     )
 
     async def fake_run(agent, objective, *, context, **kwargs):  # noqa: ANN001
-        assert agent.output_type is AuditResult
+        assert agent.output_type.output_type is AuditResult
         assert objective == DATA_AUDITOR_OBJECTIVE
         assert context is not None
         assert kwargs["max_turns"] == 12

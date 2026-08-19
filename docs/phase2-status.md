@@ -1,10 +1,11 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-19
-**Implementation:** Tasks 1–9 and R1–R12 complete; R13–R19 open
+**Implementation:** Tasks 1–9, R1–R12, and R13 complete; R14–R19 open
 
-**Remediation:** Post-pilot review reopened R6; R13–R19 and a complete new
-preflight are required
+**Remediation:** Post-pilot review reopened R6; R14–R19 and a complete new
+preflight are required. R13 is implemented; its two opt-in live canaries must be
+run before a paid pilot.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -91,12 +92,13 @@ historical verification, but they reopen the final R6 gate.
 ## Open Phase 2 Post-Pilot Remediation: R13–R19
 
 The 2026-08-19 deep review traced the paid-pilot failures through the retained
-workspaces and identified seven additional tasks. All are open and block a new
-Task 10 manifest. `PROJECT_PLAN.md` contains their complete acceptance criteria.
+workspaces and identified seven additional tasks. R13 is now implemented; R14–R19
+remain open and block a new Task 10 manifest. `PROJECT_PLAN.md` contains their
+complete acceptance criteria.
 
 | Remediation | Priority | Status | Required closure |
 | --- | --- | --- | --- |
-| R13 — Make every analytical agent output strictly structured | P0 | Open | Replace open-ended dimension maps with a strict-compatible typed representation, enable strict JSON Schema for Generalist/Lead/Analyst/Statistician, compile every production schema, and complete one live strict-output canary per architecture |
+| R13 — Make every analytical agent output strictly structured | P0 | Implemented | Typed `MetricDimension` list replaces every open-ended dimension map, all six production agents build strict output schemas with no opt-out, invalid final output raises `AgentOutputContractError`, and both opt-in live canaries are in place awaiting an opted-in run |
 | R14 — Persist usage and cost across failed model calls | P0 | Open | Record response usage incrementally, retain usage through parse/max-turn failures, prevent incomplete usage from becoming known `$0.00`, and reconcile response, attempt, and run totals exactly once |
 | R15 — Give the single-agent runner a complete attempt lifecycle | P1 | Open | Begin and finish typed attempts for every Generalist exit, attribute events, preserve prior attempts on resume, and expose the history in real benchmark records |
 | R16 — Retain interrupted benchmark cells and resume them safely | P1 | Open | Write an observed cancelled/interrupted record with partial accounting, align workspace status, count it operationally, and append a new attempt when explicitly resumed |
@@ -104,7 +106,7 @@ Task 10 manifest. `PROJECT_PLAN.md` contains their complete acceptance criteria.
 | R18 — Preserve explicit blocked reasons and accurate failure taxonomy | P1 | Open | Carry machine-readable block reasons and distinguish budget, schema/agent, unresolved analysis, validation revision, and interruption in records and aggregates |
 | R19 — Calibrate the paid pilot across architectures and workload classes | P2 | Open | Declare and bind at least one pilot per architecture, retain per-pilot observations, use a transparent stratified/range estimate, and version any model/schema/budget/pilot-set change |
 
-Task 10 remains blocked until R13–R19 are implemented, their focused
+Task 10 remains blocked until R14–R19 are implemented, their focused
 regressions pass, and the complete R6 preflight—including Docker integrations,
 adversarial suites, both live architecture canaries, Ruff, and the 60-cell
 dry-run—is rerun successfully.
@@ -260,12 +262,37 @@ labeled as descriptive, supported, unsupported, or insufficient-sample rather
 than compressed into one opaque score. Deterministic JSON output is suitable
 for later README tables without manual transcription.
 
+### 7. Strict structured agent output (R13)
+
+Segment dimensions are a typed `MetricDimension` list of `name`/`value` pairs
+instead of an open-ended JSON object, so `MetricObservation`,
+`MetricComparison`, `MetricConflict`, `StatisticalAssessment`,
+`StatisticalExpectation`, and evaluator ground truth share one
+strict-compatible representation. Normalization sorts and aliases dimension
+names deterministically and rejects repeated names, so an equivalent
+measurement always round-trips to exactly one canonical form and the estimand
+seen by the evaluator is unchanged.
+
+Every production agent — Generalist, Lead, Analyst, Statistician, Data Auditor,
+and Critic — builds its output through `agents.output_contract`. The strict
+schema is compiled when the agent is constructed, so an incompatible output
+type fails locally instead of during a paid request, and no agent passes
+`strict_json_schema=False`. Final output is no longer re-parsed permissively:
+anything that is not already the declared type raises
+`AgentOutputContractError`, a `ModelBehaviorError` subclass, and the Lead's
+specialist-output extractor raises rather than forwarding raw text.
+
+Workspaces persisted before R13 stored the mapping form. They still load
+through an explicit compatibility coercion at the schema boundary, so retained
+pilot evidence under `.runs/` remains offline-evaluable without weakening the
+strict wire contract.
+
 ## Verification completed
 
 The latest full deterministic review run completed with:
 
 ```text
-370 passed, 13 deselected
+403 passed, 16 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
@@ -406,12 +433,14 @@ with credential detection.
 
 Before another paid attempt:
 
-1. Implement R13–R19 and their focused deterministic regressions; do not alter
-   evaluator rules to mask the retained failures.
+1. Implement the remaining R14–R19 and their focused deterministic
+   regressions; do not alter evaluator rules to mask the retained failures.
+   R13 is done: `tests/test_strict_agent_outputs.py` holds its regressions.
 2. Run the complete reopened R6 preflight, including strict-schema checks,
    failure-path accounting, lifecycle/taxonomy fixtures, Docker integrations,
    Ruff, and all 60 dry-run cells.
-3. Run one bounded live strict-output canary for each architecture and require
+3. Run the two bounded live strict-output canaries in
+   `tests/test_strict_output_canary_live.py` (one per architecture) and require
    completion, report persistence, usage accounting, and attempt history.
 4. Recheck variable presence without printing the key and confirm Docker access.
 5. Select the compatible model and freeze a new manifest before any paid execution.

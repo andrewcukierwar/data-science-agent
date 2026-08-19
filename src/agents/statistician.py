@@ -6,11 +6,16 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
-from agents import Agent, AgentOutputSchema, Runner
+from agents import Agent, Runner
 from agents.evidence import (
     canonicalize_evidence_refs,
     executed_references,
     finding_reference_aliases,
+)
+from agents.output_contract import (
+    STRUCTURED_DIMENSION_GUIDANCE,
+    require_strict_output,
+    strict_output_type,
 )
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
@@ -123,6 +128,7 @@ Required workflow:
   nonzero baseline, include a
   relative_change comparison in addition to an absolute difference when both
   are material to the inferential conclusion.
+{STRUCTURED_DIMENSION_GUIDANCE}
 - Attach every quantitative Finding to an executed Python script, tool event,
   or registered artifact in `evidence_refs`. Copy exact references returned by
   `run_python`, `save_artifact`, or another approved evidence tool; never
@@ -164,13 +170,7 @@ def build_statistician_agent(
         model=selected_model,
         tools=tools_for_role(AgentRole.STATISTICIAN),
         handoffs=[],
-        # Metric dimensions are intentionally open-ended (for example segment,
-        # cohort, or treatment). The SDK's strict schema mode rejects dynamic
-        # JSON object keys, so keep Pydantic validation in non-strict mode.
-        output_type=AgentOutputSchema(
-            SpecialistResult,
-            strict_json_schema=False,
-        ),
+        output_type=strict_output_type(SpecialistResult),
     )
 
 
@@ -377,9 +377,11 @@ async def run_statistician(
     )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)
-    output = result.final_output
-    if not isinstance(output, SpecialistResult):
-        output = SpecialistResult.model_validate(output)
+    output = require_strict_output(
+        result.final_output,
+        SpecialistResult,
+        agent_name=selected_agent.name,
+    )
     output = persist_statistician_result(output, context)
     context.ledger.record_specialist_result(AgentRole.STATISTICIAN.value, output)
     return output

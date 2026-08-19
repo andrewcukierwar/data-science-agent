@@ -15,10 +15,10 @@ from schemas.metrics import (
     MetricComparison,
     metric_definition_contexts_match,
     normalize_metric_comparison,
-    normalize_metric_dimensions,
     normalize_metric_key,
     normalize_metric_period,
     normalize_metric_unit,
+    normalized_dimension_mapping,
 )
 
 TableMap = Mapping[str, pd.DataFrame]
@@ -443,7 +443,7 @@ def check_metric_identities(
             )
         identity = (
             normalize_metric_key(metric.metric_key, metric.dimensions),
-            tuple(sorted(normalize_metric_dimensions(metric.dimensions).items())),
+            tuple(sorted(normalized_dimension_mapping(metric.dimensions).items())),
             normalize_metric_period(metric.baseline_period),
             normalize_metric_period(metric.comparison_period),
             metric.comparison_type.value,
@@ -487,13 +487,16 @@ def check_observable_ground_truth(
         expected_key = normalize_metric_key(metric.metric_key, metric.dimensions)
         expected_dimensions = {
             key.lower(): value.lower()
-            for key, value in normalize_metric_dimensions(metric.dimensions).items()
+            for key, value in normalized_dimension_mapping(metric.dimensions).items()
         }
         matches = [
             item
             for item in normalized_observed
             if item.metric_key == expected_key
-            and {key.lower(): value.lower() for key, value in item.dimensions.items()}
+            and {
+                dimension.name.lower(): dimension.value.lower()
+                for dimension in item.dimensions
+            }
             == expected_dimensions
             and normalize_metric_period(item.baseline_period)
             == normalize_metric_period(metric.baseline_period)

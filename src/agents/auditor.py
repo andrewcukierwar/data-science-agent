@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agents import Agent, Runner
+from agents.output_contract import require_strict_output, strict_output_type
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from schemas.audit import AuditResult
@@ -107,7 +108,7 @@ def build_data_auditor_agent(
         model=selected_model,
         tools=tools_for_role(AgentRole.DATA_AUDITOR),
         handoffs=[],
-        output_type=AuditResult,
+        output_type=strict_output_type(AuditResult),
     )
 
 
@@ -135,9 +136,11 @@ async def run_data_auditor(
     )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)
-    output = result.final_output
-    if not isinstance(output, AuditResult):
-        output = AuditResult.model_validate(output)
+    output = require_strict_output(
+        result.final_output,
+        AuditResult,
+        agent_name=selected_agent.name,
+    )
     return context.ledger.record_audit(output)
 
 

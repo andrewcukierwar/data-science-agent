@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,9 +23,10 @@ from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO, GroundTruthM
 from schemas.lead import LeadResult
 from schemas.metrics import (
     MetricComparison,
-    normalize_metric_dimensions,
+    MetricDimension,
     normalize_metric_key,
     normalize_metric_period,
+    normalized_dimension_mapping,
 )
 from schemas.run_state import ArtifactKind
 from tools.workspace import Workspace, WorkspaceManager
@@ -113,12 +114,14 @@ def _normalized_period(period: str) -> str:
     return normalize_metric_period(period).lower()
 
 
-def _normalized_dimensions(dimensions: dict[str, str]) -> dict[str, str]:
+def _normalized_dimensions(
+    dimensions: Sequence[MetricDimension],
+) -> dict[str, str]:
     """Compatibility wrapper for generic dimension normalization."""
 
     return {
         key: value.lower()
-        for key, value in normalize_metric_dimensions(dimensions).items()
+        for key, value in normalized_dimension_mapping(dimensions).items()
     }
 
 

@@ -1438,7 +1438,7 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 370 passed and 13 opt-in live tests
+full local verification completed with 403 passed and 16 opt-in live tests
 deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
@@ -1447,9 +1447,12 @@ capability, evidence, workspace-identity, evaluator-error, aggregation,
 pilot-binding, attempt-reconciliation, scenario-document, and exclusive-output
 regressions. The final R6 preflight passed, including Docker-backed integration
 tests and the complete 10 × 2 × 3 dry-run. A subsequent review of the retained
-paid-pilot failures found seven additional gaps, now tracked as R13–R19. That
-review reopens R6: its complete preflight must pass again after R13–R19 before
-another Task 10 manifest is frozen.
+paid-pilot failures found seven additional gaps, now tracked as R13–R19. R13 is
+implemented: every production agent output type compiles through the installed
+Agents SDK strict-schema converter, no analytical agent opts out of strict mode,
+and invalid final output is an explicit model/schema failure. R14–R19 remain
+open. That review reopens R6: its complete preflight must pass again after
+R13–R19 before another Task 10 manifest is frozen.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
 rescores and aggregate reports are retained under
@@ -1867,9 +1870,27 @@ gaps that deterministic R1–R12 fixtures did not detect. R13–R19 are required
 before Task 10 can resume. Completing them reopens R6: run the complete final
 preflight again after all seven tasks are implemented.
 
-#### R13 — Make every analytical agent output strictly structured [P0]
+#### R13 — Make every analytical agent output strictly structured [P0] — Implemented
 
-Status: open; blocks Task 10.
+Status: implemented; one opt-in live canary per architecture remains to be run
+before a paid pilot.
+
+Segment dimensions are now a typed `MetricDimension` list (`name`/`value`)
+instead of an open-ended JSON object, so `MetricObservation`,
+`MetricComparison`, `MetricConflict`, `StatisticalAssessment`,
+`StatisticalExpectation`, and evaluator ground truth all share one
+strict-compatible representation. Every production agent (Generalist, Lead,
+Analyst, Statistician, Data Auditor, Critic) builds its output through
+`agents.output_contract.strict_output_type`, which compiles the strict schema
+at agent-construction time; no agent passes `strict_json_schema=False`. The
+permissive re-parse of `final_output` is replaced by `require_strict_output`,
+which raises `AgentOutputContractError` (a `ModelBehaviorError`), and the Lead's
+specialist-output extractor no longer returns raw text when validation fails.
+Persisted pre-R13 workspaces that stored the mapping form still load through a
+documented compatibility coercion, so retained pilot evidence remains
+evaluable. `tests/test_strict_agent_outputs.py` holds the deterministic
+regressions and `tests/test_strict_output_canary_live.py` holds the opt-in
+per-architecture live canaries.
 
 Replace output fields that require open-ended JSON object keys with
 strict-schema-compatible typed representations, then enable strict JSON Schema
@@ -1976,6 +1997,9 @@ Acceptance:
   matrix pilot;
 - after R13–R19, the full R6 suite, Ruff, Docker-backed integrations, adversarial
   fixtures, and 60-cell dry-run all pass again.
+
+R13 already contributes the strict-schema compilation checks and the two opt-in
+live canaries this task must run; R17 adds the remaining outcome assertions.
 
 #### R18 — Preserve explicit blocked reasons and accurate failure taxonomy [P1]
 

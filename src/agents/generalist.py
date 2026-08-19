@@ -9,13 +9,18 @@ five-agent architecture.
 
 from __future__ import annotations
 
-from agents import Agent, AgentOutputSchema, Runner
+from agents import Agent, Runner
 from agents.critic import persist_validation_result
 from agents.lead import (
     persist_lead_result,
     record_hypothesis,
     record_open_question,
     update_investigation_plan,
+)
+from agents.output_contract import (
+    STRUCTURED_DIMENSION_GUIDANCE,
+    require_strict_output,
+    strict_output_type,
 )
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
@@ -26,7 +31,7 @@ GENERALIST_OBJECTIVE = (
     "agent, from data audit through validated synthesis."
 )
 
-GENERALIST_INSTRUCTIONS = """You are the Generalist Data Scientist running a
+GENERALIST_INSTRUCTIONS = f"""You are the Generalist Data Scientist running a
 fair single-agent analysis baseline.
 
 You alone own the complete lifecycle: audit the data and definitions, perform SQL
@@ -72,7 +77,7 @@ Required behavior:
 
 The candidate answer is later rendered by the shared deterministic report
 contract. Never invent evidence, numbers, scenario conclusions, or evaluator-only
-fields.
+fields. {STRUCTURED_DIMENSION_GUIDANCE}
 """
 
 
@@ -102,7 +107,7 @@ def build_generalist_agent(
         model=selected_model,
         tools=[*tools_for_role(AgentRole.GENERALIST), *state_tools],
         handoffs=[],
-        output_type=AgentOutputSchema(GeneralistResult, strict_json_schema=False),
+        output_type=strict_output_type(GeneralistResult),
     )
 
 
@@ -164,9 +169,11 @@ async def run_generalist(
     )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)
-    output = result.final_output
-    if not isinstance(output, GeneralistResult):
-        output = GeneralistResult.model_validate(output)
+    output = require_strict_output(
+        result.final_output,
+        GeneralistResult,
+        agent_name=selected_agent.name,
+    )
     return persist_generalist_result(output, context)
 
 

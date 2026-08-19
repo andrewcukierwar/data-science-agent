@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 from agents import (
     Agent,
-    AgentOutputSchema,
     RunContextWrapper,
     RunHooks,
     Runner,
@@ -16,6 +15,12 @@ from agents import (
     function_tool,
 )
 from agents.evidence import executed_references, has_source_lineage
+from agents.output_contract import (
+    STRUCTURED_DIMENSION_GUIDANCE,
+    AgentOutputContractError,
+    require_strict_output,
+    strict_output_type,
+)
 from agents.runtime import (
     DEFAULT_AGENT_TURN_LIMITS,
     AgentRole,
@@ -46,8 +51,8 @@ LEAD_OBJECTIVE = (
     "and construct an evidence-backed candidate answer."
 )
 
-LEAD_INSTRUCTIONS = """You are the Lead Data Scientist and manager of an evidence-backed
-business analysis run.
+LEAD_INSTRUCTIONS = f"""You are the Lead Data Scientist and manager of an
+evidence-backed business analysis run.
 
 You own the user's analytical objective and the candidate answer. Keep control of the
 investigation: create or update an explicit investigation plan, formulate testable
@@ -125,7 +130,7 @@ Required investigation behavior:
    substitute for its query, script, artifact, or tool-event reference.
 6. Return only a valid LeadResult. The answer is a candidate answer for the later
    validation/orchestration layer; do not implement or simulate the Critic feedback
-   loop here.
+   loop here. {STRUCTURED_DIMENSION_GUIDANCE}
 
 The Lead may save approved analysis artifacts, but must keep outputs reproducible and
 within the workspace permissions. Keep model-visible tool results concise.
@@ -317,7 +322,7 @@ def _specialist_tool(
         tool_name=tool_name,
         tool_description=description,
         custom_output_extractor=(
-            _canonical_specialist_output(role)
+            _canonical_specialist_output(role, specialist.name)
             if role in {AgentRole.ANALYST, AgentRole.STATISTICIAN}
             else None
         ),
@@ -329,21 +334,31 @@ def _specialist_tool(
     )
 
 
-def _canonical_specialist_output(role: AgentRole) -> Any:
+def _canonical_specialist_output(role: AgentRole, agent_name: str) -> Any:
     """Build an extractor that returns the persisted namespaced result."""
 
     async def _extract(run_result: Any) -> str:
         output = getattr(run_result, "final_output", None)
+        # The specialist declares a strict typed output, so a response that is
+        # not already that type is a model/schema failure. Returning its raw
+        # text would hand the Lead an unvalidated result and hide the failure.
         try:
-            result = (
-                output
-                if isinstance(output, SpecialistResult)
-                else SpecialistResult.model_validate_json(output)
-                if isinstance(output, str)
-                else SpecialistResult.model_validate(output)
+            result = require_strict_output(
+                output,
+                SpecialistResult,
+                agent_name=agent_name,
             )
-        except (TypeError, ValidationError):
-            return str(output)
+        except AgentOutputContractError:
+            if not isinstance(output, str):
+                raise
+            try:
+                result = SpecialistResult.model_validate_json(output)
+            except ValidationError as error:
+                raise AgentOutputContractError(
+                    agent_name,
+                    SpecialistResult,
+                    output,
+                ) from error
 
         # The nested hook persists the role-specific form. The output
         # extractor repeats the idempotent transformation so the Lead sees the
@@ -413,11 +428,7 @@ def build_lead_agent(
         model=selected_model,
         tools=[*tools_for_role(AgentRole.LEAD), *state_tools, *specialist_tools],
         handoffs=[],
-        # Metric dimensions are intentionally open-ended (for example channel,
-        # cohort, or device). The SDK's strict schema mode rejects dynamic JSON
-        # object keys, so retain typed Pydantic validation while opting this
-        # structured output into the SDK's documented non-strict mode.
-        output_type=AgentOutputSchema(LeadResult, strict_json_schema=False),
+        output_type=strict_output_type(LeadResult),
     )
 
 
@@ -879,9 +890,11 @@ async def run_lead(
     )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)
-    output = result.final_output
-    if not isinstance(output, LeadResult):
-        output = LeadResult.model_validate(output)
+    output = require_strict_output(
+        result.final_output,
+        LeadResult,
+        agent_name=selected_agent.name,
+    )
     return _persist_result(output, context)
 
 

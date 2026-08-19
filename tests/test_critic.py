@@ -39,7 +39,7 @@ def test_critic_is_structured_and_cannot_delegate() -> None:
 
     assert agent.name == "Critic"
     assert agent.model == "test-model"
-    assert agent.output_type is ValidationResult
+    assert agent.output_type.output_type is ValidationResult
     assert agent.handoffs == []
     assert [tool.name for tool in agent.tools] == [
         "inspect_workspace",
@@ -155,7 +155,7 @@ def test_critic_persists_validation_result_and_issues(
     )
 
     async def fake_run(agent, prompt, *, context, **kwargs):  # noqa: ANN001
-        assert agent.output_type is ValidationResult
+        assert agent.output_type.output_type is ValidationResult
         assert "CANDIDATE_ANALYSIS_JSON" in prompt
         assert candidate.objective in prompt
         assert context is not None

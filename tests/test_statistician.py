@@ -34,7 +34,7 @@ def test_statistician_is_structured_python_only_and_cannot_delegate() -> None:
     assert agent.name == "Statistician"
     assert agent.model == "test-model"
     assert agent.output_type.output_type is SpecialistResult
-    assert agent.output_type.is_strict_json_schema() is False
+    assert agent.output_type.is_strict_json_schema() is True
     assert agent.handoffs == []
     assert [tool.name for tool in agent.tools] == ["read_document", "run_python"]
 
@@ -148,7 +148,7 @@ def test_statistician_persists_findings_and_artifacts(
 
     async def fake_run(agent, objective, *, context, **kwargs):  # noqa: ANN001
         assert agent.output_type.output_type is SpecialistResult
-        assert agent.output_type.is_strict_json_schema() is False
+        assert agent.output_type.is_strict_json_schema() is True
         assert objective == STATISTICIAN_OBJECTIVE
         assert context is not None
         assert kwargs["max_turns"] == 10

@@ -7,12 +7,14 @@ from pathlib import Path
 
 from agents import Agent, Runner
 from agents.evidence import evidence_events, has_source_lineage
+from agents.output_contract import require_strict_output, strict_output_type
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.budgets import BudgetResource
 from orchestration.ledger import AnalysisLedger
 from schemas.metrics import (
     MetricComparison,
+    dimension_mapping,
     metric_comparison_identity,
     metric_comparison_scope_identity,
     normalize_metric_comparison,
@@ -344,7 +346,10 @@ def _acquisition_metric_comparisons_missing(
     dimension_groups: dict[tuple[tuple[str, str], ...], set[str]] = {}
     for comparison in comparisons:
         dimensions = tuple(
-            sorted((key, value.lower()) for key, value in comparison.dimensions.items())
+            sorted(
+                (dimension.name, dimension.value.lower())
+                for dimension in comparison.dimensions
+            )
         )
         dimension_groups.setdefault(dimensions, set()).add(comparison.metric_key)
 
@@ -386,7 +391,7 @@ def validate_metric_compilation_conflicts(
             category="structured_metric_conflict",
             message=(
                 f"Materially conflicting values remain for '{conflict.metric_key}' "
-                f"with dimensions {conflict.dimensions}: "
+                f"with dimensions {dimension_mapping(conflict.dimensions)}: "
                 + ", ".join(str(item.value) for item in conflict.comparisons)
                 + "."
             ),
@@ -739,7 +744,7 @@ def build_critic_agent(
         model=selected_model,
         tools=tools_for_role(AgentRole.CRITIC),
         handoffs=[],
-        output_type=ValidationResult,
+        output_type=strict_output_type(ValidationResult),
     )
 
 
@@ -849,9 +854,11 @@ async def run_critic(
     )
     usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
     context.record_sdk_usage(usage)
-    output = result.final_output
-    if not isinstance(output, ValidationResult):
-        output = ValidationResult.model_validate(output)
+    output = require_strict_output(
+        result.final_output,
+        ValidationResult,
+        agent_name=selected_agent.name,
+    )
     return persist_validation_result(
         output,
         context.ledger,

@@ -7,7 +7,7 @@ import pytest
 
 from orchestration.ledger import AnalysisLedger, LedgerConflictError
 from schemas.findings import ConfidenceLevel, Finding
-from schemas.metrics import MetricComparison
+from schemas.metrics import MetricComparison, MetricDimension
 from schemas.run_state import (
     AgentEvent,
     AgentEventStatus,
@@ -373,7 +373,9 @@ def test_ledger_replaces_stale_alias_with_corrected_comparison(
 
     assert len(reloaded.metric_comparisons) == 1
     assert reloaded.metric_comparisons[0].metric_key == "cac"
-    assert reloaded.metric_comparisons[0].dimensions == {"channel": "Meta"}
+    assert reloaded.metric_comparisons[0].dimensions == [
+        MetricDimension(name="channel", value="Meta")
+    ]
     assert reloaded.metric_comparisons[0].value == 0.30
 
 
