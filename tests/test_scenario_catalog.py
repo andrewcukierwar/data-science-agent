@@ -38,7 +38,7 @@ def test_catalog_resolves_canonical_generator_evaluator_and_version() -> None:
     )
     registration = get_scenario("canonical-q2-profitability", "1.0")
     assert registration.generator_name == "generate_canonical_profitability_scenario"
-    assert registration.evaluator_rules().evaluator_version == "1.0"
+    assert registration.evaluator_rules().evaluator_version == "1.1"
     assert registration.evaluation_spec.ground_truth == (
         *CANONICAL_PROFITABILITY_SCENARIO.ground_truth,
     )

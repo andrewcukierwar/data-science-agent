@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
@@ -10,6 +11,7 @@ import pandas as pd
 import pytest
 
 from evaluation.engine import evaluate_workspace
+from evaluation.primitives import AnalyticalCapability, CapabilityPolicy
 from evaluation.rules import rules_for_scenario
 from scenarios import discover_scenarios
 from scenarios.generator import SyntheticEcommerceConfig
@@ -163,6 +165,8 @@ def _persist_fixture(
     scenario_id: str,
     *,
     architecture: str = "multi-agent",
+    tool_names: tuple[str, ...] = ("run_sql", "run_python"),
+    statistical_evidence_ref: str = _PYTHON_EVIDENCE,
     report_suffix: str = "",
     metric_updates: dict[str, dict[str, object]] | None = None,
     audit_issue_ids: tuple[str, ...] | None = None,
@@ -227,7 +231,7 @@ def _persist_fixture(
                 practically_significant=expectation.expected_practically_significant,
                 assumptions_checked=expectation.required_assumptions,
                 causal_interpretation=expectation.expected_causal_interpretation,
-                evidence_refs=[_PYTHON_EVIDENCE],
+                evidence_refs=[statistical_evidence_ref],
             )
         )
 
@@ -321,21 +325,16 @@ def _persist_fixture(
         ),
         tool_events=[
             ToolEvent(
-                id="calibration-sql",
-                tool_name="run_sql",
+                id=f"calibration-{tool_name.removeprefix('run-')}",
+                tool_name=tool_name,
                 status=ToolEventStatus.SUCCEEDED,
                 started_at=_NOW,
                 completed_at=_NOW,
-                artifact_refs=[_EVIDENCE],
-            ),
-            ToolEvent(
-                id="calibration-python",
-                tool_name="run_python",
-                status=ToolEventStatus.SUCCEEDED,
-                started_at=_NOW,
-                completed_at=_NOW,
-                artifact_refs=[_PYTHON_EVIDENCE],
-            ),
+                artifact_refs=[
+                    _EVIDENCE if tool_name == "run_sql" else _PYTHON_EVIDENCE
+                ],
+            )
+            for tool_name in tool_names
         ],
         agent_events=[
             AgentEvent(
@@ -364,7 +363,7 @@ def _persist_fixture(
         run_budget=RunBudget(
             specialist_invocations=1,
             sql_executions=1,
-            python_executions=1,
+            python_executions=int("run_python" in tool_names),
             critic_loops=1,
             charts_created=1,
         ),
@@ -429,6 +428,126 @@ def test_semantically_equivalent_architectures_receive_the_same_evaluation_resul
         assert [
             (check.check_id, check.status, check.message) for check in multi.checks
         ] == [(check.check_id, check.status, check.message) for check in single.checks]
+
+
+@pytest.mark.parametrize(
+    "tool_names",
+    (("run_sql",), ("run_sql", "run_python")),
+)
+def test_non_statistical_scenario_accepts_valid_tool_mix(
+    tmp_path: Path,
+    tool_names: tuple[str, ...],
+) -> None:
+    workspace = _persist_fixture(
+        tmp_path,
+        "retention-q2-deterioration",
+        tool_names=tool_names,
+    )
+    evaluation = evaluate_workspace(
+        workspace,
+        rules_for_scenario("retention-q2-deterioration", "1.0"),
+    )
+
+    assert evaluation.passed, [
+        (check.check_id, check.message)
+        for check in evaluation.checks
+        if check.status.value == "fail"
+    ]
+    assert not any(
+        check.check_id in {"provenance:sql_execution", "provenance:python_execution"}
+        for check in evaluation.checks
+    )
+
+
+def test_unnecessary_python_does_not_change_non_statistical_score(
+    tmp_path: Path,
+) -> None:
+    sql_only = evaluate_workspace(
+        _persist_fixture(
+            tmp_path / "sql-only",
+            "retention-q2-deterioration",
+            tool_names=("run_sql",),
+        ),
+        rules_for_scenario("retention-q2-deterioration", "1.0"),
+    )
+    sql_and_python = evaluate_workspace(
+        _persist_fixture(
+            tmp_path / "sql-and-python",
+            "retention-q2-deterioration",
+            tool_names=("run_sql", "run_python"),
+        ),
+        rules_for_scenario("retention-q2-deterioration", "1.0"),
+    )
+
+    assert sql_only.result.status is sql_and_python.result.status
+    assert sql_only.result.score_breakdown == sql_and_python.result.score_breakdown
+    assert [
+        (check.check_id, check.status, check.message)
+        for check in sql_only.checks
+        if check.check_id != "lifecycle:budget:python_executions"
+    ] == [
+        (check.check_id, check.status, check.message)
+        for check in sql_and_python.checks
+        if check.check_id != "lifecycle:budget:python_executions"
+    ]
+
+
+@pytest.mark.parametrize("architecture", ("multi-agent", "single-agent"))
+def test_statistical_capability_is_typed_not_role_or_tool_bound(
+    tmp_path: Path,
+    architecture: str,
+) -> None:
+    workspace = _persist_fixture(
+        tmp_path,
+        "meaningful-ab-treatment-effect",
+        architecture=architecture,
+        tool_names=("run_sql",),
+        statistical_evidence_ref=_EVIDENCE,
+    )
+    evaluation = evaluate_workspace(
+        workspace,
+        rules_for_scenario("meaningful-ab-treatment-effect", "1.0"),
+    )
+
+    assert evaluation.passed, [
+        (check.check_id, check.message)
+        for check in evaluation.checks
+        if check.status.value == "fail"
+    ]
+    assert (
+        next(
+            check
+            for check in evaluation.checks
+            if check.check_id == "capability:statistical_analysis"
+        ).status.value
+        == "pass"
+    )
+
+
+def test_missing_declared_capability_fails_named_check(tmp_path: Path) -> None:
+    workspace = _persist_fixture(
+        tmp_path,
+        "retention-q2-deterioration",
+        tool_names=("run_sql",),
+    )
+    base_rules = rules_for_scenario("retention-q2-deterioration", "1.0")
+    rules = replace(
+        base_rules,
+        capability_policy=CapabilityPolicy(
+            required=(AnalyticalCapability.STATISTICAL_ANALYSIS,)
+        ),
+    )
+
+    evaluation = evaluate_workspace(workspace, rules)
+
+    assert (
+        next(
+            check
+            for check in evaluation.checks
+            if check.check_id == "capability:statistical_analysis"
+        ).status.value
+        == "fail"
+    )
 
 
 @pytest.mark.parametrize(

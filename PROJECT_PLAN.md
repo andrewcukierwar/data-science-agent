@@ -1432,16 +1432,17 @@ Track separately from analytical quality:
 Do not hide analytical failures inside an aggregate operational-success number,
 or vice versa.
 
-### Phase 2 implementation status as of 2026-08-18
+### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 330 passed and 13 opt-in live tests
+full local verification completed with 336 passed and 13 opt-in live tests
 deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
 R1–R5 have initial implementations, but the 2026-08-18 follow-up review found
 residual validity gaps. R2 meets its current acceptance criteria; R1, R3, R4,
-and R5 remain partial. R6 and follow-up tasks R7–R12 must be completed before
+and R5 remain partial. R7 is implemented with deterministic tool-mix and
+capability regressions. R6 and follow-up tasks R8–R12 must be completed before
 Task 10. No Phase 2 benchmark manifest has been frozen, no paid cost pilot or
 declared matrix has run, and no
 aggregate architecture comparison has been published. Existing canonical MVP
@@ -1708,6 +1709,10 @@ regression fixtures. These tasks refine R1, R3, R4, and R5 and add explicit
 immutability requirements for offline outputs.
 
 #### R7 — Make tool use capability-driven rather than mandatory [P0]
+
+Status: implemented in the evaluator and catalog rules; final R6 preflight is
+still pending. The catalog evaluator version is `1.1` so this semantic change
+cannot be confused with earlier `1.0` scoring.
 
 Remove unconditional SQL- and Python-presence checks from generic provenance
 scoring. Scenario rules should declare the analytical capabilities and typed

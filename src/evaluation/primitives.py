@@ -12,6 +12,7 @@ import re
 import stat
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from math import isclose, isfinite
 
 from agents.evidence import executed_references
@@ -65,6 +66,23 @@ class DataQualityPolicy:
     required_issue_ids: tuple[str, ...] = ()
     forbidden_issue_ids: tuple[str, ...] = ()
     forbid_any_issues: bool = False
+
+
+class AnalyticalCapability(StrEnum):
+    """Observable analytical output that a scenario may require."""
+
+    DATA_AUDIT = "data_audit"
+    REQUIRED_METRICS = "required_metrics"
+    STATISTICAL_ANALYSIS = "statistical_analysis"
+    CRITIQUE = "critique"
+    VERIFIED_EVIDENCE = "verified_evidence"
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityPolicy:
+    """Scenario-declared capabilities independent of producer architecture."""
+
+    required: tuple[AnalyticalCapability, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -524,6 +542,49 @@ def evaluate_statistics(
     )
 
 
+def evaluate_capabilities(
+    workspace: Workspace,
+    state: AnalysisRunState,
+    policy: CapabilityPolicy,
+    *,
+    check_prefix: str = "capability",
+) -> tuple[EvaluationCheck, ...]:
+    """Check scenario-declared outputs without prescribing their producer."""
+
+    checks: list[EvaluationCheck] = []
+    for capability in policy.required:
+        if capability is AnalyticalCapability.DATA_AUDIT:
+            passed = state.audit is not None and (
+                state.audit.status is AuditStatus.COMPLETE
+            )
+            message = "completed data audit is present"
+        elif capability is AnalyticalCapability.REQUIRED_METRICS:
+            passed = bool(state.metric_comparisons)
+            message = "required structured metric outputs are present"
+        elif capability is AnalyticalCapability.STATISTICAL_ANALYSIS:
+            passed = bool(_statistical_assessments(state))
+            message = "typed statistical analysis output is present"
+        elif capability is AnalyticalCapability.CRITIQUE:
+            passed = bool(state.validation_results) and (
+                state.validation_results[-1].status is ValidationStatus.PASS
+            )
+            message = "successful final critique is present"
+        elif capability is AnalyticalCapability.VERIFIED_EVIDENCE:
+            passed = bool(executed_references(AnalysisLedger(workspace)))
+            message = "verified evidence is present"
+        else:  # pragma: no cover - exhaustive for the typed capability enum
+            passed = False
+            message = "unsupported analytical capability"
+        checks.append(_check(f"{check_prefix}:{capability.value}", passed, message))
+    return tuple(checks) or (
+        _check(
+            f"{check_prefix}:not_required",
+            True,
+            "no additional scenario capabilities were declared",
+        ),
+    )
+
+
 def _statistical_assessments(
     state: AnalysisRunState,
 ) -> tuple[StatisticalAssessment, ...]:
@@ -648,14 +709,6 @@ def _evidence_refs(workspace: Workspace) -> set[str]:
     return executed_references(AnalysisLedger(workspace))
 
 
-def _successful_tool_events(state: AnalysisRunState, tool_name: str):
-    return [
-        event
-        for event in state.tool_events
-        if event.tool_name == tool_name and event.status is ToolEventStatus.SUCCEEDED
-    ]
-
-
 def _report_recommendation_evidence_refs(report_text: str) -> list[str]:
     match = re.search(
         r"(?ims)^## Recommendations\s*$\n(?P<body>.*?)(?=^## |\Z)",
@@ -680,20 +733,41 @@ def evaluate_provenance(
 ) -> tuple[EvaluationCheck, ...]:
     """Verify executed evidence, registered artifacts, and report citations."""
 
-    successful_sql = _successful_tool_events(state, "run_sql")
-    successful_python = _successful_tool_events(state, "run_python")
-    checks = [
-        _check(
-            f"{check_prefix}:sql_execution",
-            bool(successful_sql),
-            "successful SQL evidence is present",
-        ),
-        _check(
-            f"{check_prefix}:python_execution",
-            bool(successful_python),
-            "successful Python evidence is present",
-        ),
+    successful_events = [
+        event
+        for event in state.tool_events
+        if event.status is ToolEventStatus.SUCCEEDED
     ]
+    checks: list[EvaluationCheck] = []
+    cited_refs = {
+        reference for finding in state.findings for reference in finding.evidence_refs
+    }
+    cited_refs.update(
+        reference
+        for hypothesis in state.hypotheses
+        for reference in hypothesis.evidence_refs
+    )
+    cited_refs.update(
+        reference
+        for comparison in state.metric_comparisons
+        for reference in comparison.evidence_refs
+    )
+    cited_refs.update(
+        reference
+        for assessment in _statistical_assessments(state)
+        for reference in assessment.evidence_refs
+    )
+    cited_refs.update(_report_recommendation_evidence_refs(report_text))
+    referenced_artifact_paths = {
+        artifact.path
+        for artifact in state.artifacts
+        if artifact.id in cited_refs or artifact.path in cited_refs
+    }
+    referenced_artifact_paths.update(
+        reference
+        for reference in cited_refs
+        if reference.startswith(("working/", "outputs/"))
+    )
     for read_only_directory in (workspace.inputs, workspace.docs):
         for path in sorted(
             read_only_directory.rglob("*"),
@@ -711,8 +785,15 @@ def evaluate_provenance(
                         f"{path.relative_to(workspace.root)}",
                     )
                 )
-    for event in [*successful_sql, *successful_python]:
+    checked_artifact_paths: set[str] = set()
+    for event in successful_events:
         for reference in event.artifact_refs:
+            if (
+                reference not in referenced_artifact_paths
+                or reference in checked_artifact_paths
+            ):
+                continue
+            checked_artifact_paths.add(reference)
             checks.append(
                 _check(
                     f"{check_prefix}:tool_artifact:{event.id}:{reference}",
@@ -1066,6 +1147,8 @@ def evaluate_task_completeness(
 
 
 __all__ = [
+    "AnalyticalCapability",
+    "CapabilityPolicy",
     "DataQualityPolicy",
     "StatisticsPolicy",
     "TaskCompletenessPolicy",
@@ -1077,6 +1160,7 @@ __all__ = [
     "contains_stable_conclusion",
     "compile_final_metric_set",
     "evaluate_data_quality",
+    "evaluate_capabilities",
     "evaluate_lifecycle",
     "evaluate_numeric_comparisons",
     "evaluate_provenance",

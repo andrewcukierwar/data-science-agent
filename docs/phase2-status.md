@@ -1,9 +1,10 @@
 # Phase 2 implementation status and benchmark handoff
 
-**Status date:** 2026-08-18  
+**Status date:** 2026-08-19
 **Implementation:** Tasks 1–9 complete
 
-**Remediation:** R2 verified; R1/R3/R4/R5 partial; R6–R12 pending before Task 10
+**Remediation:** R2 and R7 verified; R1/R3/R4/R5 partial; R6 and R8–R12
+pending before Task 10
 
 **Experiment:** Task 10 not started; no results published
 
@@ -44,7 +45,7 @@ verified before Task 10 begins:
    failed evidence, evaluator exceptions, interrupted resume, unknown pricing,
    all 10 × 2 × 3 dry-run cells, and a benchmark-validity-focused Sol High code
    review. This is the final gate and must be rerun after R7–R12.
-7. **R7 — Make tool use capability-driven [P0].** Remove unconditional SQL and
+7. **R7 — Make tool use capability-driven [P0] (implemented).** Remove unconditional SQL and
    Python presence gates. Express requirements as scenario-specific typed
    capabilities and test equivalent outputs across different valid tool mixes.
 8. **R8 — Enforce identity at every offline boundary [P1].** Match persisted
@@ -74,6 +75,7 @@ verified before Task 10 begins:
 | R4 | Partial | R9 canonical per-record error isolation and reaggregation |
 | R5 | Partial | R10 pilot binding and R11 durable attempt history |
 | R6 | Pending | Remove false documents and rerun the final preflight after R7–R12 |
+| R7 | Implemented | Retain capability/tool-mix regressions; rerun them in final R6 preflight |
 
 ## What is implemented
 
@@ -94,6 +96,12 @@ Reusable deterministic primitives evaluate lifecycle, numerical values,
 metric-definition identity, root cause and non-drivers, data quality,
 statistics, provenance, unsupported claims, and task completeness. Scenario
 definitions compose these rules instead of cloning a canonical evaluator.
+
+R7 adds typed, evaluator-only capability policies. Catalog scenarios declare
+required outputs such as completed audit, structured metrics, typed statistical
+analysis, critique, and verified evidence. Generic provenance no longer requires
+both SQL and Python; valid tool mixes are covered by calibration fixtures.
+The catalog evaluator version is `1.1` for this scoring change.
 
 `scripts/evaluate_workspace.py` evaluates one persisted workspace and
 `scripts/evaluate_manifest.py` evaluates a manifest. These paths do not load
@@ -194,7 +202,7 @@ for later README tables without manual transcription.
 The latest full deterministic review run completed with:
 
 ```text
-330 passed, 13 deselected
+336 passed, 13 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also

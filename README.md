@@ -33,7 +33,7 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **330 passed and 13 live tests
+deterministic verification completed with **336 passed and 13 live tests
 deselected**; Ruff lint and formatting checks passed, and the 10 × 2 × 3 matrix
 dry-run produced 60 unique cells.
 
@@ -46,6 +46,11 @@ follow-up review adds capability-driven tool neutrality (R7), universal
 workspace binding (R8), canonical aggregation-safe rescoring (R9), pilot/run
 binding (R10), durable attempt history (R11), and non-destructive offline
 outputs (R12).
+
+R7 is implemented and covered by SQL-only, SQL-plus-Python, statistical typed
+output, and missing-capability regression fixtures. R8–R12 and the final R6
+preflight remain outstanding. The catalog evaluator version is now `1.1` for
+this scoring change.
 
 No Phase 2 experiment manifest has been frozen and no paid matrix cells have
 been executed. Existing canonical MVP workspaces predate the declared Phase 2

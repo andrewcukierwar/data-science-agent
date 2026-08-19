@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from evaluation.engine import ScenarioRules
 from evaluation.primitives import (
+    AnalyticalCapability,
+    CapabilityPolicy,
     DataQualityPolicy,
     StatisticsPolicy,
     TaskCompletenessPolicy,
@@ -27,6 +29,22 @@ from scenarios.definitions.models import ScenarioDefinition
 from schemas.audit import IssueSeverity
 from schemas.statistics import StatisticalExpectation
 
+_COMMON_CAPABILITY_POLICY = CapabilityPolicy(
+    required=(
+        AnalyticalCapability.DATA_AUDIT,
+        AnalyticalCapability.REQUIRED_METRICS,
+        AnalyticalCapability.CRITIQUE,
+        AnalyticalCapability.VERIFIED_EVIDENCE,
+    )
+)
+
+_STATISTICAL_CAPABILITY_POLICY = CapabilityPolicy(
+    required=(
+        *_COMMON_CAPABILITY_POLICY.required,
+        AnalyticalCapability.STATISTICAL_ANALYSIS,
+    )
+)
+
 
 def canonical_rules() -> ScenarioRules:
     """Return evaluator-only rules for the canonical profitability scenario."""
@@ -37,6 +55,7 @@ def canonical_rules() -> ScenarioRules:
         scenario_version=evaluation_spec.scenario_version,
         evaluator_version=evaluation_spec.evaluator_version,
         expected_metrics=evaluation_spec.ground_truth,
+        capability_policy=_COMMON_CAPABILITY_POLICY,
         root_cause_rules=(
             TextRule(
                 check_id="primary_channel_driver",
@@ -188,6 +207,7 @@ def _business_rules(
         scenario_version=evaluation_spec.scenario_version,
         evaluator_version=evaluation_spec.evaluator_version,
         expected_metrics=evaluation_spec.ground_truth,
+        capability_policy=_COMMON_CAPABILITY_POLICY,
         root_cause_rules=root_cause_rules,
         data_quality_policy=DataQualityPolicy(
             maximum_issue_severity=IssueSeverity.LOW,
@@ -213,6 +233,7 @@ def _data_quality_rules(
         scenario_version=evaluation_spec.scenario_version,
         evaluator_version=evaluation_spec.evaluator_version,
         expected_metrics=evaluation_spec.ground_truth,
+        capability_policy=_COMMON_CAPABILITY_POLICY,
         root_cause_rules=(
             TextRule(
                 check_id="data_quality_limitation",
@@ -251,6 +272,7 @@ def _experiment_rules(
         scenario_version=evaluation_spec.scenario_version,
         evaluator_version=evaluation_spec.evaluator_version,
         expected_metrics=evaluation_spec.ground_truth,
+        capability_policy=_STATISTICAL_CAPABILITY_POLICY,
         root_cause_rules=(
             TextRule(
                 check_id="statistical_conclusion",

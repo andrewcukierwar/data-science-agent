@@ -55,11 +55,14 @@ from evaluation.engine import (
     load_workspace_snapshot,
 )
 from evaluation.primitives import (
+    AnalyticalCapability,
+    CapabilityPolicy,
     DataQualityPolicy,
     StatisticsPolicy,
     TaskCompletenessPolicy,
     TextRule,
     compile_final_metric_set,
+    evaluate_capabilities,
     evaluate_data_quality,
     evaluate_lifecycle,
     evaluate_numeric_comparisons,
@@ -91,6 +94,8 @@ from evaluation.workspace_identity import (
 __all__ = [
     "CanonicalAcceptanceError",
     "CanonicalAcceptanceSummary",
+    "AnalyticalCapability",
+    "CapabilityPolicy",
     "DataQualityPolicy",
     "OfflineEvaluation",
     "ScenarioRules",
@@ -142,6 +147,7 @@ __all__ = [
     "compile_final_metric_set",
     "dump_stable_json",
     "evaluate_data_quality",
+    "evaluate_capabilities",
     "evaluate_lifecycle",
     "evaluate_numeric_comparisons",
     "evaluate_manifest",

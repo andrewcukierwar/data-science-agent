@@ -19,11 +19,13 @@ from evaluation.contracts import (
     check_workspace_version_compatibility,
 )
 from evaluation.primitives import (
+    CapabilityPolicy,
     DataQualityPolicy,
     StatisticsPolicy,
     TaskCompletenessPolicy,
     TextRule,
     compile_final_metric_set,
+    evaluate_capabilities,
     evaluate_data_quality,
     evaluate_lifecycle,
     evaluate_numeric_comparisons,
@@ -54,6 +56,7 @@ class ScenarioRules:
     expected_metrics: tuple[GroundTruthMetric, ...] = ()
     root_cause_rules: tuple[TextRule, ...] = ()
     data_quality_policy: DataQualityPolicy = field(default_factory=DataQualityPolicy)
+    capability_policy: CapabilityPolicy = field(default_factory=CapabilityPolicy)
     statistics_policy: StatisticsPolicy = field(default_factory=StatisticsPolicy)
     task_policy: TaskCompletenessPolicy = field(default_factory=TaskCompletenessPolicy)
     unsupported_claim_patterns: tuple[str, ...] = ()
@@ -166,6 +169,13 @@ def evaluate_workspace(
     checks: list[EvaluationCheck] = []
     checks.extend(evaluate_lifecycle(state))
     checks.extend(evaluate_data_quality(state, rules.data_quality_policy))
+    checks.extend(
+        evaluate_capabilities(
+            snapshot.workspace,
+            state,
+            rules.capability_policy,
+        )
+    )
     final_metrics, metric_set_checks = compile_final_metric_set(
         state.metric_comparisons
     )
