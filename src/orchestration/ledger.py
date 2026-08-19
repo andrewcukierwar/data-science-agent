@@ -365,6 +365,7 @@ class AnalysisLedger(ToolEventLedger):
             RunStatus.COMPLETED: AttemptStatus.COMPLETED,
             RunStatus.FAILED: AttemptStatus.FAILED,
             RunStatus.BLOCKED: AttemptStatus.BLOCKED,
+            RunStatus.CANCELLED: AttemptStatus.INTERRUPTED,
         }
         status = status_map.get(self._state.status, AttemptStatus.INTERRUPTED)
         started_at = self._state.attempt_started_at or self._state.created_at
@@ -718,6 +719,19 @@ class AnalysisLedger(ToolEventLedger):
 
         message = str(error).strip() or error.__class__.__name__
         self._state.status = RunStatus.FAILED
+        self._state.error = message
+        self.save()
+
+    def mark_cancelled(self, reason: str | Exception) -> None:
+        """Reconcile the run status with an externally interrupted attempt.
+
+        An interrupted process would otherwise leave the workspace advertising
+        ``running`` forever, which reads as a lost cell rather than an observed
+        operational outcome.
+        """
+
+        message = str(reason).strip() or reason.__class__.__name__
+        self._state.status = RunStatus.CANCELLED
         self._state.error = message
         self.save()
 

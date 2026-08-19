@@ -885,6 +885,12 @@ def test_resumed_runner_attempts_have_distinct_ids_and_cumulative_runtime(
 
     workspace = WorkspaceManager(tmp_path / "workspaces").open_workspace("run-resumed")
     first = AnalysisLedger(workspace).state
+    # R16: the interrupted workspace is reconciled with its interrupted
+    # attempt instead of being left advertising ``running``.
+    assert first.status is RunStatus.CANCELLED
+    assert first.error is not None
+    assert first.attempt_history[0].status is AttemptStatus.INTERRUPTED
+
     result = asyncio.run(runner.run("run-resumed", "Explain profitability."))
 
     assert result.status is RunStatus.COMPLETED

@@ -1438,7 +1438,7 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 430 passed and 16 opt-in live tests
+full local verification completed with 439 passed and 16 opt-in live tests
 deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
@@ -1456,7 +1456,9 @@ at the response boundary and survives parsing, turn-limit, and lifecycle
 failures, and incomplete usage can no longer be published as a known `$0.00`.
 R15 is complete: the single-agent runner opens, attributes, and closes typed
 attempts for every exit, so both architectures publish the same attempt
-protocol. R16–R19 remain open. That review reopens R6: its complete preflight must pass again after
+protocol. R16 is complete: an interrupted cell is retained as a cancelled
+operational record with its partial accounting and can be resumed into a new
+append-only attempt. R17–R19 remain open. That review reopens R6: its complete preflight must pass again after
 R13–R19 before another Task 10 manifest is frozen.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
@@ -2001,9 +2003,34 @@ Acceptance:
 - tests exercise the real `GeneralistRunner` lifecycle rather than relying only
   on a fake benchmark executor that manages attempts itself.
 
-#### R16 — Retain interrupted benchmark cells and resume them safely [P1]
+#### R16 — Retain interrupted benchmark cells and resume them safely [P1] — Implemented
 
-Status: open; blocks Task 10.
+Status: implemented.
+
+Interrupting a declared cell now materializes a cancelled run record through
+`BenchmarkRunner._interrupted_record` and persists it, with the manifest still
+`running`, before the manifest is marked `aborted`. The record carries
+`LifecycleStatus.CANCELLED` with the new `FailureCategory.INTERRUPTED`, the
+workspace path, the attempt history, and whatever partial usage, cost
+availability, and latency the workspace persisted. Because a record now exists,
+existing aggregation counts the cell as an observed operational failure
+(`lifecycle:interrupted`) instead of inflating `missing_repetitions`.
+
+Both runners reconcile the workspace's top-level status with its interrupted
+attempt through the new `RunStatus.CANCELLED` and `AnalysisLedger.mark_cancelled`,
+so an interrupted workspace no longer advertises `running` forever. An explicit
+`resume=True` retries only cancelled cells — completed, failed, and blocked
+records are real observations and are never silently re-run — and the retry
+appends a new attempt to the same immutable cell, leaving the interrupted
+attempt in the history verbatim. `run_pilot` refuses to publish a cost pilot
+built from an interrupted cell, which would otherwise scale a partial
+observation across the whole matrix.
+
+`FailureCategory.INTERRUPTED` is shared with R18's taxonomy work; R16 needs it
+so the retained record is machine-readable as an interruption rather than an
+`other` failure. `tests/test_benchmark_interruption.py` holds the regressions,
+covering interruption both before agent execution and after partial
+persistence.
 
 Materialize an operational run record when a declared cell is interrupted
 instead of allowing it to disappear as a missing observation. Reconcile the

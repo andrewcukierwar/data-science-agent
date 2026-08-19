@@ -333,6 +333,7 @@ class FailureCategory(StrEnum):
     SANDBOX = "sandbox"
     PROVIDER = "provider"
     WORKSPACE = "workspace"
+    INTERRUPTED = "interrupted"
     OTHER = "other"
 
 

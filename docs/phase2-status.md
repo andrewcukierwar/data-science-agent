@@ -1,11 +1,11 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-19
-**Implementation:** Tasks 1–9, R1–R12, R13, R14, and R15 complete; R16–R19 open
+**Implementation:** Tasks 1–9, R1–R12, and R13–R16 complete; R17–R19 open
 
-**Remediation:** Post-pilot review reopened R6; R16–R19 and a complete new
+**Remediation:** Post-pilot review reopened R6; R17–R19 and a complete new
 preflight are required. R13 is closed, including both opt-in live canaries, and
-R14 and R15 are closed.
+R14, R15, and R16 are closed.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -89,11 +89,11 @@ historical verification, but they reopen the final R6 gate.
 | R11 | Verified | Append-only attempt, event-attribution, reconciliation, and interrupted-resume regressions |
 | R12 | Verified | Same-path/alias, existing-output, evaluator-failure, and exclusive-publication regressions |
 
-## Phase 2 Post-Pilot Remediation: R13–R19 (R13–R15 closed, R16–R19 open)
+## Phase 2 Post-Pilot Remediation: R13–R19 (R13–R16 closed, R17–R19 open)
 
 The 2026-08-19 deep review traced the paid-pilot failures through the retained
-workspaces and identified seven additional tasks. R13, R14, and R15 are
-closed; R16–R19 remain open and block a new Task 10 manifest. `PROJECT_PLAN.md`
+workspaces and identified seven additional tasks. R13–R16 are closed;
+R17–R19 remain open and block a new Task 10 manifest. `PROJECT_PLAN.md`
 contains their complete acceptance criteria.
 
 | Remediation | Priority | Status | Required closure |
@@ -101,12 +101,12 @@ contains their complete acceptance criteria.
 | R13 — Make every analytical agent output strictly structured | P0 | Complete | Typed `MetricDimension` list replaces every open-ended dimension map, all six production agents build strict output schemas with no opt-out, invalid final output raises `AgentOutputContractError`, and both live architecture canaries passed on 2026-08-19 |
 | R14 — Persist usage and cost across failed model calls | P0 | Complete | Usage is recorded at the response boundary and reconciled once per run on both success and failure paths; parse, turn-limit, and lifecycle failures keep their tokens; unreconcilable usage is marked incomplete and its cost published as unavailable rather than `$0.00` |
 | R15 — Give the single-agent runner a complete attempt lifecycle | P1 | Complete | `GeneralistRunner` opens one attempt before agent execution and finishes it as completed, blocked, failed, or interrupted with matching timing, usage, cost availability, and error; resume appends without recounting; benchmark records built from the real runner expose non-null attempt identity and full history |
-| R16 — Retain interrupted benchmark cells and resume them safely | P1 | Open | Write an observed cancelled/interrupted record with partial accounting, align workspace status, count it operationally, and append a new attempt when explicitly resumed |
+| R16 — Retain interrupted benchmark cells and resume them safely | P1 | Complete | An interrupted cell is persisted as a cancelled/interrupted record before the manifest aborts, retaining workspace, attempt history, partial usage, cost availability, and latency; the workspace status is reconciled to `cancelled`; denominators count it as an observed operational failure; explicit resume retries only cancelled cells and appends a new attempt |
 | R17 — Make the preflight sensitive to benchmark outcomes | P1 | Open | Replace permissive/presence-only assertions with strict schema, completion, report, usage, and attempt-history checks; rerun the complete R6 gate after R13–R19 |
 | R18 — Preserve explicit blocked reasons and accurate failure taxonomy | P1 | Open | Carry machine-readable block reasons and distinguish budget, schema/agent, unresolved analysis, validation revision, and interruption in records and aggregates |
 | R19 — Calibrate the paid pilot across architectures and workload classes | P2 | Open | Declare and bind at least one pilot per architecture, retain per-pilot observations, use a transparent stratified/range estimate, and version any model/schema/budget/pilot-set change |
 
-Task 10 remains blocked until R16–R19 are implemented, their focused
+Task 10 remains blocked until R17–R19 are implemented, their focused
 regressions pass, and the complete R6 preflight—including Docker integrations,
 adversarial suites, both live architecture canaries, Ruff, and the 60-cell
 dry-run—is rerun successfully.
@@ -334,12 +334,39 @@ non-null attempt identity and full attempt history the multi-agent architecture
 already published, which matters because the benchmark compares the two
 architectures on identical output and evidence contracts.
 
+### 10. Retained and resumable interrupted cells (R16)
+
+The retained `v2` attempt is the concrete failure this closes: its workspace
+still holds 34 requests and an interrupted attempt, but the manifest recorded
+zero run records, so the aborted report observed nothing and counted 60 missing
+cells.
+
+Interrupting a declared cell now writes a cancelled record — persisted while the
+manifest is still `running`, before it is marked `aborted` — carrying the
+workspace path, attempt history, partial usage, cost availability, latency, and
+an explicit interruption reason under the `interrupted` failure category.
+Aggregation therefore counts the cell as an observed operational failure rather
+than a missing repetition. Both runners reconcile the workspace's top-level
+status to `cancelled` so an interrupted workspace no longer advertises
+`running`.
+
+An explicit resume retries only cancelled cells. Completed, failed, and blocked
+records are genuine observations of the system under test and are never
+re-executed, because replacing them would quietly discard the evidence the
+benchmark exists to report. A retried cell keeps its immutable run ID and
+workspace, and appends a new attempt while the interrupted attempt stays in the
+history verbatim. A cost pilot cannot be published from an interrupted cell.
+
+Retained pre-R16 evidence is not rewritten: the `v2` manifest still records zero
+cells and its workspace still reads `running`, as the Task 10 attempt table
+below describes.
+
 ## Verification completed
 
 The latest full deterministic review run completed with:
 
 ```text
-430 passed, 16 deselected
+439 passed, 16 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
@@ -498,17 +525,18 @@ with credential detection.
 
 Before another paid attempt:
 
-1. Implement the remaining R16–R19 and their focused deterministic
+1. Implement the remaining R17–R19 and their focused deterministic
    regressions; do not alter evaluator rules to mask the retained failures.
-   R13, R14, and R15 are done: `tests/test_strict_agent_outputs.py`,
-   `tests/test_model_usage_accounting.py`, and
-   `tests/test_generalist_attempt_lifecycle.py` hold their regressions.
+   R13–R16 are done: `tests/test_strict_agent_outputs.py`,
+   `tests/test_model_usage_accounting.py`,
+   `tests/test_generalist_attempt_lifecycle.py`, and
+   `tests/test_benchmark_interruption.py` hold their regressions.
 2. Run the complete reopened R6 preflight, including strict-schema checks,
    failure-path accounting, lifecycle/taxonomy fixtures, Docker integrations,
    Ruff, and all 60 dry-run cells.
 3. Rerun the two bounded live strict-output canaries in
    `tests/test_strict_output_canary_live.py` (one per architecture) after
-   R16–R19 change lifecycle accounting, and require completion, report
+   R17–R19 change lifecycle accounting, and require completion, report
    persistence, usage accounting, and attempt history. They passed for R13 on
    2026-08-19, before the R14 accounting change.
 4. Recheck variable presence without printing the key and confirm Docker access.

@@ -68,6 +68,7 @@ from evaluation.workspace_identity import (
     source_file_identities_for_roots,
     verify_workspace_identity,
 )
+from orchestration.ledger import AnalysisLedger
 from scenarios import discover_scenarios
 from scenarios.catalog import ScenarioCatalog, ScenarioRegistration
 from schemas.run_state import RunBudget
@@ -551,7 +552,10 @@ class BenchmarkRunner:
         processed = 0
         try:
             for cell in self._cells(manifest):
-                if cell.key in existing_by_key:
+                if cell.key in existing_by_key and not self._is_resumable_cell(
+                    existing_by_key[cell.key],
+                    resume=resume,
+                ):
                     skipped.append(cell.run_id)
                     if (
                         existing_by_key[cell.key].lifecycle.status
@@ -564,8 +568,24 @@ class BenchmarkRunner:
                 try:
                     cell, manifest = self._prepare_cell_sources(cell, manifest)
                     record = self._execute_cell(cell, manifest, sources_prepared=True)
-                except KeyboardInterrupt:
+                except KeyboardInterrupt as error:
+                    # Retain the interrupted cell as an observed operational
+                    # outcome before the manifest is marked aborted. Dropping it
+                    # would understate the denominator as a missing repetition
+                    # and lose the workspace's partial usage, cost, latency, and
+                    # attempt evidence.
                     interrupted = True
+                    record = self._interrupted_record(cell, error, manifest)
+                    existing_by_key[cell.key] = record
+                    executed.append(record.run_id)
+                    failed.append(record.run_id)
+                    manifest = self._replace_manifest(
+                        manifest,
+                        run_records=tuple(existing_by_key.values()),
+                        status=ManifestStatus.RUNNING,
+                    )
+                    manifest = aggregate_manifest(manifest)
+                    self._persist_manifest(path, manifest, overwrite=True)
                     break
                 except WorkspaceIdentityError:
                     raise
@@ -641,6 +661,14 @@ class BenchmarkRunner:
         record = next(
             record for record in summary.manifest.run_records if record.run_id == run_id
         )
+        if record.lifecycle.status is LifecycleStatus.CANCELLED:
+            # An interrupted cell is retained as an operational record, but it
+            # measured nothing: publishing it as a cost pilot would scale a
+            # partial observation across the whole matrix.
+            raise BenchmarkError(
+                "pilot cell was interrupted before completion; resume the "
+                "interrupted cell before publishing a cost pilot"
+            )
         total_cells = (
             len(summary.manifest.scenario_references)
             * len(summary.manifest.architectures)
@@ -1117,6 +1145,65 @@ class BenchmarkRunner:
             ),
             attempt_history=tuple(getattr(state, "attempt_history", ())),
         )
+
+    @staticmethod
+    def _is_resumable_cell(
+        record: BenchmarkRunRecord,
+        *,
+        resume: bool,
+    ) -> bool:
+        """Return whether an explicit resume may retry this recorded cell.
+
+        Only an interrupted cell is retried. A completed, failed, or blocked
+        record is a real observation of the system under test, and re-running it
+        would silently replace evidence the benchmark is supposed to report.
+        """
+
+        return resume and record.lifecycle.status is LifecycleStatus.CANCELLED
+
+    def _interrupted_workspace_state(self, cell: BenchmarkCell) -> object | None:
+        """Load the persisted state an interrupted cell left behind, if any."""
+
+        state_dir = cell.workspace_path / "state"
+        if not state_dir.exists():
+            return None
+        try:
+            ledger = AnalysisLedger(state_dir)
+        except Exception:  # noqa: BLE001
+            # A workspace interrupted mid-write must not mask the interruption
+            # itself; the record is still published without persisted totals.
+            return None
+        if ledger.state.run_id != cell.run_id:
+            return None
+        return ledger.state
+
+    def _interrupted_record(
+        self,
+        cell: BenchmarkCell,
+        error: BaseException,
+        manifest: BenchmarkManifest,
+    ) -> BenchmarkRunRecord:
+        """Materialize the cancelled record for an interrupted declared cell."""
+
+        message = (
+            f"{type(error).__name__}: {error}".strip().rstrip(":").strip()
+            or type(error).__name__
+        )
+        reason = f"benchmark cell was interrupted before completion ({message})"
+        state = self._interrupted_workspace_state(cell)
+        now = _now()
+        outcome = BenchmarkCellResult(
+            lifecycle=LifecycleOutcome(
+                status=LifecycleStatus.CANCELLED,
+                failure_category=FailureCategory.INTERRUPTED,
+                failure_message=reason,
+            ),
+            state=state,
+            evaluator_result=_not_evaluated(cell, reason, evaluated_at=now),
+            started_at=getattr(state, "created_at", None) or now,
+            finished_at=getattr(state, "updated_at", None) or now,
+        )
+        return self._record_from_outcome(cell, outcome, manifest)
 
     def _failure_record(
         self,

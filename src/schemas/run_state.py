@@ -157,6 +157,9 @@ class RunStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     BLOCKED = "blocked"
+    # An external interruption stopped the run. It is reconciled with an
+    # interrupted attempt rather than left as a stale ``running`` workspace.
+    CANCELLED = "cancelled"
 
 
 class AttemptStatus(StrEnum):

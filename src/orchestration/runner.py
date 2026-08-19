@@ -540,6 +540,13 @@ class AnalysisRunner:
                 if attempt_terminal_status is None and pending is not None:
                     attempt_terminal_status = AttemptStatus.INTERRUPTED
                     attempt_terminal_error = f"{type(pending).__name__}: {pending}"
+                    # Reconcile the workspace's top-level status with the
+                    # interrupted attempt so the cell is an observed outcome
+                    # rather than a workspace stuck in ``running``.
+                    try:
+                        ledger.mark_cancelled(attempt_terminal_error)
+                    except Exception:
+                        pass
                 if attempt_terminal_status is not None:
                     try:
                         ledger.finish_attempt(

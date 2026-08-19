@@ -183,12 +183,24 @@ def test_interruption_aborts_without_losing_workspace_and_resume_continues(tmp_p
     first = runner.execute(manifest_path)
     assert first.interrupted is True
     assert first.manifest.status.value == "aborted"
-    assert len(first.manifest.run_records) == 0
+    # R16: the interrupted cell is retained as an observed operational outcome
+    # rather than silently disappearing as a missing repetition.
+    assert len(first.manifest.run_records) == 1
+    interrupted_record = first.manifest.run_records[0]
+    assert interrupted_record.lifecycle.status is LifecycleStatus.CANCELLED
+    assert interrupted_record.lifecycle.failure_category is FailureCategory.INTERRUPTED
 
     second = runner.execute(manifest_path, resume=True)
     assert second.manifest.status.value == "complete"
     assert len(calls) == 4
     assert len(second.manifest.run_records) == 3
+    # The retried cell keeps its immutable identity and is now completed.
+    retried = next(
+        record
+        for record in second.manifest.run_records
+        if record.run_id == interrupted_record.run_id
+    )
+    assert retried.lifecycle.status is LifecycleStatus.COMPLETED
 
 
 def test_duplicate_run_ids_are_rejected_at_plan_time(tmp_path):
