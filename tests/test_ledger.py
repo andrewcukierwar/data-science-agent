@@ -9,10 +9,15 @@ from orchestration.ledger import AnalysisLedger, LedgerConflictError
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.metrics import MetricComparison
 from schemas.run_state import (
+    AgentEvent,
+    AgentEventStatus,
     Artifact,
     ArtifactKind,
+    AttemptStatus,
     Hypothesis,
     HypothesisStatus,
+    ModelPricing,
+    ModelUsage,
     RunBudget,
     ToolEvent,
     ToolEventStatus,
@@ -104,6 +109,193 @@ def test_resumed_attempts_are_identified_and_elapsed_time_is_cumulative(
     assert reloaded.state.attempt_number == 2
     assert reloaded.state.attempt_id == second_attempt
     assert reloaded.state.elapsed_seconds == pytest.approx(3.75)
+
+
+def test_attempt_history_reconciles_usage_cost_elapsed_and_event_provenance(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path, "run-attempt-history")
+    timestamp = datetime(2025, 7, 1, 12, 0, tzinfo=UTC)
+    first_id = ledger.begin_attempt()
+    ledger.record_model_usage(
+        ModelUsage(
+            requests=1,
+            input_tokens=10,
+            output_tokens=4,
+            total_tokens=14,
+            cached_tokens=2,
+            reasoning_tokens=1,
+        )
+    )
+    ledger.record_elapsed(1.25)
+    ledger.record_cost_estimate(
+        pricing=ModelPricing(
+            input_per_1m=1.0,
+            cached_input_per_1m=0.1,
+            output_per_1m=2.0,
+        ),
+        pricing_model="fixture-pricing",
+    )
+    ledger.append_tool_event(
+        ToolEvent(
+            id="tool-attempt-1",
+            tool_name="run_sql",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=timestamp,
+            completed_at=timestamp,
+        )
+    )
+    first = ledger.finish_attempt(AttemptStatus.COMPLETED)
+    assert first is not None
+
+    second_id = ledger.begin_attempt()
+    ledger.record_model_usage(
+        ModelUsage(
+            requests=2,
+            input_tokens=20,
+            output_tokens=8,
+            total_tokens=28,
+            cached_tokens=4,
+            reasoning_tokens=2,
+        )
+    )
+    ledger.record_elapsed(2.5)
+    ledger.record_cost_estimate(
+        pricing=ModelPricing(
+            input_per_1m=1.0,
+            cached_input_per_1m=0.1,
+            output_per_1m=2.0,
+        ),
+        pricing_model="fixture-pricing",
+    )
+    ledger.append_agent_event(
+        AgentEvent(
+            id="agent-attempt-2",
+            agent_name="Lead",
+            agent_role="lead",
+            status=AgentEventStatus.SUCCEEDED,
+            started_at=timestamp,
+            completed_at=timestamp,
+        )
+    )
+    second = ledger.finish_attempt(AttemptStatus.COMPLETED)
+    assert second is not None
+
+    reloaded = AnalysisLedger(ledger.state_path)
+    assert [item.attempt_id for item in reloaded.attempt_history] == [
+        first_id,
+        second_id,
+    ]
+    assert reloaded.attempt_history[0] == first
+    assert reloaded.attempt_history[0].status is AttemptStatus.COMPLETED
+    assert reloaded.attempt_history[1].status is AttemptStatus.COMPLETED
+    assert reloaded.state.usage.requests == sum(
+        item.usage_delta.requests for item in reloaded.attempt_history
+    )
+    assert reloaded.state.elapsed_seconds == pytest.approx(3.75)
+    assert reloaded.state.estimated_cost_usd == pytest.approx(
+        sum(item.cost.estimated_cost_usd for item in reloaded.attempt_history)
+    )
+    assert reloaded.tool_events[0].attempt_id == first_id
+    assert reloaded.agent_events[0].attempt_id == second_id
+
+
+def test_interrupted_before_record_is_closed_without_double_counting(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path, "run-interrupted-before-record")
+    first_id = ledger.begin_attempt()
+    resumed = AnalysisLedger(ledger.state_path)
+    second_id = resumed.begin_attempt()
+    resumed.finish_attempt(AttemptStatus.COMPLETED)
+
+    restored = AnalysisLedger(resumed.state_path)
+    assert [item.attempt_id for item in restored.attempt_history] == [
+        first_id,
+        second_id,
+    ]
+    assert restored.attempt_history[0].status is AttemptStatus.INTERRUPTED
+    assert restored.attempt_history[0].usage_delta.requests == 0
+    assert restored.state.usage.requests == 0
+
+
+def test_interrupted_after_partial_write_reconciles_cumulative_totals(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path, "run-interrupted-partial-write")
+    attempt_id = ledger.begin_attempt()
+    ledger.record_model_usage(
+        ModelUsage(
+            requests=1,
+            input_tokens=10,
+            output_tokens=4,
+            total_tokens=14,
+        )
+    )
+    ledger.record_elapsed(1.5)
+
+    # Simulate a crash after cumulative totals were persisted but before the
+    # corresponding attempt delta made it to the durable state document.
+    partial_state = ledger.state.model_copy(
+        update={
+            "attempt_history": [
+                ledger.attempt_history[0].model_copy(
+                    update={"usage_delta": ModelUsage()}
+                )
+            ],
+            "elapsed_seconds": None,
+        }
+    )
+    ledger.state_path.write_text(partial_state.model_dump_json(indent=2))
+
+    resumed = AnalysisLedger(ledger.state_path)
+    resumed.begin_attempt()
+    resumed.finish_attempt(AttemptStatus.COMPLETED)
+    restored = AnalysisLedger(resumed.state_path)
+
+    assert restored.attempt_history[0].attempt_id == attempt_id
+    assert restored.attempt_history[0].status is AttemptStatus.INTERRUPTED
+    assert restored.attempt_history[0].usage_delta.requests == 1
+    assert restored.attempt_history[0].elapsed_seconds == pytest.approx(1.5)
+    assert restored.state.usage.requests == 1
+    assert restored.state.elapsed_seconds == pytest.approx(1.5)
+    assert restored.state.usage.requests == sum(
+        item.usage_delta.requests for item in restored.attempt_history
+    )
+
+
+def test_unknown_attempt_cost_is_explicit_not_zero(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path, "run-unknown-attempt-cost")
+    ledger.begin_attempt()
+    ledger.record_model_usage(
+        ModelUsage(
+            requests=1,
+            input_tokens=10,
+            output_tokens=4,
+            total_tokens=14,
+        )
+    )
+    ledger.finish_attempt(AttemptStatus.INTERRUPTED, error="interrupted")
+
+    ledger.begin_attempt()
+    ledger.record_cost_estimate(
+        pricing=ModelPricing(
+            input_per_1m=1.0,
+            cached_input_per_1m=0.1,
+            output_per_1m=2.0,
+        ),
+        pricing_model="fixture-pricing",
+    )
+    ledger.finish_attempt(AttemptStatus.COMPLETED)
+
+    restored = AnalysisLedger(ledger.state_path)
+    attempt = restored.attempt_history[0]
+    assert attempt.cost is not None
+    assert attempt.cost.availability.value == "unavailable"
+    assert attempt.cost.estimated_cost_usd is None
+    assert restored.attempt_history[1].cost is not None
+    assert restored.attempt_history[1].cost.availability.value == "known"
+    assert restored.state.estimated_cost_usd is None
 
 
 def test_rejected_hypotheses_are_kept_in_ledger_state(tmp_path: Path) -> None:

@@ -11,7 +11,13 @@ from orchestration.runner import AnalysisRunner
 from schemas.audit import AuditResult, AuditStatus
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.lead import LeadResult
-from schemas.run_state import ArtifactKind, Hypothesis, RunBudget, RunStatus
+from schemas.run_state import (
+    ArtifactKind,
+    AttemptStatus,
+    Hypothesis,
+    RunBudget,
+    RunStatus,
+)
 from schemas.validation import (
     ValidationIssue,
     ValidationResult,
@@ -890,3 +896,9 @@ def test_resumed_runner_attempts_have_distinct_ids_and_cumulative_runtime(
     assert result.state.elapsed_seconds >= first.elapsed_seconds
     assert result.state.usage.requests == 4
     assert result.state.estimated_cost_usd is not None
+    assert len(result.state.attempt_history) == 2
+    assert result.state.attempt_history[0].status is AttemptStatus.INTERRUPTED
+    assert result.state.attempt_history[1].status is AttemptStatus.COMPLETED
+    assert result.state.attempt_history[0].usage_delta.requests == 1
+    assert result.state.attempt_history[1].usage_delta.requests == 3
+    assert all(event.attempt_id for event in result.state.agent_events)

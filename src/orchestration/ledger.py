@@ -25,6 +25,10 @@ from schemas.run_state import (
     AgentEventStatus,
     AnalysisRunState,
     Artifact,
+    AttemptCost,
+    AttemptCostAvailability,
+    AttemptRecord,
+    AttemptStatus,
     Hypothesis,
     HypothesisStatus,
     ModelPricing,
@@ -193,6 +197,12 @@ class AnalysisLedger(ToolEventLedger):
         return self._state.usage
 
     @property
+    def attempt_history(self) -> list[AttemptRecord]:
+        """Append-only execution attempts for this run."""
+
+        return self._state.attempt_history
+
+    @property
     def audit(self) -> AuditResult | None:
         """The persisted preflight audit, when one has been recorded."""
 
@@ -241,16 +251,152 @@ class AnalysisLedger(ToolEventLedger):
     def begin_attempt(self) -> str:
         """Start and persist a uniquely identified attempt for this run.
 
-        Resuming an interrupted workspace intentionally reuses its cumulative
-        ledger, but each invocation receives a distinct attempt identity so
-        retries are observable rather than silently masquerading as one call.
+        Resuming an interrupted workspace keeps every terminal attempt and
+        appends a new record. A process that stopped before finalization is
+        explicitly closed as interrupted before the new attempt starts.
         """
 
-        self._state.attempt_number += 1
-        self._state.attempt_id = f"{self._state.run_id}-attempt-{uuid.uuid4().hex}"
-        self._state.attempt_started_at = datetime.now(UTC)
+        self._materialize_legacy_attempt()
+        now = datetime.now(UTC)
+        for index, prior in enumerate(self.attempt_history):
+            if prior.status is not AttemptStatus.RUNNING:
+                continue
+            prior = self._reconcile_open_attempt(index, prior)
+            self._state.attempt_history[index] = prior.model_copy(
+                update={
+                    "status": AttemptStatus.INTERRUPTED,
+                    "finished_at": now,
+                    "cost": prior.cost
+                    or AttemptCost(
+                        availability=AttemptCostAvailability.UNAVAILABLE,
+                        note="Attempt ended before cost finalization.",
+                    ),
+                    "error": "Attempt was resumed before reaching a terminal outcome.",
+                }
+            )
+            if prior.cost is None:
+                self._state.cost_breakdown = None
+                self._state.estimated_cost_usd = None
+                self._state.cost_estimation_note = (
+                    "Cost unavailable because an earlier attempt was interrupted "
+                    "before cost finalization."
+                )
+
+        next_number = (
+            max(
+                (item.attempt_number for item in self.attempt_history),
+                default=self._state.attempt_number,
+            )
+            + 1
+        )
+        attempt_id = f"{self._state.run_id}-attempt-{uuid.uuid4().hex}"
+        self._state.attempt_history.append(
+            AttemptRecord(
+                attempt_number=next_number,
+                attempt_id=attempt_id,
+                status=AttemptStatus.RUNNING,
+                started_at=now,
+            )
+        )
+        self._state.attempt_number = next_number
+        self._state.attempt_id = attempt_id
+        self._state.attempt_started_at = now
         self.save()
-        return self._state.attempt_id
+        return attempt_id
+
+    def finish_attempt(
+        self,
+        status: AttemptStatus | str,
+        *,
+        error: str | Exception | None = None,
+        finished_at: datetime | None = None,
+    ) -> AttemptRecord | None:
+        """Persist the terminal outcome of the active attempt exactly once."""
+
+        terminal_status = AttemptStatus(status)
+        if terminal_status is AttemptStatus.RUNNING:
+            raise ValueError("finish_attempt requires a terminal status")
+        index = self._active_attempt_index()
+        if index is None:
+            return None
+        current = self.attempt_history[index]
+        message = None
+        if error is not None:
+            message = str(error).strip() or error.__class__.__name__
+        terminal = current.model_copy(
+            update={
+                "status": terminal_status,
+                "finished_at": finished_at or datetime.now(UTC),
+                "cost": current.cost
+                or AttemptCost(
+                    availability=AttemptCostAvailability.UNAVAILABLE,
+                    note="Cost was not finalized for this attempt.",
+                ),
+                "error": message,
+            }
+        )
+        if terminal.cost is not None and (
+            terminal.cost.availability is AttemptCostAvailability.UNAVAILABLE
+        ):
+            self._state.cost_breakdown = None
+            self._state.estimated_cost_usd = None
+            self._state.cost_estimation_note = terminal.cost.note
+        self._state.attempt_history[index] = terminal
+        self.save()
+        return terminal
+
+    def _active_attempt_index(self) -> int | None:
+        attempt_id = self._state.attempt_id
+        for index in range(len(self.attempt_history) - 1, -1, -1):
+            attempt = self.attempt_history[index]
+            if attempt.status is AttemptStatus.RUNNING and (
+                attempt_id is None or attempt.attempt_id == attempt_id
+            ):
+                return index
+        return None
+
+    def _materialize_legacy_attempt(self) -> None:
+        """Represent pre-R11 singular attempt metadata without recounting it."""
+
+        if self.attempt_history or self._state.attempt_number == 0:
+            return
+        status_map = {
+            RunStatus.COMPLETED: AttemptStatus.COMPLETED,
+            RunStatus.FAILED: AttemptStatus.FAILED,
+            RunStatus.BLOCKED: AttemptStatus.BLOCKED,
+        }
+        status = status_map.get(self._state.status, AttemptStatus.INTERRUPTED)
+        started_at = self._state.attempt_started_at or self._state.created_at
+        cost = self._state_attempt_cost()
+        self._state.attempt_history.append(
+            AttemptRecord(
+                attempt_number=self._state.attempt_number,
+                attempt_id=self._state.attempt_id
+                or f"{self._state.run_id}-legacy-attempt",
+                status=status,
+                started_at=started_at,
+                finished_at=self._state.updated_at,
+                usage_delta=self._state.usage,
+                cost=cost,
+                elapsed_seconds=self._state.elapsed_seconds or 0.0,
+                error=self._state.error
+                if status is not AttemptStatus.COMPLETED
+                else None,
+            )
+        )
+
+    def _state_attempt_cost(self) -> AttemptCost:
+        if self._state.cost_breakdown is not None:
+            return AttemptCost(
+                availability=AttemptCostAvailability.KNOWN,
+                estimated_cost_usd=self._state.cost_breakdown.estimated_cost_usd,
+                pricing_model=self._state.cost_breakdown.pricing_model,
+            )
+        return AttemptCost(
+            availability=AttemptCostAvailability.UNAVAILABLE,
+            note=self._state.cost_estimation_note
+            or "No pricing breakdown was persisted for this attempt.",
+        )
 
     def record_run_metadata(
         self,
@@ -303,6 +449,12 @@ class AnalysisLedger(ToolEventLedger):
             cached_tokens=self.usage.cached_tokens + increment.cached_tokens,
             reasoning_tokens=self.usage.reasoning_tokens + increment.reasoning_tokens,
         )
+        index = self._active_attempt_index()
+        if index is not None:
+            current = self.attempt_history[index]
+            self._state.attempt_history[index] = current.model_copy(
+                update={"usage_delta": self._add_usage(current.usage_delta, increment)}
+            )
         self.save()
         return self.usage
 
@@ -314,8 +466,98 @@ class AnalysisLedger(ToolEventLedger):
         self._state.elapsed_seconds = (self._state.elapsed_seconds or 0.0) + (
             elapsed_seconds
         )
+        index = self._active_attempt_index()
+        if index is not None:
+            current = self.attempt_history[index]
+            self._state.attempt_history[index] = current.model_copy(
+                update={
+                    "elapsed_seconds": current.elapsed_seconds + elapsed_seconds,
+                }
+            )
         self.save()
         return self._state.elapsed_seconds
+
+    @staticmethod
+    def _add_usage(first: ModelUsage, second: ModelUsage) -> ModelUsage:
+        return ModelUsage(
+            requests=first.requests + second.requests,
+            input_tokens=first.input_tokens + second.input_tokens,
+            output_tokens=first.output_tokens + second.output_tokens,
+            total_tokens=first.total_tokens + second.total_tokens,
+            cached_tokens=first.cached_tokens + second.cached_tokens,
+            reasoning_tokens=first.reasoning_tokens + second.reasoning_tokens,
+        )
+
+    def _reconcile_open_attempt(
+        self,
+        index: int,
+        current: AttemptRecord,
+    ) -> AttemptRecord:
+        """Recover deltas persisted just before an interrupted write."""
+
+        other_attempts = [
+            item
+            for item_index, item in enumerate(self.attempt_history)
+            if item_index != index
+        ]
+        other_usage = ModelUsage(
+            requests=sum(item.usage_delta.requests for item in other_attempts),
+            input_tokens=sum(item.usage_delta.input_tokens for item in other_attempts),
+            output_tokens=sum(
+                item.usage_delta.output_tokens for item in other_attempts
+            ),
+            total_tokens=sum(item.usage_delta.total_tokens for item in other_attempts),
+            cached_tokens=sum(
+                item.usage_delta.cached_tokens for item in other_attempts
+            ),
+            reasoning_tokens=sum(
+                item.usage_delta.reasoning_tokens for item in other_attempts
+            ),
+        )
+        if any(
+            getattr(self.usage, field) < getattr(other_usage, field)
+            for field in (
+                "requests",
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+                "cached_tokens",
+                "reasoning_tokens",
+            )
+        ):
+            raise LedgerError("persisted usage is lower than terminal attempt totals")
+        reconciled_usage = ModelUsage(
+            requests=self.usage.requests - other_usage.requests,
+            input_tokens=self.usage.input_tokens - other_usage.input_tokens,
+            output_tokens=self.usage.output_tokens - other_usage.output_tokens,
+            total_tokens=self.usage.total_tokens - other_usage.total_tokens,
+            cached_tokens=self.usage.cached_tokens - other_usage.cached_tokens,
+            reasoning_tokens=self.usage.reasoning_tokens - other_usage.reasoning_tokens,
+        )
+        elapsed = current.elapsed_seconds
+        other_elapsed = sum(item.elapsed_seconds for item in other_attempts)
+        if self._state.elapsed_seconds is None:
+            # A crash can occur before the optional cumulative wall-clock
+            # field is written. Recover it from the append-only deltas so a
+            # later terminal save remains self-consistent.
+            self._state.elapsed_seconds = other_elapsed + elapsed
+        else:
+            if self._state.elapsed_seconds + 1e-9 < other_elapsed:
+                raise LedgerError(
+                    "persisted elapsed time is lower than terminal attempt totals"
+                )
+            elapsed = max(self._state.elapsed_seconds - other_elapsed, 0.0)
+        if (
+            current.usage_delta != reconciled_usage
+            or abs(current.elapsed_seconds - elapsed) > 1e-9
+        ):
+            current = current.model_copy(
+                update={
+                    "usage_delta": reconciled_usage,
+                    "elapsed_seconds": elapsed,
+                }
+            )
+        return current
 
     def record_cost_estimate(
         self,
@@ -376,6 +618,19 @@ class AnalysisLedger(ToolEventLedger):
                     output_per_1m=output_cost_per_1k_tokens * 1_000,
                 )
 
+        index = self._active_attempt_index()
+        prior_unknown_cost = any(
+            item.status is not AttemptStatus.RUNNING
+            and (
+                item.cost is None
+                or item.cost.availability is AttemptCostAvailability.UNAVAILABLE
+            )
+            for item_index, item in enumerate(self.attempt_history)
+            if item_index != index
+        )
+        resolved_pricing_model = (
+            pricing_model or self._state.model or "configured-model"
+        )
         if pricing is None:
             self._state.cost_breakdown = None
             self._state.estimated_cost_usd = None
@@ -383,17 +638,44 @@ class AnalysisLedger(ToolEventLedger):
                 "Cost estimate unavailable: model pricing rates were not configured"
                 f" for {self._state.model or 'the configured model'}."
             )
+        elif prior_unknown_cost:
+            self._state.cost_breakdown = None
+            self._state.estimated_cost_usd = None
+            self._state.cost_estimation_note = (
+                "Cost estimate unavailable because an earlier attempt has unknown cost."
+            )
         else:
             breakdown = calculate_cost_breakdown(
                 self.usage,
                 pricing,
-                pricing_model=pricing_model or self._state.model or "configured-model",
+                pricing_model=resolved_pricing_model,
             )
             self._state.cost_breakdown = breakdown
             self._state.estimated_cost_usd = breakdown.estimated_cost_usd
             self._state.cost_estimation_note = (
                 "Estimated from configured uncached-input, cached-input, and output "
                 "token rates; provider billing may differ."
+            )
+        if index is not None:
+            current = self.attempt_history[index]
+            if pricing is None:
+                attempt_cost = AttemptCost(
+                    availability=AttemptCostAvailability.UNAVAILABLE,
+                    note=self._state.cost_estimation_note,
+                )
+            else:
+                attempt_breakdown = calculate_cost_breakdown(
+                    current.usage_delta,
+                    pricing,
+                    pricing_model=resolved_pricing_model,
+                )
+                attempt_cost = AttemptCost(
+                    availability=AttemptCostAvailability.KNOWN,
+                    estimated_cost_usd=attempt_breakdown.estimated_cost_usd,
+                    pricing_model=attempt_breakdown.pricing_model,
+                )
+            self._state.attempt_history[index] = current.model_copy(
+                update={"cost": attempt_cost}
             )
         self.save()
         return self._state.estimated_cost_usd
@@ -566,6 +848,7 @@ class AnalysisLedger(ToolEventLedger):
     def append_tool_event(self, event: ToolEvent) -> None:
         """Append a structured tool event with a unique identifier."""
 
+        event = self._bind_event_attempt(event)
         self._ensure_unique(
             "tool event", event.id, (item.id for item in self.tool_events)
         )
@@ -575,6 +858,7 @@ class AnalysisLedger(ToolEventLedger):
     def append_agent_event(self, event: AgentEvent) -> None:
         """Append an agent invocation trace entry with a unique identifier."""
 
+        event = self._bind_event_attempt(event)
         self._ensure_unique(
             "agent event", event.id, (item.id for item in self.agent_events)
         )
@@ -591,12 +875,14 @@ class AnalysisLedger(ToolEventLedger):
         objective: str | None = None,
         output_type: str | None = None,
         error: str | None = None,
+        attempt_id: str | None = None,
     ) -> AgentEvent:
         """Create and persist a concise agent invocation trace entry."""
 
         completed_at = datetime.now(UTC)
         event = AgentEvent(
             id=f"agent-{uuid.uuid4().hex}",
+            attempt_id=attempt_id,
             agent_name=agent_name,
             agent_role=agent_role,
             status=status,
@@ -608,6 +894,18 @@ class AnalysisLedger(ToolEventLedger):
             error=error,
         )
         self.append_agent_event(event)
+        return event
+
+    def _bind_event_attempt(self, event: ToolEvent | AgentEvent):
+        active_attempt_id = self._state.attempt_id
+        if active_attempt_id is None:
+            return event
+        if event.attempt_id is not None and event.attempt_id != active_attempt_id:
+            raise LedgerConflictError(
+                f"event {event.id} belongs to a different attempt"
+            )
+        if event.attempt_id is None:
+            return event.model_copy(update={"attempt_id": active_attempt_id})
         return event
 
     def record_tool_event(self, event: ToolEvent) -> None:

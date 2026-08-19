@@ -35,7 +35,14 @@ from evaluation.workspace_identity import (
     load_workspace_identity,
     workspace_identity_path,
 )
-from schemas.run_state import CostBreakdown, ModelUsage
+from orchestration.ledger import AnalysisLedger
+from schemas.run_state import (
+    AttemptStatus,
+    CostBreakdown,
+    ModelUsage,
+    ToolEvent,
+    ToolEventStatus,
+)
 
 FIXED_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 SCENARIO_ID = "meaningful-ab-treatment-effect"
@@ -718,6 +725,54 @@ def test_known_cost_pilot_rejects_pricing_tamper(tmp_path):
             require_pilot=True,
             pilot_path=pilot_path,
         )
+
+
+def test_benchmark_record_exposes_reconciled_attempt_history(tmp_path):
+    def execute(cell, workspace):
+        ledger = AnalysisLedger(
+            workspace,
+            run_id=cell.run_id,
+            objective=cell.scenario.metadata.user_question,
+        )
+        ledger.begin_attempt()
+        ledger.record_model_usage(
+            ModelUsage(
+                requests=1,
+                input_tokens=10,
+                output_tokens=4,
+                total_tokens=14,
+            )
+        )
+        ledger.record_elapsed(1.0)
+        ledger.append_tool_event(
+            ToolEvent(
+                id=f"tool-{cell.run_id}",
+                tool_name="run_sql",
+                status=ToolEventStatus.SUCCEEDED,
+                started_at=FIXED_TIME,
+                completed_at=FIXED_TIME,
+            )
+        )
+        ledger.finish_attempt(AttemptStatus.COMPLETED)
+        return BenchmarkCellResult(
+            lifecycle=LifecycleOutcome(status=LifecycleStatus.COMPLETED),
+            workspace=workspace,
+            state=ledger.state,
+            evaluator_result=_evaluated(cell),
+            started_at=FIXED_TIME,
+            finished_at=FIXED_TIME,
+        )
+
+    runner = _runner(tmp_path, execute)
+    manifest_path = _plan(runner, tmp_path, repetitions=1)
+    summary = runner.execute(manifest_path)
+    record = summary.manifest.run_records[0]
+
+    assert len(record.attempt_history) == 1
+    assert record.attempt_history[0].attempt_id.startswith(f"{record.run_id}-attempt-")
+    assert record.attempt_history[0].status is AttemptStatus.COMPLETED
+    assert record.attempt_history[0].usage_delta.requests == record.usage.requests
+    assert record.attempt_history[0].elapsed_seconds == record.latency.elapsed_seconds
 
 
 def test_benchmark_workspace_persists_manifest_bound_source_identity(tmp_path):

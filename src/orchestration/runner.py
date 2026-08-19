@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from schemas.run_state import (
     AnalysisRunState,
     Artifact,
     ArtifactKind,
+    AttemptStatus,
     RunBudget,
     RunStatus,
 )
@@ -166,6 +168,9 @@ class AnalysisRunner:
         active_agent: tuple[str, AgentRole, str] | None = None
         active_agent_recorded = False
         runtime_metadata_finalized = False
+        attempt_terminal_status: AttemptStatus | None = None
+        attempt_terminal_error: str | None = None
+        attempt_finalized = False
 
         try:
             run_workspace = run_workspace or self._open_or_create_workspace(
@@ -481,8 +486,10 @@ class AnalysisRunner:
             )
             if constrained:
                 ledger.set_status(RunStatus.BLOCKED)
+                attempt_terminal_status = AttemptStatus.BLOCKED
             else:
                 ledger.set_status(RunStatus.COMPLETED)
+                attempt_terminal_status = AttemptStatus.COMPLETED
             return AnalysisRunResult(
                 status=ledger.state.status,
                 workspace=run_workspace,
@@ -506,6 +513,8 @@ class AnalysisRunner:
                         objective=agent_objective,
                         error=message,
                     )
+                attempt_terminal_status = AttemptStatus.FAILED
+                attempt_terminal_error = message
                 ledger.mark_failed(message)
             return AnalysisRunResult(
                 status=RunStatus.FAILED,
@@ -526,6 +535,22 @@ class AnalysisRunner:
                     # Do not mask a primary lifecycle or persistence error with a
                     # final metadata-write failure.
                     pass
+            if ledger is not None and not attempt_finalized:
+                pending = sys.exc_info()[1]
+                if attempt_terminal_status is None and pending is not None:
+                    attempt_terminal_status = AttemptStatus.INTERRUPTED
+                    attempt_terminal_error = f"{type(pending).__name__}: {pending}"
+                if attempt_terminal_status is not None:
+                    try:
+                        ledger.finish_attempt(
+                            attempt_terminal_status,
+                            error=attempt_terminal_error,
+                        )
+                        attempt_finalized = True
+                    except Exception:
+                        # Preserve the primary lifecycle result if terminal
+                        # attempt publication itself encounters an I/O error.
+                        pass
 
     def _finalize_runtime_metadata(
         self,

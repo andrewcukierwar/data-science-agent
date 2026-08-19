@@ -2,7 +2,7 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R7–R10
+**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R7–R11
 remediations implemented; paid benchmark pending.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
@@ -1436,17 +1436,17 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 350 passed, 3 Docker integration tests
+full local verification completed with 355 passed, 3 Docker integration tests
 skipped, and 13 opt-in live tests deselected; Ruff lint and formatting checks
 passed. This status describes the
 implementation, not an architecture-performance result.
 
 R1–R5 have initial implementations, but the 2026-08-18 follow-up review found
 residual validity gaps. R2 meets its current acceptance criteria; R1, R4, and
-R5 remain partial, while R3 is closed by R8. R7, R8, R9, and R10 are
+R5 remains partial, while R3 is closed by R8. R7, R8, R9, R10, and R11 are
 implemented with deterministic capability, identity, evaluator-error,
-aggregation, and pilot-binding regressions. R6 and follow-up tasks R11–R12
-must be completed before Task 10.
+aggregation, pilot-binding, and attempt-reconciliation regressions. R6 and
+follow-up task R12 must be completed before Task 10.
 No Phase 2 benchmark manifest
 has been frozen, no paid cost pilot or declared matrix has run, and no
 aggregate architecture comparison has been published. Existing canonical MVP
@@ -1804,7 +1804,10 @@ Acceptance:
 - adversarial tests prove that replacing `null` cost with `0.0` cannot bypass
   the acknowledgement.
 
-#### R11 — Persist append-only attempt history and reconcile totals [P2]
+#### R11 — Persist append-only attempt history and reconcile totals [P2] — Implemented
+
+Status: implemented in the run-state schema, persistent ledger, orchestration
+lifecycle, and benchmark record contract; final R6 preflight remains pending.
 
 Replace the single overwritten attempt ID with typed, append-only attempt
 records. Each attempt should retain its identity, timestamps, terminal outcome,

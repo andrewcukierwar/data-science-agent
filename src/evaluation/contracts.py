@@ -30,6 +30,7 @@ from pydantic import (
 
 from scenarios.definitions.models import GroundTruthMetric, InjectedCondition
 from schemas.metrics import MetricComparisonType
+from schemas.run_state import AttemptCostAvailability, AttemptRecord, AttemptStatus
 from schemas.statistics import StatisticalExpectation
 
 EVALUATION_CONTRACT_VERSION = "1.0"
@@ -433,6 +434,7 @@ class BenchmarkRunRecord(ContractModel):
     usage: UsageSummary
     cost: CostSummary
     latency: LatencySummary
+    attempt_history: tuple[AttemptRecord, ...] = Field(default_factory=tuple)
 
     @model_validator(mode="after")
     def record_is_unambiguous(self) -> BenchmarkRunRecord:
@@ -463,6 +465,64 @@ class BenchmarkRunRecord(ContractModel):
                 "completed runs require a scored, failed, or explicitly errored "
                 "offline evaluation"
             )
+        if self.attempt_history:
+            attempt_ids = [item.attempt_id for item in self.attempt_history]
+            attempt_numbers = [item.attempt_number for item in self.attempt_history]
+            if any(
+                item.status is AttemptStatus.RUNNING for item in self.attempt_history
+            ):
+                raise ValueError("benchmark records cannot retain running attempts")
+            if len(attempt_ids) != len(set(attempt_ids)):
+                raise ValueError("benchmark attempt IDs must be unique")
+            if len(attempt_numbers) != len(set(attempt_numbers)):
+                raise ValueError("benchmark attempt numbers must be unique")
+            if self.attempt_id is not None and self.attempt_id != attempt_ids[-1]:
+                raise ValueError("benchmark attempt_id must match latest attempt")
+            usage = self.usage
+            if (
+                usage.requests
+                != sum(item.usage_delta.requests for item in self.attempt_history)
+                or usage.input_tokens
+                != sum(item.usage_delta.input_tokens for item in self.attempt_history)
+                or usage.cached_tokens
+                != sum(item.usage_delta.cached_tokens for item in self.attempt_history)
+                or usage.output_tokens
+                != sum(item.usage_delta.output_tokens for item in self.attempt_history)
+                or usage.reasoning_tokens
+                != sum(
+                    item.usage_delta.reasoning_tokens for item in self.attempt_history
+                )
+                or usage.total_tokens
+                != sum(item.usage_delta.total_tokens for item in self.attempt_history)
+            ):
+                raise ValueError("benchmark usage must equal attempt deltas")
+            elapsed = sum(item.elapsed_seconds for item in self.attempt_history)
+            if abs(self.latency.elapsed_seconds - elapsed) > 1e-9:
+                raise ValueError("benchmark latency must equal attempt deltas")
+            known_costs = [
+                item.cost
+                for item in self.attempt_history
+                if item.cost is not None
+                and item.cost.availability is AttemptCostAvailability.KNOWN
+            ]
+            has_unknown_cost = any(
+                item.cost is None
+                or item.cost.availability is AttemptCostAvailability.UNAVAILABLE
+                for item in self.attempt_history
+            )
+            if has_unknown_cost:
+                if self.cost.availability is not CostAvailability.UNAVAILABLE:
+                    raise ValueError(
+                        "unknown attempt cost cannot be represented as known total"
+                    )
+            elif known_costs:
+                known_total = sum(item.estimated_cost_usd or 0 for item in known_costs)
+                if (
+                    self.cost.availability is not CostAvailability.KNOWN
+                    or self.cost.estimated_cost_usd is None
+                    or abs(self.cost.estimated_cost_usd - known_total) > 1e-12
+                ):
+                    raise ValueError("benchmark cost must equal attempt cost deltas")
         return self
 
 

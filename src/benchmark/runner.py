@@ -1098,6 +1098,7 @@ class BenchmarkRunner:
                 started_at=started,
                 finished_at=finished,
             ),
+            attempt_history=tuple(getattr(state, "attempt_history", ())),
         )
 
     def _failure_record(

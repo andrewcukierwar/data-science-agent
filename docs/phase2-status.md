@@ -1,10 +1,10 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-19
-**Implementation:** Tasks 1–9 complete; R7–R10 implemented
+**Implementation:** Tasks 1–9 complete; R7–R11 implemented
 
-**Remediation:** R2, R7, R8, R9, and R10 verified; R1/R4/R5 partial; R3 closed
-by R8; R6 and R11–R12 pending before Task 10
+**Remediation:** R2, R7, R8, R9, R10, and R11 verified; R1/R4/R5 partial; R3
+closed by R8; R6 and R12 pending before Task 10
 
 **Experiment:** Task 10 not started; no results published
 
@@ -60,9 +60,10 @@ verified before Task 10 begins:
     availability, and cost before permitting the remaining matrix. Unknown-cost
     acknowledgements are bound to the exact manifest, pilot ID, and record
     digest; tampering, including `null` to `0.0` cost substitution, is rejected.
-11. **R11 — Persist append-only attempt history [P2].** Retain every attempt ID,
-    timing, outcome, usage/cost delta, and event attribution; reconcile those
-    records to cumulative benchmark totals.
+11. **R11 — Persist append-only attempt history [P2] (implemented).** Retain
+    every attempt ID, timing, outcome, usage/cost delta, and event attribution;
+    reconcile those records to cumulative benchmark totals and expose the full
+    history on benchmark records.
 12. **R12 — Make offline outputs non-destructive and atomic [P2].** Refuse input
     paths and existing outputs, consolidate exclusive writes, and retire or
     delegate unsafe legacy CLI behavior.
@@ -75,12 +76,13 @@ verified before Task 10 begins:
 | R2 | Verified | Retain all four failed-evidence adversarial fixtures |
 | R3 | Implemented | Retain identity mismatch and source-tamper regressions in final R6 preflight |
 | R4 | Partial | Retain evaluator-error denominator and taxonomy regressions in final R6 preflight |
-| R5 | Partial | R11 durable attempt history |
+| R5 | Partial | — |
 | R6 | Pending | Remove false documents and rerun the final preflight after R7–R12 |
 | R7 | Implemented | Retain capability/tool-mix regressions; rerun them in final R6 preflight |
 | R8 | Implemented | Retain identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
 | R9 | Implemented | Retain multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
 | R10 | Implemented | Retain pilot/run-record digest, metadata, cost, latency, and unknown-cost acknowledgement regressions |
+| R11 | Implemented | Retain append-only attempt, event-attribution, reconciliation, and interrupted-resume regressions |
 
 ## What is implemented
 
@@ -207,6 +209,13 @@ and persists any unknown-cost acknowledgement against the exact pilot ID and
 record digest. Known pricing must include the recorded pricing model and cost
 breakdown; `null` cost cannot be replaced with `0.0` to bypass the gate.
 
+R11 persists typed attempt records with terminal outcomes, usage and cost
+deltas, elapsed time, and event attribution. Resume appends a new attempt while
+preserving completed history; interrupted attempts are explicitly closed and
+their persisted deltas are not counted again. Benchmark records expose the
+complete attempt history, while unknown attempt cost remains unavailable rather
+than being coerced to zero.
+
 Plan, dry-run, offline evaluation, rescore, and report modes require no
 credentials and intentionally do not load `.env`. The first declared benchmark
 defaults to three repetitions per scenario and architecture; fewer repetitions
@@ -225,7 +234,7 @@ for later README tables without manual transcription.
 The latest full deterministic review run completed with:
 
 ```text
-350 passed, 3 skipped, 13 deselected
+355 passed, 3 skipped, 13 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
@@ -235,7 +244,8 @@ duplicate IDs, failed cells, immutable workspaces, paid-execution guards, pilot
 enforcement, and offline rescoring. The follow-up review is now covered by
 tool-mix neutrality, workspace identity mismatch/tamper, and multi-record
 aggregation-safe rescore fixtures; pilot/run-record tamper and unknown-cost
-acknowledgement fixtures now cover R10.
+acknowledgement fixtures cover R10; attempt history, event attribution, cost
+reconciliation, and interrupted-before-record/partial-write fixtures cover R11.
 
 ## Task 10 is intentionally blocked pending R1–R12
 
