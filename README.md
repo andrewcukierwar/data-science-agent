@@ -9,8 +9,9 @@ complete. Phase 2 Tasks 1–9 and remediations R1–R12 are implemented. Task
 as R13–R19. R13 (strict analytical output schemas, including both live
 architecture canaries), R14 (failure-safe usage and cost accounting), R15
 (single-agent attempt lifecycle), R16 (retained and resumable interrupted
-cells), R17 (outcome-sensitive preflight gate), and R18 (explicit block reasons
-and accurate failure taxonomy) are complete; R19 remains
+cells), R17 (outcome-sensitive preflight gate), R18 (explicit block reasons and
+accurate failure taxonomy), and R19 (stratified pilot-set calibration) are all
+complete; only the reopened R6 preflight rerun remains
 open. The paid matrix remains blocked, the
 final R6 gate is open again,
 and no complete benchmark result is claimed. See
@@ -58,7 +59,7 @@ failure-safe usage and cost accounting (R14, complete), complete single-agent
 attempt lifecycle (R15, complete), interrupted-cell retention and resume (R16,
 complete), outcome-sensitive preflight tests (R17, complete), accurate
 blocked-run taxonomy (R18, complete), and representative pilot calibration
-across
+(R19, complete) across
 architectures/workload classes (R19).
 
 R13 replaces every open-ended dimension map with a typed `MetricDimension`
@@ -107,6 +108,14 @@ follow-up, a schema violation, an agent turn limit, a blocking data-quality
 audit, and an interruption each get their own category. Blocked and cancelled
 runs stay operational observations rather than analytical evaluator failures.
 
+R19 replaces the single first-cell extrapolation with a declared pilot set: one
+stratum per architecture (plus optional named workload strata), one measured
+cell per stratum, and a stratified estimate with an explicit range and a named
+scaling method. Every per-pilot observation is retained and bound to its
+immutable run record, and manifest-declaration and output-schema digests force a
+new manifest version on any model, turn-budget, matrix-size, pilot-set, or
+schema change.
+
 R1–R12 are implemented and covered by architecture-equivalence, capability/tool-
 mix, failed-evidence, workspace identity, evaluator-error, lifecycle,
 aggregation-safe rescore, pilot/run-record binding, append-only attempt
@@ -114,8 +123,8 @@ reconciliation, scenario-document integrity, and exclusive atomic offline-output
 fixtures. The final R6 preflight passed, including all Docker-backed integration
 tests and all 60 declared dry-run cells. The catalog evaluator version is now
 `1.1` for these scoring changes. That historical preflight does not close the
-new gate: R19 must still be implemented and the complete R6 preflight rerun
-before another Task 10 manifest is frozen.
+new gate: the complete R6 preflight must be rerun at this revision before
+another Task 10 manifest is frozen.
 
 Task 10 execution is currently blocked before the paid matrix. Four immutable
 attempts were retained under `.runs/phase2-task10-20260819/`: three attempts
@@ -130,8 +139,8 @@ pilot reports, workspaces, offline-rescored manifests, and aggregate reports
 are retained.
 Because no pilot completed, the full 60-cell matrix was not started. Existing
 canonical MVP workspaces predate the declared Phase 2 matrix and are not
-substitutes for its results. R19 must be completed, the reopened R6 gate
-must pass, and then a new manifest version and pilot set must be frozen.
+substitutes for its results. The reopened R6 gate must pass, and then a new
+manifest version and pilot set must be frozen.
 
 ### Task 10 execution record (blocked)
 
@@ -208,7 +217,7 @@ uv run python scripts/run_benchmark.py plan benchmark.json --model gpt-5.6-luna
 ```
 
 The paid commands below are the current CLI surface, but **must not be run again
-until R19 is complete and the reopened R6 gate passes**. R19 will replace
+until the reopened R6 gate passes**. R19 will replace
 the single first-cell estimate with a declared pilot set containing at least one
 cell per architecture before the remaining immutable cells can resume:
 

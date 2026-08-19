@@ -1438,7 +1438,7 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 472 passed and 16 opt-in live tests
+full local verification completed with 489 passed and 16 opt-in live tests
 deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
@@ -1462,7 +1462,10 @@ append-only attempt. R17 is complete apart from the final R6 rerun: one shared
 outcome-sensitive smoke gate is used by the live tests, the canaries, and
 deterministic failure fixtures, and it rejects all four retained pilots.
 R18 is complete: every non-completion persists a typed reason and detail, and
-only genuine budget exhaustion is categorized as budget. R19 remains open. That review reopens R6: its complete preflight must pass again after
+only genuine budget exhaustion is categorized as budget. R19 is complete: the
+pilot is a declared per-architecture set with a stratified, ranged estimate
+bound to the frozen manifest. All of R13–R19 are implemented; the remaining
+gate is the complete R6 preflight rerun. That review reopens R6: its complete preflight must pass again after
 R13–R19 before another Task 10 manifest is frozen.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
@@ -2157,9 +2160,37 @@ Acceptance:
 - aggregate failure taxonomy reproduces the per-record categories exactly;
 - fixtures cover the major block paths for both architectures.
 
-#### R19 — Calibrate the paid pilot across architectures and workload classes [P2]
+#### R19 — Calibrate the paid pilot across architectures and workload classes [P2] — Implemented
 
-Status: open; blocks the full paid matrix.
+Status: implemented.
+
+Planning now freezes a `PilotSetDeclaration` into the manifest: one stratum per
+declared architecture by default, with explicit workload strata available by
+naming scenario IDs. The manifest validator requires every declared
+architecture to be represented and the strata to partition the declared matrix.
+`run_pilot` measures one cell per stratum and writes a
+`BenchmarkPilotSetReport` (version 2.0) that retains every per-pilot
+observation, bound to its immutable run record by the existing R10 digest rule.
+
+The estimate is a stratified sum, not a single-cell extrapolation: each stratum
+contributes mean-per-cell × its planned cells, with an explicit low/high range
+from the observed per-stratum minimum and maximum, and the scaling method is
+named in the report. If any stratum's cost is unknown, the whole matrix cost is
+published as unavailable rather than silently understated.
+
+The full-run gate verifies every declared stratum, refuses a pilot whose record
+is missing, did not complete, belongs to another stratum, or whose usage, cost,
+or latency no longer reconciles with the immutable record, and recomputes the
+matrix estimate from the retained observations. Two fingerprints enforce
+re-planning: `canonical_manifest_declaration_digest` covers model identity, turn
+budgets, matrix size, and the declared pilot set, and
+`output_schema_fingerprint` covers the production agent output contracts, so any
+such change requires a new manifest version before paid execution. Mutable
+execution state — records, aggregates, status, and the per-scenario source
+identities R8 verifies separately — is excluded so a matrix run cannot
+invalidate its own pilot. Unknown-cost acknowledgement now binds every affected
+pilot record digest, not just one. `tests/test_pilot_set_calibration.py` holds
+the regressions.
 
 Replace a single first-cell linear extrapolation with a declared pilot set that
 can expose material architecture and workload differences. Bind every pilot

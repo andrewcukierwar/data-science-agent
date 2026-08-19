@@ -17,7 +17,7 @@ from benchmark.runner import (
     BenchmarkCellResult,
     BenchmarkError,
     BenchmarkExecutionSummary,
-    BenchmarkPilotReport,
+    BenchmarkPilotSetReport,
     BenchmarkRunner,
     canonical_run_record_digest,
 )
@@ -32,7 +32,7 @@ __all__ = [
     "BenchmarkCellResult",
     "BenchmarkError",
     "BenchmarkExecutionSummary",
-    "BenchmarkPilotReport",
+    "BenchmarkPilotSetReport",
     "BenchmarkRunner",
     "canonical_run_record_digest",
     "AGGREGATION_VERSION",

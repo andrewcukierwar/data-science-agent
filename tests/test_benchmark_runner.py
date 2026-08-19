@@ -626,9 +626,13 @@ def test_cost_pilot_is_persisted_and_required_before_full_resume(tmp_path):
         manifest_path,
         pilot_path=pilot_path,
     )
-    assert len(pilot_summary.executed_run_ids) == 1
     assert pilot_path.is_file()
     assert pilot.planned_cells == 3
+    # R19: one declared stratum per architecture, each retaining its own
+    # observations rather than one cell standing in for the whole matrix.
+    assert len(pilot.strata) == 1
+    assert pilot.scaling_method.value == "stratified_mean"
+    assert pilot.observations
 
     with pytest.raises(BenchmarkError, match="unknown-cost"):
         runner.execute(
@@ -648,15 +652,20 @@ def test_cost_pilot_is_persisted_and_required_before_full_resume(tmp_path):
     assert full.manifest.status.value == "complete"
     assert full.manifest.unknown_cost_acknowledged is True
     assert full.manifest.unknown_cost_pilot_id == pilot.pilot_id
-    pilot_record = next(
+    pilot_run_ids = {observation.run_id for observation in pilot.observations}
+    pilot_records = [
         record
         for record in pilot_summary.manifest.run_records
-        if record.run_id == pilot.run_id
+        if record.run_id in pilot_run_ids
+    ]
+    # The acknowledgement binds every unknown-cost pilot record, not just one.
+    assert set(full.manifest.unknown_cost_pilot_record_digests) == {
+        canonical_run_record_digest(record) for record in pilot_records
+    }
+    assert full.manifest.unknown_cost_pilot_record_digest in (
+        full.manifest.unknown_cost_pilot_record_digests
     )
-    assert full.manifest.unknown_cost_pilot_record_digest == (
-        canonical_run_record_digest(pilot_record)
-    )
-    assert len(full.skipped_run_ids) == 1
+    assert len(full.skipped_run_ids) == len(pilot_run_ids)
     assert len(calls) == 3
 
 
@@ -783,7 +792,9 @@ def test_known_cost_pilot_rejects_pricing_tamper(tmp_path):
     pilot_path = tmp_path / "pilot.json"
     runner.run_pilot(manifest_path, pilot_path=pilot_path)
     payload = json.loads(pilot_path.read_text(encoding="utf-8"))
-    payload["observed_cost"]["pricing_model"] = "tampered-pricing"
+    payload["strata"][0]["observations"][0]["observed_cost"]["pricing_model"] = (
+        "tampered-pricing"
+    )
     pilot_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(BenchmarkError, match="cost"):

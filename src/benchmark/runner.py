@@ -17,6 +17,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
@@ -41,6 +42,8 @@ from evaluation.contracts import (
     LifecycleOutcome,
     LifecycleStatus,
     ManifestStatus,
+    PilotSetDeclaration,
+    PilotStratumDeclaration,
     RunConfiguration,
     ScenarioReference,
     ScoreBreakdown,
@@ -163,6 +166,102 @@ class BenchmarkPilotReport(BaseModel):
     methodology: str = Field(min_length=1)
 
 
+class PilotScalingMethod(StrEnum):
+    """How per-pilot observations are scaled to the remaining matrix."""
+
+    STRATIFIED_MEAN = "stratified_mean"
+
+
+class PilotObservation(BaseModel):
+    """One measured pilot cell, bound to its immutable run record."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stratum_id: str = Field(min_length=1)
+    architecture: str = Field(min_length=1)
+    scenario_id: str = Field(min_length=1)
+    scenario_version: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    record_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observed_requests: int = Field(ge=0)
+    observed_input_tokens: int = Field(ge=0)
+    observed_cached_tokens: int = Field(ge=0)
+    observed_output_tokens: int = Field(ge=0)
+    observed_reasoning_tokens: int = Field(ge=0)
+    observed_total_tokens: int = Field(ge=0)
+    observed_cost: CostSummary
+    observed_cost_usd: float | None = Field(default=None, ge=0)
+    observed_elapsed_seconds: float = Field(ge=0)
+    observed_started_at: datetime
+    observed_finished_at: datetime
+
+
+class PilotStratumEstimate(BaseModel):
+    """Per-stratum observations and the estimate derived from them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stratum_id: str = Field(min_length=1)
+    architecture: str = Field(min_length=1)
+    scenario_ids: tuple[str, ...] = Field(default_factory=tuple)
+    planned_cells: int = Field(ge=1)
+    observations: tuple[PilotObservation, ...] = Field(min_length=1)
+    mean_cost_usd: float | None = Field(default=None, ge=0)
+    min_cost_usd: float | None = Field(default=None, ge=0)
+    max_cost_usd: float | None = Field(default=None, ge=0)
+    estimated_cost_usd: float | None = Field(default=None, ge=0)
+    mean_elapsed_seconds: float = Field(ge=0)
+    min_elapsed_seconds: float = Field(ge=0)
+    max_elapsed_seconds: float = Field(ge=0)
+    estimated_elapsed_seconds: float = Field(ge=0)
+    cost_availability: CostAvailability
+
+
+class BenchmarkPilotSetReport(BaseModel):
+    """A declared pilot set and the stratified estimate derived from it.
+
+    One cell is never presented as representative of the whole matrix: each
+    stratum keeps its own observations, and the matrix estimate is the sum of
+    per-stratum estimates with an explicit range.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    report_version: Literal["2.0"] = "2.0"
+    pilot_id: str = Field(min_length=1)
+    manifest_id: str = Field(min_length=1)
+    manifest_version: str = Field(min_length=1)
+    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    output_schema_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model: str = Field(min_length=1)
+    model_provider: str = Field(min_length=1)
+    run_configuration: RunConfiguration
+    budgets: BudgetConfiguration
+    planned_cells: int = Field(ge=1)
+    scaling_method: PilotScalingMethod = PilotScalingMethod.STRATIFIED_MEAN
+    strata: tuple[PilotStratumEstimate, ...] = Field(min_length=1)
+    estimated_full_matrix_cost_usd: float | None = Field(default=None, ge=0)
+    estimated_full_matrix_cost_low_usd: float | None = Field(default=None, ge=0)
+    estimated_full_matrix_cost_high_usd: float | None = Field(default=None, ge=0)
+    estimated_full_matrix_elapsed_seconds: float = Field(ge=0)
+    estimated_full_matrix_elapsed_low_seconds: float = Field(ge=0)
+    estimated_full_matrix_elapsed_high_seconds: float = Field(ge=0)
+    cost_availability: CostAvailability
+    unknown_cost_record_digests: tuple[str, ...] = Field(default_factory=tuple)
+    created_at: datetime
+    methodology: str = Field(min_length=1)
+
+    @property
+    def observations(self) -> tuple[PilotObservation, ...]:
+        """Every measured pilot cell across all strata."""
+
+        return tuple(
+            observation
+            for stratum in self.strata
+            for observation in stratum.observations
+        )
+
+
 ArchitectureExecutor = Callable[[BenchmarkCell, Workspace], object]
 SourcePreparer = Callable[[ScenarioRegistration, Path], tuple[Path, Path]]
 RunIdFactory = Callable[[str, str, str, str, int], str]
@@ -171,6 +270,230 @@ RuleMap = Mapping[str | tuple[str, str], ScenarioRules]
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def output_schema_fingerprint() -> str:
+    """Hash every production agent output schema.
+
+    A pilot measures a specific structured-output contract. If an agent output
+    type changes, the pilot's token and cost observations describe a different
+    system, so the estimate must not be reused.
+    """
+
+    from agents.output_contract import PRODUCTION_AGENT_OUTPUT_TYPES
+
+    payload = {
+        role.value: output_type.model_json_schema()
+        for role, output_type in sorted(
+            PRODUCTION_AGENT_OUTPUT_TYPES.items(),
+            key=lambda item: item[0].value,
+        )
+    }
+    return sha256(dump_stable_json(payload).encode("utf-8")).hexdigest()
+
+
+def canonical_manifest_declaration_digest(manifest: BenchmarkManifest) -> str:
+    """Hash the frozen declaration a pilot estimate depends on.
+
+    Records, aggregates, and status are excluded: they change as the matrix
+    executes. Model identity, turn budgets, matrix size, and the declared pilot
+    set are included, so changing any of them invalidates existing pilot
+    evidence and requires a new manifest version.
+    """
+
+    payload = manifest.model_dump(mode="json")
+    for mutable in (
+        "status",
+        "run_records",
+        "aggregates",
+        "architecture_comparisons",
+        "unknown_cost_acknowledged",
+        "unknown_cost_pilot_id",
+        "unknown_cost_pilot_record_digest",
+        "unknown_cost_pilot_record_digests",
+        "created_at",
+    ):
+        payload.pop(mutable, None)
+    # Source-file identities are bound to each scenario as its cells run, so
+    # they are mutable during execution. R8 verifies them per workspace; the
+    # declaration digest covers the frozen scenario identity only.
+    for reference in payload.get("scenario_references", []):
+        reference.pop("source_files", None)
+    return sha256(dump_stable_json(payload).encode("utf-8")).hexdigest()
+
+
+def default_pilot_set(
+    architectures: Sequence[str],
+    *,
+    scenario_count: int,
+    repetitions: int,
+) -> PilotSetDeclaration:
+    """Declare one stratum per architecture covering its share of the matrix."""
+
+    cells_per_architecture = scenario_count * repetitions
+    return PilotSetDeclaration(
+        strata=tuple(
+            PilotStratumDeclaration(
+                stratum_id=f"architecture:{architecture}",
+                architecture=architecture,
+                planned_cells=cells_per_architecture,
+            )
+            for architecture in architectures
+        )
+    )
+
+
+def _declared_cell_count(manifest: BenchmarkManifest) -> int:
+    return (
+        len(manifest.scenario_references)
+        * len(manifest.architectures)
+        * manifest.repetitions
+    )
+
+
+def _stratum_estimate(
+    stratum: PilotStratumDeclaration,
+    observations: tuple[PilotObservation, ...],
+) -> PilotStratumEstimate:
+    """Scale one stratum's observations to its share of the matrix."""
+
+    costs = [
+        observation.observed_cost_usd
+        for observation in observations
+        if observation.observed_cost_usd is not None
+    ]
+    known = len(costs) == len(observations)
+    elapsed = [observation.observed_elapsed_seconds for observation in observations]
+    mean_elapsed = sum(elapsed) / len(elapsed)
+    mean_cost = sum(costs) / len(costs) if known and costs else None
+    return PilotStratumEstimate(
+        stratum_id=stratum.stratum_id,
+        architecture=stratum.architecture,
+        scenario_ids=stratum.scenario_ids,
+        planned_cells=stratum.planned_cells,
+        observations=observations,
+        mean_cost_usd=mean_cost,
+        min_cost_usd=min(costs) if known and costs else None,
+        max_cost_usd=max(costs) if known and costs else None,
+        estimated_cost_usd=(
+            mean_cost * stratum.planned_cells if mean_cost is not None else None
+        ),
+        mean_elapsed_seconds=mean_elapsed,
+        min_elapsed_seconds=min(elapsed),
+        max_elapsed_seconds=max(elapsed),
+        estimated_elapsed_seconds=mean_elapsed * stratum.planned_cells,
+        cost_availability=(
+            CostAvailability.KNOWN if known and costs else CostAvailability.UNAVAILABLE
+        ),
+    )
+
+
+def _matrix_estimate(strata: Sequence[PilotStratumEstimate]) -> dict[str, object]:
+    """Sum per-stratum estimates into an explicit matrix range.
+
+    Cost is published only when every stratum has a known cost; one unknown
+    stratum makes the whole matrix estimate unavailable rather than silently
+    understated.
+    """
+
+    known = all(item.cost_availability is CostAvailability.KNOWN for item in strata)
+    return {
+        "estimated_full_matrix_cost_usd": (
+            sum(item.estimated_cost_usd or 0.0 for item in strata) if known else None
+        ),
+        "estimated_full_matrix_cost_low_usd": (
+            sum((item.min_cost_usd or 0.0) * item.planned_cells for item in strata)
+            if known
+            else None
+        ),
+        "estimated_full_matrix_cost_high_usd": (
+            sum((item.max_cost_usd or 0.0) * item.planned_cells for item in strata)
+            if known
+            else None
+        ),
+        "estimated_full_matrix_elapsed_seconds": sum(
+            item.estimated_elapsed_seconds for item in strata
+        ),
+        "estimated_full_matrix_elapsed_low_seconds": sum(
+            item.min_elapsed_seconds * item.planned_cells for item in strata
+        ),
+        "estimated_full_matrix_elapsed_high_seconds": sum(
+            item.max_elapsed_seconds * item.planned_cells for item in strata
+        ),
+        "cost_availability": (
+            CostAvailability.KNOWN if known else CostAvailability.UNAVAILABLE
+        ),
+    }
+
+
+def _require_reconciled_observation(
+    observation: PilotObservation,
+    record: BenchmarkRunRecord,
+) -> None:
+    """Refuse a pilot observation that no longer matches its run record."""
+
+    mismatches = [
+        name
+        for name, observed, recorded in (
+            ("request usage", observation.observed_requests, record.usage.requests),
+            (
+                "input-token usage",
+                observation.observed_input_tokens,
+                record.usage.input_tokens,
+            ),
+            (
+                "cached-token usage",
+                observation.observed_cached_tokens,
+                record.usage.cached_tokens,
+            ),
+            (
+                "output-token usage",
+                observation.observed_output_tokens,
+                record.usage.output_tokens,
+            ),
+            (
+                "reasoning-token usage",
+                observation.observed_reasoning_tokens,
+                record.usage.reasoning_tokens,
+            ),
+            (
+                "total-token usage",
+                observation.observed_total_tokens,
+                record.usage.total_tokens,
+            ),
+            (
+                "latency",
+                observation.observed_elapsed_seconds,
+                record.latency.elapsed_seconds,
+            ),
+            (
+                "latency start",
+                observation.observed_started_at,
+                record.latency.started_at,
+            ),
+            (
+                "latency finish",
+                observation.observed_finished_at,
+                record.latency.finished_at,
+            ),
+            ("cost breakdown", observation.observed_cost, record.cost),
+            (
+                "cost",
+                observation.observed_cost_usd,
+                record.cost.estimated_cost_usd,
+            ),
+        )
+        if observed != recorded
+    ]
+    if mismatches:
+        raise BenchmarkError(
+            f"pilot report {mismatches[0]} does not match the run record for "
+            f"{observation.run_id}"
+        )
+    if record.cost.availability is CostAvailability.KNOWN and (
+        record.cost.estimated_cost_usd is None or not record.cost.pricing_model
+    ):
+        raise BenchmarkError("known pilot pricing requires a cost and pricing model")
 
 
 def canonical_run_record_digest(record: BenchmarkRunRecord) -> str:
@@ -391,6 +714,7 @@ class BenchmarkRunner:
         execution_mode: ExecutionMode = ExecutionMode.LIVE,
         budgets: BudgetConfiguration | None = None,
         repetition_justification: str | None = None,
+        pilot_set: PilotSetDeclaration | None = None,
     ) -> BenchmarkManifest:
         """Create a frozen matrix declaration without generating data or agents."""
 
@@ -483,6 +807,12 @@ class BenchmarkRunner:
             ),
             budgets=budgets or _default_budgets(),
             aggregation_version=AGGREGATION_VERSION,
+            pilot_set=pilot_set
+            or default_pilot_set(
+                selected_architectures,
+                scenario_count=len(references),
+                repetitions=repetitions,
+            ),
         )
 
     def persist_plan(
@@ -507,6 +837,7 @@ class BenchmarkRunner:
         pilot_path: str | Path | None = None,
         unknown_cost: bool = False,
         max_cells: int | None = None,
+        only_run_ids: Sequence[str] | None = None,
     ) -> BenchmarkExecutionSummary:
         """Execute missing cells, preserving every existing run record."""
 
@@ -548,7 +879,7 @@ class BenchmarkRunner:
                 allow_unknown_cost=(unknown_cost or manifest.unknown_cost_acknowledged),
             )
             if (
-                pilot.observed_cost_usd is None
+                pilot.unknown_cost_record_digests
                 and not manifest.unknown_cost_acknowledged
             ):
                 if not unknown_cost:
@@ -556,11 +887,18 @@ class BenchmarkRunner:
                         "pilot cost is unknown; pass the explicit unknown-cost "
                         "acknowledgement before continuing beyond the pilot"
                     )
+                # Bind the acknowledgement to every affected pilot record, not
+                # just one, so a later record cannot be swapped in silently.
                 manifest = manifest.model_copy(
                     update={
                         "unknown_cost_acknowledged": True,
                         "unknown_cost_pilot_id": pilot.pilot_id,
-                        "unknown_cost_pilot_record_digest": pilot.record_digest,
+                        "unknown_cost_pilot_record_digest": (
+                            pilot.unknown_cost_record_digests[0]
+                        ),
+                        "unknown_cost_pilot_record_digests": (
+                            pilot.unknown_cost_record_digests
+                        ),
                     }
                 )
 
@@ -581,7 +919,10 @@ class BenchmarkRunner:
         interrupted = False
         processed = 0
         try:
+            selected = set(only_run_ids) if only_run_ids is not None else None
             for cell in self._cells(manifest):
+                if selected is not None and cell.run_id not in selected:
+                    continue
                 if cell.key in existing_by_key and not self._is_resumable_cell(
                     existing_by_key[cell.key],
                     resume=resume,
@@ -668,8 +1009,13 @@ class BenchmarkRunner:
         allow_paid: bool = False,
         environment: Mapping[str, str] | None = None,
         pilot_path: str | Path | None = None,
-    ) -> tuple[BenchmarkExecutionSummary, BenchmarkPilotReport]:
-        """Run one missing cell and persist a scaled full-matrix cost estimate."""
+    ) -> tuple[BenchmarkExecutionSummary, BenchmarkPilotSetReport]:
+        """Run the declared pilot set and persist a stratified estimate.
+
+        One cell per declared stratum is measured, so architecture and workload
+        differences are observable instead of being hidden behind a single
+        first-cell extrapolation.
+        """
 
         path = Path(manifest_path).expanduser().resolve()
         pilot_file = Path(pilot_path).expanduser().resolve() if pilot_path else None
@@ -677,72 +1023,166 @@ class BenchmarkRunner:
             pilot_file = path.with_name(path.stem + ".pilot.json")
         if pilot_file.exists():
             raise BenchmarkError(f"pilot report already exists: {pilot_file}")
-        summary = self.execute(
-            path,
-            resume=True,
-            allow_paid=allow_paid,
-            environment=environment,
-            require_pilot=False,
-            max_cells=1,
-        )
-        if not summary.executed_run_ids:
-            raise BenchmarkError("pilot found no missing benchmark cell to execute")
-        run_id = summary.executed_run_ids[0]
-        record = next(
-            record for record in summary.manifest.run_records if record.run_id == run_id
-        )
-        if record.lifecycle.status is LifecycleStatus.CANCELLED:
-            # An interrupted cell is retained as an operational record, but it
-            # measured nothing: publishing it as a cost pilot would scale a
-            # partial observation across the whole matrix.
+
+        manifest = load_manifest(path)
+        pilot_set = manifest.pilot_set
+        if pilot_set is None:
             raise BenchmarkError(
-                "pilot cell was interrupted before completion; resume the "
-                "interrupted cell before publishing a cost pilot"
+                "the manifest declares no pilot set; re-plan the benchmark so "
+                "every architecture has at least one declared pilot stratum"
             )
-        total_cells = (
-            len(summary.manifest.scenario_references)
-            * len(summary.manifest.architectures)
-            * summary.manifest.repetitions
-        )
-        scale = float(total_cells)
-        observed_cost = record.cost.estimated_cost_usd
-        report = BenchmarkPilotReport(
-            pilot_id=f"pilot-{uuid.uuid4().hex}",
-            manifest_id=summary.manifest.manifest_id,
-            run_id=run_id,
-            record_digest=canonical_run_record_digest(record),
-            model=summary.manifest.model,
-            model_provider=summary.manifest.model_provider,
-            run_configuration=summary.manifest.run_configuration,
-            budgets=summary.manifest.budgets,
-            planned_cells=total_cells,
-            observed_requests=record.usage.requests,
-            observed_input_tokens=record.usage.input_tokens,
-            observed_cached_tokens=record.usage.cached_tokens,
-            observed_output_tokens=record.usage.output_tokens,
-            observed_reasoning_tokens=record.usage.reasoning_tokens,
-            observed_total_tokens=record.usage.total_tokens,
-            observed_cost_usd=observed_cost,
-            observed_cost=record.cost,
-            estimated_full_matrix_cost_usd=(
-                observed_cost * scale if observed_cost is not None else None
-            ),
-            observed_elapsed_seconds=record.latency.elapsed_seconds,
-            observed_started_at=record.latency.started_at,
-            observed_finished_at=record.latency.finished_at,
-            estimated_full_matrix_elapsed_seconds=record.latency.elapsed_seconds
-            * scale,
-            created_at=_now(),
-            methodology=(
-                "One declared matrix cell was measured; full-matrix estimates are "
-                "linear scaling only and must be reviewed before paid execution."
-            ),
-        )
+
+        summary: BenchmarkExecutionSummary | None = None
+        executed: list[str] = []
+        for stratum in pilot_set.strata:
+            manifest = load_manifest(path)
+            target = self._next_pilot_cell(manifest, stratum)
+            if target is None:
+                raise BenchmarkError(
+                    f"pilot stratum {stratum.stratum_id} has no remaining "
+                    "declared cell to measure"
+                )
+            summary = self.execute(
+                path,
+                resume=True,
+                allow_paid=allow_paid,
+                environment=environment,
+                require_pilot=False,
+                max_cells=1,
+                only_run_ids=(target.run_id,),
+            )
+            if target.run_id not in summary.executed_run_ids:
+                raise BenchmarkError(
+                    f"pilot stratum {stratum.stratum_id} did not execute its "
+                    f"declared cell {target.run_id}"
+                )
+            executed.append(target.run_id)
+
+        assert summary is not None
+        manifest = load_manifest(path)
+        report = self._build_pilot_set_report(manifest, pilot_set, executed)
         self._persist_text_exclusive(
             pilot_file,
             dump_stable_json(report.model_dump(mode="json")),
         )
         return summary, report
+
+    @staticmethod
+    def _stratum_matches(
+        stratum: PilotStratumDeclaration,
+        *,
+        architecture: str,
+        scenario_id: str,
+    ) -> bool:
+        """Return whether one declared cell belongs to a pilot stratum."""
+
+        if architecture != stratum.architecture:
+            return False
+        return not stratum.scenario_ids or scenario_id in stratum.scenario_ids
+
+    def _next_pilot_cell(
+        self,
+        manifest: BenchmarkManifest,
+        stratum: PilotStratumDeclaration,
+    ) -> BenchmarkCell | None:
+        """Return the first unrecorded declared cell inside a stratum."""
+
+        recorded = {record.run_id for record in manifest.run_records}
+        for cell in self._cells(manifest):
+            if cell.run_id in recorded:
+                continue
+            if self._stratum_matches(
+                stratum,
+                architecture=cell.architecture,
+                scenario_id=cell.scenario.scenario_id,
+            ):
+                return cell
+        return None
+
+    def _build_pilot_set_report(
+        self,
+        manifest: BenchmarkManifest,
+        pilot_set: PilotSetDeclaration,
+        executed_run_ids: Sequence[str],
+    ) -> BenchmarkPilotSetReport:
+        """Derive the stratified estimate from the measured pilot cells."""
+
+        records = {record.run_id: record for record in manifest.run_records}
+        strata: list[PilotStratumEstimate] = []
+        unknown_digests: list[str] = []
+        for stratum in pilot_set.strata:
+            observations: list[PilotObservation] = []
+            for run_id in executed_run_ids:
+                record = records.get(run_id)
+                if record is None:
+                    continue
+                if not self._stratum_matches(
+                    stratum,
+                    architecture=record.architecture,
+                    scenario_id=record.scenario_id,
+                ):
+                    continue
+                if record.lifecycle.status is not LifecycleStatus.COMPLETED:
+                    raise BenchmarkError(
+                        f"pilot cell {run_id} did not complete "
+                        f"({record.lifecycle.status.value}); resolve it before "
+                        "publishing a cost pilot"
+                    )
+                digest = canonical_run_record_digest(record)
+                if record.cost.estimated_cost_usd is None:
+                    unknown_digests.append(digest)
+                observations.append(
+                    PilotObservation(
+                        stratum_id=stratum.stratum_id,
+                        architecture=record.architecture,
+                        scenario_id=record.scenario_id,
+                        scenario_version=record.scenario_version,
+                        run_id=record.run_id,
+                        record_digest=digest,
+                        observed_requests=record.usage.requests,
+                        observed_input_tokens=record.usage.input_tokens,
+                        observed_cached_tokens=record.usage.cached_tokens,
+                        observed_output_tokens=record.usage.output_tokens,
+                        observed_reasoning_tokens=record.usage.reasoning_tokens,
+                        observed_total_tokens=record.usage.total_tokens,
+                        observed_cost=record.cost,
+                        observed_cost_usd=record.cost.estimated_cost_usd,
+                        observed_elapsed_seconds=record.latency.elapsed_seconds,
+                        observed_started_at=record.latency.started_at,
+                        observed_finished_at=record.latency.finished_at,
+                    )
+                )
+            if not observations:
+                raise BenchmarkError(
+                    f"pilot stratum {stratum.stratum_id} produced no observation"
+                )
+            strata.append(_stratum_estimate(stratum, tuple(observations)))
+
+        return BenchmarkPilotSetReport(
+            pilot_id=f"pilot-{uuid.uuid4().hex}",
+            manifest_id=manifest.manifest_id,
+            manifest_version=manifest.manifest_version,
+            manifest_digest=canonical_manifest_declaration_digest(manifest),
+            output_schema_fingerprint=output_schema_fingerprint(),
+            model=manifest.model,
+            model_provider=manifest.model_provider,
+            run_configuration=manifest.run_configuration,
+            budgets=manifest.budgets,
+            planned_cells=_declared_cell_count(manifest),
+            scaling_method=PilotScalingMethod.STRATIFIED_MEAN,
+            strata=tuple(strata),
+            **_matrix_estimate(strata),
+            unknown_cost_record_digests=tuple(sorted(set(unknown_digests))),
+            created_at=_now(),
+            methodology=(
+                "Each declared pilot stratum contributed at least one measured "
+                "cell. Full-matrix cost and latency are the sum of per-stratum "
+                "mean-per-cell estimates, with a low/high range from the "
+                "observed per-stratum minimum and maximum. Per-pilot "
+                "observations are retained; no single cell is treated as "
+                "representative of the matrix."
+            ),
+        )
 
     def rescore(
         self,
@@ -1452,7 +1892,14 @@ class BenchmarkRunner:
         pilot_path: str | Path | None,
         *,
         allow_unknown_cost: bool = False,
-    ) -> BenchmarkPilotReport:
+    ) -> BenchmarkPilotSetReport:
+        """Verify every declared pilot record before the full matrix runs.
+
+        The gate refuses a pilot set that is missing a stratum, references a
+        record that did not complete, or whose observations no longer reconcile
+        with the immutable run records or the frozen manifest declaration.
+        """
+
         path = (
             Path(pilot_path).expanduser().resolve()
             if pilot_path is not None
@@ -1463,16 +1910,36 @@ class BenchmarkRunner:
                 f"cost-estimation pilot is required before the full matrix: {path}"
             )
         try:
-            report = BenchmarkPilotReport.model_validate_json(
+            report = BenchmarkPilotSetReport.model_validate_json(
                 path.read_text(encoding="utf-8")
             )
         except (OSError, ValidationError) as error:
             raise BenchmarkError(
                 f"invalid cost-estimation pilot report: {error}"
             ) from error
+
         manifest = load_manifest(manifest_path)
+        pilot_set = manifest.pilot_set
+        if pilot_set is None:
+            raise BenchmarkError("the manifest declares no pilot set")
         if report.manifest_id != manifest.manifest_id:
             raise BenchmarkError("pilot report belongs to a different manifest")
+        if report.manifest_version != manifest.manifest_version:
+            raise BenchmarkError(
+                "pilot report was produced for a different manifest version"
+            )
+        # Any model, budget, turn-limit, matrix-size, or pilot-set change alters
+        # the frozen declaration digest and requires a new manifest version.
+        if report.manifest_digest != canonical_manifest_declaration_digest(manifest):
+            raise BenchmarkError(
+                "the manifest declaration changed after the pilot was measured; "
+                "freeze a new manifest version before paid execution"
+            )
+        if report.output_schema_fingerprint != output_schema_fingerprint():
+            raise BenchmarkError(
+                "agent output schemas changed after the pilot was measured; "
+                "freeze a new manifest version and re-run the pilot set"
+            )
         if (
             report.model != manifest.model
             or report.model_provider != manifest.model_provider
@@ -1486,95 +1953,93 @@ class BenchmarkRunner:
             )
         if report.budgets != manifest.budgets:
             raise BenchmarkError("pilot report budgets do not match the manifest")
-        expected_cells = (
-            len(manifest.scenario_references)
-            * len(manifest.architectures)
-            * manifest.repetitions
-        )
-        if report.planned_cells != expected_cells:
+        if report.planned_cells != _declared_cell_count(manifest):
             raise BenchmarkError("pilot report does not match the declared matrix")
-        pilot_record = next(
-            (
-                record
-                for record in manifest.run_records
-                if record.run_id == report.run_id
-            ),
-            None,
-        )
-        if pilot_record is None:
-            raise BenchmarkError("pilot report does not reference a recorded cell")
-        if pilot_record.lifecycle.status is not LifecycleStatus.COMPLETED:
+
+        declared_strata = {item.stratum_id: item for item in pilot_set.strata}
+        reported_strata = {item.stratum_id: item for item in report.strata}
+        if set(declared_strata) != set(reported_strata):
+            missing = sorted(set(declared_strata) - set(reported_strata))
             raise BenchmarkError(
-                "cost-estimation pilot did not complete successfully; "
-                "full matrix execution is blocked"
+                "pilot report does not cover every declared stratum; missing: "
+                + (", ".join(missing) or "none")
             )
-        expected_digest = canonical_run_record_digest(pilot_record)
-        if report.record_digest != expected_digest:
-            raise BenchmarkError("pilot report run-record digest does not match")
-        if report.observed_requests != pilot_record.usage.requests:
+        covered = {item.architecture for item in report.strata}
+        if covered != set(manifest.architectures):
             raise BenchmarkError(
-                "pilot report request usage does not match the run record"
+                "the pilot set must measure at least one cell per architecture"
             )
-        if report.observed_input_tokens != pilot_record.usage.input_tokens:
-            raise BenchmarkError(
-                "pilot report input-token usage does not match the run record"
-            )
-        if report.observed_cached_tokens != pilot_record.usage.cached_tokens:
-            raise BenchmarkError(
-                "pilot report cached-token usage does not match the run record"
-            )
-        if report.observed_output_tokens != pilot_record.usage.output_tokens:
-            raise BenchmarkError(
-                "pilot report output-token usage does not match the run record"
-            )
-        if report.observed_reasoning_tokens != pilot_record.usage.reasoning_tokens:
-            raise BenchmarkError(
-                "pilot report reasoning-token usage does not match the run record"
-            )
-        if report.observed_total_tokens != pilot_record.usage.total_tokens:
-            raise BenchmarkError(
-                "pilot report total-token usage does not match the run record"
-            )
-        if report.observed_elapsed_seconds != pilot_record.latency.elapsed_seconds:
-            raise BenchmarkError("pilot report latency does not match the run record")
-        if (
-            report.observed_started_at != pilot_record.latency.started_at
-            or report.observed_finished_at != pilot_record.latency.finished_at
-        ):
-            raise BenchmarkError(
-                "pilot report latency timestamps do not match the run record"
-            )
-        if report.observed_cost != pilot_record.cost:
-            raise BenchmarkError(
-                "pilot report cost breakdown does not match the run record"
-            )
-        if report.observed_cost_usd != pilot_record.cost.estimated_cost_usd:
-            raise BenchmarkError("pilot report cost does not match the run record")
-        recorded_cost = pilot_record.cost.estimated_cost_usd
-        expected_cost = (
-            recorded_cost * expected_cells if recorded_cost is not None else None
-        )
-        if report.estimated_full_matrix_cost_usd != expected_cost:
-            raise BenchmarkError("pilot full-matrix cost estimate is inconsistent")
-        expected_elapsed = pilot_record.latency.elapsed_seconds * expected_cells
-        if report.estimated_full_matrix_elapsed_seconds != expected_elapsed:
-            raise BenchmarkError("pilot full-matrix latency estimate is inconsistent")
-        if pilot_record.cost.availability is CostAvailability.KNOWN:
-            if (
-                pilot_record.cost.estimated_cost_usd is None
-                or not pilot_record.cost.pricing_model
-            ):
+
+        records = {record.run_id: record for record in manifest.run_records}
+        unknown_digests: list[str] = []
+        for stratum_id, estimate in sorted(reported_strata.items()):
+            declared = declared_strata[stratum_id]
+            if estimate.planned_cells != declared.planned_cells:
                 raise BenchmarkError(
-                    "known pilot pricing requires a cost and pricing model"
+                    f"pilot stratum {stratum_id} planned cells do not match the "
+                    "declaration"
                 )
-        if manifest.unknown_cost_acknowledged and (
-            report.pilot_id != manifest.unknown_cost_pilot_id
-            or report.record_digest != manifest.unknown_cost_pilot_record_digest
-        ):
+            if estimate.architecture != declared.architecture:
+                raise BenchmarkError(
+                    f"pilot stratum {stratum_id} architecture does not match the "
+                    "declaration"
+                )
+            for observation in estimate.observations:
+                record = records.get(observation.run_id)
+                if record is None:
+                    raise BenchmarkError(
+                        f"pilot observation {observation.run_id} does not "
+                        "reference a recorded cell"
+                    )
+                if record.lifecycle.status is not LifecycleStatus.COMPLETED:
+                    raise BenchmarkError(
+                        f"pilot cell {observation.run_id} did not complete "
+                        "successfully; full matrix execution is blocked"
+                    )
+                if not BenchmarkRunner._stratum_matches(
+                    declared,
+                    architecture=record.architecture,
+                    scenario_id=record.scenario_id,
+                ):
+                    raise BenchmarkError(
+                        f"pilot cell {observation.run_id} does not belong to "
+                        f"stratum {stratum_id}"
+                    )
+                if observation.record_digest != canonical_run_record_digest(record):
+                    raise BenchmarkError(
+                        "pilot report run-record digest does not match for "
+                        f"{observation.run_id}"
+                    )
+                _require_reconciled_observation(observation, record)
+                if observation.observed_cost_usd is None:
+                    unknown_digests.append(observation.record_digest)
+
+        expected = _matrix_estimate(list(report.strata))
+        for field_name, value in expected.items():
+            if getattr(report, field_name) != value:
+                raise BenchmarkError(
+                    f"pilot {field_name.replace('_', ' ')} is inconsistent with "
+                    "its retained observations"
+                )
+        if tuple(sorted(set(unknown_digests))) != report.unknown_cost_record_digests:
             raise BenchmarkError(
-                "unknown-cost acknowledgement is not bound to this pilot report"
+                "pilot report unknown-cost digests do not match its observations"
             )
-        if report.observed_cost_usd is None and not allow_unknown_cost:
+
+        if manifest.unknown_cost_acknowledged:
+            if report.pilot_id != manifest.unknown_cost_pilot_id:
+                raise BenchmarkError(
+                    "unknown-cost acknowledgement is not bound to this pilot report"
+                )
+            acknowledged = set(manifest.unknown_cost_pilot_record_digests) or {
+                manifest.unknown_cost_pilot_record_digest
+            }
+            if acknowledged != set(report.unknown_cost_record_digests):
+                raise BenchmarkError(
+                    "unknown-cost acknowledgement is not bound to every "
+                    "unknown-cost pilot record"
+                )
+        if report.unknown_cost_record_digests and not allow_unknown_cost:
             raise BenchmarkError(
                 "pilot cost is unknown; pass the explicit unknown-cost "
                 "acknowledgement before continuing beyond the pilot"
@@ -1587,8 +2052,11 @@ __all__ = [
     "BenchmarkCellResult",
     "BenchmarkError",
     "BenchmarkExecutionSummary",
-    "BenchmarkPilotReport",
+    "BenchmarkPilotSetReport",
     "BenchmarkRunner",
+    "PilotObservation",
+    "PilotScalingMethod",
+    "PilotStratumEstimate",
     "aggregate_manifest",
     "canonical_run_record_digest",
 ]

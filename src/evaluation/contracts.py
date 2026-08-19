@@ -889,6 +889,59 @@ class BenchmarkReport(ContractModel):
     table_rows: tuple[BenchmarkTableRow, ...] = Field(min_length=1)
 
 
+class PilotStratumDeclaration(ContractModel):
+    """One declared estimation stratum of the immutable matrix.
+
+    A single first cell cannot expose architecture or workload differences, so
+    the matrix is partitioned into strata and each one contributes its own
+    measured pilot cell.
+    """
+
+    stratum_id: NonEmptyString
+    architecture: NonEmptyString
+    # Empty means the stratum covers every declared scenario for this
+    # architecture. Naming scenarios declares a narrower workload class.
+    scenario_ids: tuple[NonEmptyString, ...] = Field(default_factory=tuple)
+    planned_cells: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def scenario_ids_are_unique(self) -> PilotStratumDeclaration:
+        if len(set(self.scenario_ids)) != len(self.scenario_ids):
+            raise ValueError("stratum scenario_ids must be unique")
+        return self
+
+
+class PilotSetDeclaration(ContractModel):
+    """The pilot cells a manifest requires before paid execution."""
+
+    strata: tuple[PilotStratumDeclaration, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def strata_are_unique_and_cover_every_architecture(self) -> PilotSetDeclaration:
+        ids = [item.stratum_id for item in self.strata]
+        if len(set(ids)) != len(ids):
+            raise ValueError("pilot stratum IDs must be unique")
+        keys = [
+            (item.architecture, tuple(sorted(item.scenario_ids)))
+            for item in self.strata
+        ]
+        if len(set(keys)) != len(keys):
+            raise ValueError("pilot strata must describe distinct workload classes")
+        return self
+
+    @property
+    def architectures(self) -> tuple[str, ...]:
+        """Architectures represented in the declared pilot set."""
+
+        return tuple(dict.fromkeys(item.architecture for item in self.strata))
+
+    @property
+    def planned_cells(self) -> int:
+        """Total declared matrix cells represented by the strata."""
+
+        return sum(item.planned_cells for item in self.strata)
+
+
 class BenchmarkManifest(ContractModel):
     """Frozen benchmark declaration plus raw records and aggregate results."""
 
@@ -908,6 +961,12 @@ class BenchmarkManifest(ContractModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+    # Every pilot record whose cost was unknown when the acknowledgement was
+    # given. A pilot set can contain more than one such record.
+    unknown_cost_pilot_record_digests: tuple[str, ...] = Field(default_factory=tuple)
+    # The pilot cells this manifest requires. Changing it requires a new
+    # manifest version, because the estimate depends on the declared strata.
+    pilot_set: PilotSetDeclaration | None = None
     run_configuration: RunConfiguration
     budgets: BudgetConfiguration
     aggregation_version: VersionString
@@ -927,6 +986,51 @@ class BenchmarkManifest(ContractModel):
             raise ValueError(
                 "unknown-cost acknowledgement must include the exact pilot ID "
                 "and run-record digest"
+            )
+        if self.unknown_cost_pilot_record_digests:
+            if not self.unknown_cost_acknowledged:
+                raise ValueError(
+                    "unknown-cost pilot record digests require an acknowledgement"
+                )
+            digests = self.unknown_cost_pilot_record_digests
+            if len(set(digests)) != len(digests):
+                raise ValueError("unknown-cost pilot record digests must be unique")
+            if self.unknown_cost_pilot_record_digest not in digests:
+                raise ValueError(
+                    "the acknowledged pilot record digest must appear in the "
+                    "bound unknown-cost digests"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def pilot_set_matches_the_declared_matrix(self) -> BenchmarkManifest:
+        if self.pilot_set is None:
+            return self
+        declared = set(self.architectures)
+        covered = set(self.pilot_set.architectures)
+        if not covered <= declared:
+            raise ValueError(
+                "pilot strata reference architectures outside the declared matrix"
+            )
+        if covered != declared:
+            raise ValueError(
+                "the pilot set must declare at least one stratum for every "
+                "declared architecture"
+            )
+        scenario_ids = {item.scenario_id for item in self.scenario_references}
+        for stratum in self.pilot_set.strata:
+            unknown = set(stratum.scenario_ids) - scenario_ids
+            if unknown:
+                raise ValueError(
+                    f"pilot stratum {stratum.stratum_id} references scenarios "
+                    "outside the declared matrix"
+                )
+        expected_cells = (
+            len(self.scenario_references) * len(self.architectures) * self.repetitions
+        )
+        if self.pilot_set.planned_cells != expected_cells:
+            raise ValueError(
+                "pilot strata planned cells must partition the declared matrix"
             )
         return self
 
