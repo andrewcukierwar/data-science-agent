@@ -1438,7 +1438,7 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 420 passed and 16 opt-in live tests
+full local verification completed with 430 passed and 16 opt-in live tests
 deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
@@ -1454,7 +1454,9 @@ invalid final output is an explicit model/schema failure, and both live
 architecture canaries passed on 2026-08-19. R14 is complete: usage is recorded
 at the response boundary and survives parsing, turn-limit, and lifecycle
 failures, and incomplete usage can no longer be published as a known `$0.00`.
-R15–R19 remain open. That review reopens R6: its complete preflight must pass again after
+R15 is complete: the single-agent runner opens, attributes, and closes typed
+attempts for every exit, so both architectures publish the same attempt
+protocol. R16–R19 remain open. That review reopens R6: its complete preflight must pass again after
 R13–R19 before another Task 10 manifest is frozen.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
@@ -1957,9 +1959,30 @@ Acceptance:
 - failure-path fixtures cover Generalist, Lead, and specialist invocations and
   prove attempt totals equal the sum of recorded response deltas.
 
-#### R15 — Give the single-agent runner a complete attempt lifecycle [P1]
+#### R15 — Give the single-agent runner a complete attempt lifecycle [P1] — Implemented
 
-Status: open; blocks Task 10.
+Status: implemented.
+
+`GeneralistRunner.run` now follows the same append-only attempt protocol as the
+multi-agent runner: `begin_attempt()` opens one attempt after the ledger is
+constructed and before `_agent_context`, so the run configuration carries the
+attempt ID and every agent event, tool event, usage delta, and cost is
+attributed to it. Completed and blocked exits finish the attempt as
+`COMPLETED`/`BLOCKED`, the failure handler finishes it as `FAILED` with the same
+message the run state records, and the `finally` block closes a `BaseException`
+exit (for example `KeyboardInterrupt`) as `INTERRUPTED`. Runtime metadata is
+finalized before the attempt is closed, so the terminal record carries usage,
+cost availability, and elapsed time. Resume reuses the ledger's existing
+append-only semantics, so a new attempt is appended without altering prior
+records or recounting their deltas.
+
+`tests/test_generalist_attempt_lifecycle.py` drives the real runner with only
+the SDK boundary stubbed, and covers attempt-before-execution, all four
+terminal exits, resume after failure and after interruption, and an
+attempt-protocol equivalence check against `AnalysisRunner`. A benchmark-level
+regression in `tests/test_benchmark_runner.py` runs the production
+`GeneralistRunner` through the matrix and asserts non-null attempt identity and
+a reconciled attempt history.
 
 Bring `GeneralistRunner` under the same append-only attempt protocol as the
 multi-agent runner. Every start, completion, block, failure, interruption, and

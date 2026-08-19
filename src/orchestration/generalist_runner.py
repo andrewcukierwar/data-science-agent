@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from schemas.run_state import (
     AgentEventStatus,
     AnalysisRunState,
     Artifact,
+    AttemptStatus,
     RunStatus,
 )
 from schemas.validation import ValidationResult, ValidationStatus
@@ -93,6 +95,9 @@ class GeneralistRunner(AnalysisRunner):
         active_agent: tuple[str, str] | None = None
         active_agent_recorded = False
         runtime_metadata_finalized = False
+        attempt_terminal_status: AttemptStatus | None = None
+        attempt_terminal_error: str | None = None
+        attempt_finalized = False
 
         try:
             run_workspace = run_workspace or self._open_or_create_workspace(
@@ -106,6 +111,11 @@ class GeneralistRunner(AnalysisRunner):
                 objective=objective,
                 business_context=business_context,
             )
+            # The single agent runs under the same append-only attempt protocol
+            # as the multi-agent lifecycle: one attempt is open before any agent
+            # executes, so every agent event, tool event, usage delta, and cost
+            # is attributed to it.
+            ledger.begin_attempt()
             self._configure_ledger(ledger, run_id, business_context)
             ledger.set_status(RunStatus.RUNNING)
 
@@ -180,7 +190,12 @@ class GeneralistRunner(AnalysisRunner):
                     else None
                 ),
             )
-            ledger.set_status(RunStatus.BLOCKED if constrained else RunStatus.COMPLETED)
+            if constrained:
+                ledger.set_status(RunStatus.BLOCKED)
+                attempt_terminal_status = AttemptStatus.BLOCKED
+            else:
+                ledger.set_status(RunStatus.COMPLETED)
+                attempt_terminal_status = AttemptStatus.COMPLETED
             return GeneralistRunResult(
                 status=ledger.state.status,
                 workspace=run_workspace,
@@ -205,6 +220,8 @@ class GeneralistRunner(AnalysisRunner):
                         objective=agent_objective,
                         error=message,
                     )
+                attempt_terminal_status = AttemptStatus.FAILED
+                attempt_terminal_error = message
                 ledger.mark_failed(message)
             return GeneralistRunResult(
                 status=RunStatus.FAILED,
@@ -226,6 +243,25 @@ class GeneralistRunner(AnalysisRunner):
                     # Preserve the primary lifecycle error if final metadata
                     # persistence itself is unavailable.
                     pass
+            if ledger is not None and not attempt_finalized:
+                # Usage, cost availability, and elapsed time are written above
+                # while the attempt is still running, so the terminal record
+                # carries them.
+                pending = sys.exc_info()[1]
+                if attempt_terminal_status is None and pending is not None:
+                    attempt_terminal_status = AttemptStatus.INTERRUPTED
+                    attempt_terminal_error = f"{type(pending).__name__}: {pending}"
+                if attempt_terminal_status is not None:
+                    try:
+                        ledger.finish_attempt(
+                            attempt_terminal_status,
+                            error=attempt_terminal_error,
+                        )
+                        attempt_finalized = True
+                    except Exception:
+                        # Preserve the primary lifecycle result if terminal
+                        # attempt publication itself encounters an I/O error.
+                        pass
 
     def _record_agent_success(
         self,

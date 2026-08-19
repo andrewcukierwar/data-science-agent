@@ -831,6 +831,84 @@ def test_benchmark_record_exposes_reconciled_attempt_history(tmp_path):
     assert record.attempt_history[0].elapsed_seconds == record.latency.elapsed_seconds
 
 
+def test_single_agent_benchmark_record_exposes_real_attempt_history(
+    tmp_path,
+    monkeypatch,
+):
+    """R15: the real GeneralistRunner, not a fake that manages attempts."""
+
+    from orchestration.generalist_runner import GeneralistRunner
+    from schemas.audit import AuditResult, AuditStatus
+    from schemas.generalist import GeneralistResult
+    from schemas.lead import LeadResult
+    from schemas.validation import ValidationResult, ValidationStatus
+
+    generalist_result = GeneralistResult(
+        audit=AuditResult(status=AuditStatus.COMPLETE, audited_at=FIXED_TIME),
+        candidate=LeadResult(
+            objective="Explain the observed change.",
+            answer="The observed change is described by the available evidence.",
+        ),
+        validation=ValidationResult(status=ValidationStatus.PASS),
+    )
+    response_usage = SimpleNamespace(
+        requests=1,
+        input_tokens=900,
+        output_tokens=300,
+        total_tokens=1_200,
+        input_tokens_details=SimpleNamespace(cached_tokens=0),
+        output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+    )
+
+    async def fake_sdk_run(agent, agent_input, *, context, **kwargs):
+        hooks = kwargs.get("hooks")
+        wrapper = SimpleNamespace(context=context, usage=response_usage)
+        if hooks is not None:
+            await hooks.on_llm_end(
+                wrapper,
+                agent,
+                SimpleNamespace(usage=response_usage),
+            )
+        return SimpleNamespace(
+            final_output=generalist_result,
+            context_wrapper=wrapper,
+        )
+
+    monkeypatch.setattr("agents.model_usage.Runner.run", fake_sdk_run)
+
+    def execute(cell, workspace):
+        # The benchmark drives the production single-agent runner; only the
+        # provider call is stubbed.
+        runner = GeneralistRunner(
+            workspace_base_dir=cell.workspace_path.parent,
+            model="gpt-5.6-luna",
+            model_provider="openai",
+        )
+        return runner.run_sync(
+            cell.run_id,
+            cell.scenario.metadata.user_question,
+            workspace=workspace,
+        )
+
+    runner = _runner(tmp_path, execute)
+    manifest_path = _plan(runner, tmp_path, repetitions=1)
+    summary = runner.execute(manifest_path)
+    record = summary.manifest.run_records[0]
+
+    assert record.architecture == "single-agent"
+    assert record.attempt_id is not None
+    assert len(record.attempt_history) == 1
+    attempt = record.attempt_history[0]
+    assert attempt.attempt_id == record.attempt_id
+    assert attempt.attempt_number == 1
+    assert attempt.status is AttemptStatus.COMPLETED
+    assert attempt.finished_at is not None
+    # Attempt deltas reconstruct the record totals exactly.
+    assert attempt.usage_delta.requests == record.usage.requests
+    assert attempt.usage_delta.total_tokens == record.usage.total_tokens
+    assert attempt.elapsed_seconds == pytest.approx(record.latency.elapsed_seconds)
+
+
 def test_benchmark_record_marks_incomplete_usage_and_refuses_known_cost(tmp_path):
     """R14: a lost model call cannot be published as a complete $0.00 cell."""
 

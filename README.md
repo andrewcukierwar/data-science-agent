@@ -7,8 +7,8 @@ complete. Phase 2 Tasks 1–9 and remediations R1–R12 are implemented. Task
 10—the paid single-agent versus five-agent benchmark—was attempted on
 2026-08-19, but the retained pilots exposed additional release blockers tracked
 as R13–R19. R13 (strict analytical output schemas, including both live
-architecture canaries) and R14 (failure-safe usage and cost accounting) are
-complete; R15–R19 remain open. The paid matrix remains blocked, the final R6 gate is open again,
+architecture canaries), R14 (failure-safe usage and cost accounting), and R15
+(single-agent attempt lifecycle) are complete; R16–R19 remain open. The paid matrix remains blocked, the final R6 gate is open again,
 and no complete benchmark result is claimed. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, retained run artifacts, and the blocked live-run report.
@@ -51,7 +51,7 @@ outputs (R12).
 
 The post-pilot review adds strict analytical output schemas (R13, complete),
 failure-safe usage and cost accounting (R14, complete), complete single-agent
-attempt lifecycle (R15),
+attempt lifecycle (R15, complete),
 interrupted-cell retention and resume (R16), outcome-sensitive preflight tests
 (R17), accurate blocked-run taxonomy (R18), and representative pilot
 calibration across architectures/workload classes (R19).
@@ -72,6 +72,13 @@ provider already reported. Usage that cannot be reconciled is marked incomplete
 and its cost is published as unavailable, so incomplete usage can no longer
 appear as a known `$0.00`.
 
+R15 brings the single-agent runner under the same append-only attempt protocol
+as the multi-agent runner. One attempt opens before agent execution and closes
+as completed, blocked, failed, or interrupted with matching timing, usage, cost
+availability, and error; resume appends a new attempt without rewriting prior
+records. Both architectures now publish the same attempt identity and history in
+benchmark records.
+
 R1–R12 are implemented and covered by architecture-equivalence, capability/tool-
 mix, failed-evidence, workspace identity, evaluator-error, lifecycle,
 aggregation-safe rescore, pilot/run-record binding, append-only attempt
@@ -79,7 +86,7 @@ reconciliation, scenario-document integrity, and exclusive atomic offline-output
 fixtures. The final R6 preflight passed, including all Docker-backed integration
 tests and all 60 declared dry-run cells. The catalog evaluator version is now
 `1.1` for these scoring changes. That historical preflight does not close the
-new gate: R15–R19 must still be implemented and the complete R6 preflight rerun
+new gate: R16–R19 must still be implemented and the complete R6 preflight rerun
 before another Task 10 manifest is frozen.
 
 Task 10 execution is currently blocked before the paid matrix. Four immutable
@@ -95,7 +102,7 @@ pilot reports, workspaces, offline-rescored manifests, and aggregate reports
 are retained.
 Because no pilot completed, the full 60-cell matrix was not started. Existing
 canonical MVP workspaces predate the declared Phase 2 matrix and are not
-substitutes for its results. R15–R19 must be completed, the reopened R6 gate
+substitutes for its results. R16–R19 must be completed, the reopened R6 gate
 must pass, and then a new manifest version and pilot set must be frozen.
 
 ### Task 10 execution record (blocked)
@@ -173,7 +180,7 @@ uv run python scripts/run_benchmark.py plan benchmark.json --model gpt-5.6-luna
 ```
 
 The paid commands below are the current CLI surface, but **must not be run again
-until R15–R19 are complete and the reopened R6 gate passes**. R19 will replace
+until R16–R19 are complete and the reopened R6 gate passes**. R19 will replace
 the single first-cell estimate with a declared pilot set containing at least one
 cell per architecture before the remaining immutable cells can resume:
 
