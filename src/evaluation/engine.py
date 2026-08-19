@@ -371,6 +371,32 @@ def _evaluator_exception_result(
     )
 
 
+def _not_evaluated_result(
+    record: BenchmarkRunRecord,
+    rules: ScenarioRules,
+    message: str,
+) -> EvaluatorResult:
+    """Keep non-completed lifecycle outcomes out of analytical scoring."""
+
+    return EvaluatorResult(
+        result_id=f"{record.run_id}-{rules.evaluator_version}",
+        run_id=record.run_id,
+        scenario_id=rules.scenario_id,
+        scenario_version=rules.scenario_version,
+        evaluator_version=rules.evaluator_version,
+        status=EvaluatorStatus.NOT_EVALUATED,
+        checks=(
+            EvaluationCheck(
+                check_id="offline:not_evaluated",
+                status=EvaluationCheckStatus.WARN,
+                message=message,
+            ),
+        ),
+        failure_reasons=(message,),
+        evaluated_at=record.latency.finished_at,
+    )
+
+
 def rescore_manifest(
     manifest: BenchmarkManifest,
     rules_by_scenario: Mapping[str | tuple[str, str], ScenarioRules],
@@ -419,16 +445,13 @@ def rescore_manifest(
             # Identity refusal is a manifest-integrity error, never an
             # evaluator outcome that may be converted into not_evaluated.
             verify_workspace_identity(workspace_path, expected_identity)
-            try:
-                evaluation = evaluate(
-                    workspace_path,
+            if record.lifecycle.status is not LifecycleStatus.COMPLETED:
+                evaluator_result = _not_evaluated_result(
+                    record,
                     rules,
-                    expected_identity=expected_identity,
+                    record.lifecycle.failure_message
+                    or f"run lifecycle status is {record.lifecycle.status.value}",
                 )
-            except WorkspaceIdentityError:
-                raise
-            except Exception as error:  # noqa: BLE001
-                evaluator_result = _evaluator_exception_result(record, rules, error)
                 try:
                     snapshot = load_workspace_snapshot(workspace_path)
                 except Exception:  # noqa: BLE001
@@ -441,29 +464,53 @@ def rescore_manifest(
                             checks=evaluator_result.checks,
                         )
                     )
+
             else:
-                snapshot = getattr(evaluation, "snapshot", None)
-                if snapshot is None:
+                try:
+                    evaluation = evaluate(
+                        workspace_path,
+                        rules,
+                        expected_identity=expected_identity,
+                    )
+                except WorkspaceIdentityError:
+                    raise
+                except Exception as error:  # noqa: BLE001
+                    evaluator_result = _evaluator_exception_result(record, rules, error)
                     try:
                         snapshot = load_workspace_snapshot(workspace_path)
                     except Exception:  # noqa: BLE001
                         snapshot = None
-                if snapshot is not None and snapshot.state.run_id != record.run_id:
-                    raise ValueError(
-                        f"workspace run ID {snapshot.state.run_id} does not match "
-                        f"record {record.run_id}"
-                    )
-                evaluator_result = evaluation.result
-                if snapshot is not None:
-                    evaluations.append(
-                        evaluation
-                        if isinstance(evaluation, OfflineEvaluation)
-                        else OfflineEvaluation(
-                            result=evaluator_result,
-                            snapshot=snapshot,
-                            checks=evaluator_result.checks,
+                    if snapshot is not None:
+                        evaluations.append(
+                            OfflineEvaluation(
+                                result=evaluator_result,
+                                snapshot=snapshot,
+                                checks=evaluator_result.checks,
+                            )
                         )
-                    )
+                else:
+                    snapshot = getattr(evaluation, "snapshot", None)
+                    if snapshot is None:
+                        try:
+                            snapshot = load_workspace_snapshot(workspace_path)
+                        except Exception:  # noqa: BLE001
+                            snapshot = None
+                    if snapshot is not None and snapshot.state.run_id != record.run_id:
+                        raise ValueError(
+                            f"workspace run ID {snapshot.state.run_id} does not match "
+                            f"record {record.run_id}"
+                        )
+                    evaluator_result = evaluation.result
+                    if snapshot is not None:
+                        evaluations.append(
+                            evaluation
+                            if isinstance(evaluation, OfflineEvaluation)
+                            else OfflineEvaluation(
+                                result=evaluator_result,
+                                snapshot=snapshot,
+                                checks=evaluator_result.checks,
+                            )
+                        )
         except WorkspaceIdentityError:
             raise
         values = record.model_dump(mode="json")

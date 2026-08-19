@@ -423,6 +423,48 @@ def test_offline_rescore_evaluator_crash_preserves_completed_run_and_no_zero_sco
     assert manifest_path.read_bytes() == source_before
 
 
+def test_offline_rescore_does_not_analytically_score_non_completed_runs(
+    tmp_path,
+    monkeypatch,
+):
+    def execute(_cell, _workspace):
+        return BenchmarkCellResult(
+            lifecycle=LifecycleOutcome(
+                status=LifecycleStatus.FAILED,
+                failure_category=FailureCategory.PROVIDER,
+                failure_message="fixture provider failure",
+            ),
+            started_at=FIXED_TIME,
+            finished_at=FIXED_TIME,
+        )
+
+    runner = _runner(tmp_path, execute)
+    manifest_path = _plan(runner, tmp_path, repetitions=1)
+    runner.execute(manifest_path)
+
+    def should_not_evaluate(*_args, **_kwargs):
+        raise AssertionError("non-completed run was sent to the analytical evaluator")
+
+    monkeypatch.setattr("benchmark.runner.evaluate_workspace", should_not_evaluate)
+    rescored = runner.rescore(
+        manifest_path,
+        output_path=tmp_path / "rescored.json",
+    )
+    record = rescored.run_records[0]
+
+    assert record.lifecycle.status is LifecycleStatus.FAILED
+    assert record.evaluator_result.status is EvaluatorStatus.NOT_EVALUATED
+    assert record.score_breakdown is None
+    aggregate = rescored.aggregates[0]
+    assert aggregate.failed_runs == 1
+    assert aggregate.evaluated_runs == 0
+    assert aggregate.evaluator_error_runs == 0
+    assert aggregate.failure_taxonomy == {
+        "evaluator:not_evaluated": 1,
+        "lifecycle:provider": 1,
+    }
+
+
 def test_canonical_rescore_isolates_crashes_and_rebuilds_aggregates(
     tmp_path,
     monkeypatch,

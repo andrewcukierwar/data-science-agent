@@ -5,17 +5,18 @@
 
 **Remediation:** R1–R12 verified; final pre-benchmark gate passed
 
-**Experiment:** Task 10 not started; no results published
+**Experiment:** Task 10 attempted; blocked at the paid cost-pilot gate; no
+analytical results published
 
-This document records the Phase 2 work completed before any paid benchmark, the
-required pre-benchmark remediation, and the exact boundary between tested
-infrastructure and empirical results. It is a handoff record, not a benchmark
-report.
+This document records the Phase 2 work, the required pre-benchmark remediation,
+the attempted paid pilots, and the exact boundary between tested infrastructure
+and empirical results. It is a benchmark-attempt and handoff record, not a
+successful architecture-comparison report.
 
 ## Phase 2 Pre-Benchmark Remediation: R1–R12
 
-The following remediation tasks have been completed and deterministically
-verified before Task 10 begins:
+The following remediation tasks were completed and deterministically verified
+before the first Task 10 attempt:
 
 1. **R1 — Make the evaluator architecture-neutral [P0].** Remove
    role-presence requirements from scoring and replace them with
@@ -240,7 +241,7 @@ for later README tables without manual transcription.
 The latest full deterministic review run completed with:
 
 ```text
-369 passed, 13 deselected
+370 passed, 13 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
@@ -256,19 +257,67 @@ The benchmark-validity-focused Sol High review found no additional
 release-blocking defects in the evaluated identity, provenance, aggregation,
 pilot, attempt-history, or offline-output paths.
 
-## Task 10 has not started
+## Task 10 attempt — blocked at the paid pilot gate
 
-No Phase 2 benchmark manifest currently exists. No paid pilot or single-agent
-versus five-agent matrix has been executed, evaluated, or aggregated. Existing
-canonical MVP workspaces were created under the earlier acceptance workflow and
-are not valid substitutes for declared Phase 2 cells. Task 10 may begin only
-after a fresh manifest is frozen from this verified implementation and the
-paid-execution authorization is explicitly provided.
+Task 10 was attempted on 2026-08-19 after the final R6 preflight. Four immutable
+manifest versions and their raw workspaces were retained under
+`.runs/phase2-task10-20260819/`:
+The runner's `multi-agent` label denotes the planned five-agent architecture.
 
-Therefore there are currently no honest Phase 2 values for task success,
-numerical accuracy, unsupported claims, operational reliability, cost, latency,
-or architecture differences. Values must remain unpublished rather than be
-inferred, invented, or selected from unrelated runs.
+| Manifest | Model | Persisted run records | Pilot/operational result |
+| --- | --- | ---: | --- |
+| `phase2-task10-20260819-luna-v1` | `gpt-5.6-luna` | 1/60, multi-agent | Invalid JSON structured-output failure; 28,825 tokens, 120.38 s, known cost `$0.00372068` |
+| `phase2-task10-20260819-luna-v2` | `gpt-5.6-luna` | 0/60 | Aborted during `Max turns (10) exceeded`; failed workspace retained |
+| `phase2-task10-20260819-luna-v3` | `gpt-5.6-luna` | 1/60, single-agent | Invalid JSON structured-output failure after 71.98 s; no provider usage cost |
+| `phase2-task10-20260819-gpt55-v1` | `gpt-5.5` | 1/60, single-agent | Invalid JSON structured-output failure after 61.79 s; pricing unavailable |
+
+Every plan declared the same 60 cells (ten scenarios × two architectures ×
+three repetitions). Since no pilot completed, the full-run gate correctly
+refused to execute the remaining cells. The retained artifacts include the
+original manifests, pilot reports where finalized, failed workspaces, and
+failure-only offline-rescored manifests and reports:
+
+- `benchmark.json`, `pilot.json`, and
+  `benchmark-v1-rescored-after-r9-fix.json` /
+  `report-v1-rescored-after-r9-fix.json`;
+- `benchmark-v2.json` and `report-v2.json` (aborted before a pilot report);
+- `benchmark-v3.json`, `pilot-v3.json`, and
+  `benchmark-v3-rescored-after-r9-fix.json` /
+  `report-v3-rescored-after-r9-fix.json`;
+- `benchmark-gpt55.json`, `pilot-gpt55.json`, and
+  `benchmark-gpt55-rescored-after-r9-fix.json` /
+  `report-gpt55-rescored-after-r9-fix.json`.
+
+The three persisted failed records are operational failures and are explicitly
+`not_evaluated` after the R9 rescore correction; they have no analytical score.
+Each corresponding report observes one failed record and 59 missing cells,
+while the aborted v2 report observes zero records and 60 missing cells. There
+are therefore no honest task-success, numerical-accuracy, unsupported-claim,
+latency-distribution, cost-distribution, or architecture-comparison values to
+publish. The known `$0.00372068` is the cost of one failed pilot only. The
+observed one-failure-per-attempt outcome is a pilot calibration observation,
+not a full-matrix reliability estimate. Existing canonical MVP workspaces are
+legacy acceptance artifacts and were not substituted for missing cells.
+
+The publishable observations are limited to the following:
+
+| Dimension | Observed evidence | Benchmark interpretation |
+| --- | --- | --- |
+| Task success | 0 completed/evaluable pilot records | Not estimable; no success rate claimed |
+| Numerical accuracy | 0 analytical scores | Not estimable |
+| Unsupported claims | 0 evaluated reports | Not estimable |
+| Operational reliability | 3 persisted pilot cells failed; v2 aborted before a record | Calibration failures only, not a matrix reliability estimate |
+| Cost | `$0.00372068` for the v1 failed pilot; other attempts unavailable | No full-run cost estimate |
+| Latency | 120.38 s (v1), 71.98 s (v3), 61.79 s (gpt55) | Failed-pilot elapsed times only |
+| Architecture comparison | No matched completed pair | Not estimable |
+
+The failure is model/integration-specific: minimal API availability checks for
+`gpt-5.5` and `gpt-5.4` returned successfully, while the agent execution path
+failed to produce the required structured result. No evaluator rule or score
+was changed to make an attempt pass, and no result was selected because it
+favored either architecture. A compatible structured-output configuration must
+be fixed first; then a new manifest version must be frozen and the affected
+pilot/matrix rerun under the same offline-evaluation rules.
 
 ## Diagnosed local execution issues
 
@@ -328,24 +377,26 @@ with credential detection.
 
 ## Remaining benchmark sequence
 
-After reopening VS Code with inherited credentials:
+Before another paid attempt:
 
-1. Recheck variable presence without printing the key and confirm Docker access.
-2. Select the real model and freeze a new manifest before any paid execution.
-3. Review the declared ten-scenario × two-architecture × three-repetition matrix,
+1. Fix and deterministically verify the model/agent structured-output contract
+   that blocked all retained pilots; do not alter evaluator rules to mask it.
+2. Recheck variable presence without printing the key and confirm Docker access.
+3. Select the compatible model and freeze a new manifest before any paid execution.
+4. Review the declared ten-scenario × two-architecture × three-repetition matrix,
    budgets, evaluator versions, code revision, and output paths.
-4. Run and retain the one-cell cost-estimation pilot.
-5. Decide whether the declared repetition count remains affordable. If it must
+5. Run and retain the one-cell cost-estimation pilot.
+6. Decide whether the declared repetition count remains affordable. If it must
    change, create a new manifest/version and record the justification before the
    full run.
-6. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
+7. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
    overwrite workspaces.
-7. Evaluate every persisted workspace offline using the frozen evaluator rules.
-8. Inspect failures without changing rules mid-experiment. If code or evaluator
+8. Evaluate every persisted workspace offline using the frozen evaluator rules.
+9. Inspect failures without changing rules mid-experiment. If code or evaluator
    changes are required, version the benchmark and rerun the affected declared
    matrix rather than silently patching scores.
-9. Generate and retain raw manifests, run records, evaluator results, pilot
-   report, and aggregate report.
-10. Publish real results and limitations, including denominators, failed runs,
+10. Generate and retain raw manifests, run records, evaluator results, pilot
+    report, and aggregate report.
+11. Publish real results and limitations, including denominators, failed runs,
     sample size, model specificity, evaluator limitations, uncertainty, cost,
     and latency—regardless of which architecture performs better.

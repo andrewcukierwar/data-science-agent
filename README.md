@@ -5,10 +5,11 @@ Foundation for an evidence-backed, multi-agent business analytics system.
 Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
 complete. Phase 2 Tasks 1–9 and remediations R1–R12 are implemented and
 deterministically verified. Task 10—the paid single-agent versus five-agent
-benchmark—has not yet run, so this repository does not claim benchmark results.
-See
+benchmark—was attempted on 2026-08-19, but every versioned cost-pilot attempt
+failed the agent's structured-output contract before a completed pilot could
+unlock the matrix. No complete benchmark result is claimed. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
-verification record, and live-run handoff.
+verification record, retained run artifacts, and the blocked live-run report.
 
 ## Development
 
@@ -32,7 +33,7 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **369 passed and 13 live tests
+deterministic verification completed with **370 passed and 13 live tests
 deselected**; Ruff lint and formatting checks passed, and the 10 × 2 × 3 matrix
 dry-run produced 60 unique cells.
 
@@ -54,10 +55,40 @@ fixtures. The final R6 preflight passed, including all Docker-backed integration
 tests and all 60 declared dry-run cells. The catalog evaluator version is now
 `1.1` for these scoring changes.
 
-No Phase 2 experiment manifest has been frozen and no paid matrix cells have
-been executed. Existing canonical MVP workspaces predate the declared Phase 2
-matrix and must not be presented as its results. Freeze a fresh manifest and
-obtain explicit paid-execution authorization before starting Task 10.
+Task 10 execution is currently blocked at the paid-pilot gate. Four immutable
+attempts were retained under `.runs/phase2-task10-20260819/`: three attempts
+with `gpt-5.6-luna` (two invalid structured-output responses and one interrupted
+max-turns attempt) and one `gpt-5.5` attempt (invalid structured-output
+response). The first attempt consumed 28,825 tokens and recorded a known
+estimated cost of **$0.00372068** over **120.38 seconds**; the other attempts
+did not produce a completed pilot. The corresponding manifests, pilot reports,
+workspaces, offline-rescored manifests, and aggregate reports are retained.
+Because no pilot completed, the full 60-cell matrix was not started. Existing
+canonical MVP workspaces predate the declared Phase 2 matrix and are not
+substitutes for its results. A compatible model/output contract must be fixed,
+then a new manifest version must be frozen and the affected pilot rerun.
+
+### Task 10 execution record (blocked)
+
+The attempted manifests and reports are local evidence, not benchmark results.
+The runner's `multi-agent` label denotes the planned five-agent architecture.
+
+| Manifest | Model | Persisted observations | Outcome |
+| --- | --- | ---: | --- |
+| `phase2-task10-20260819-luna-v1` | `gpt-5.6-luna` | 1/60 (multi-agent) | Failed: invalid JSON; pilot cost `$0.00372068` |
+| `phase2-task10-20260819-luna-v2` | `gpt-5.6-luna` | 0/60 | Aborted during max-turns pilot; orphan workspace retained |
+| `phase2-task10-20260819-luna-v3` | `gpt-5.6-luna` | 1/60 (single-agent) | Failed: invalid JSON after 71.98 s; no provider usage cost |
+| `phase2-task10-20260819-gpt55-v1` | `gpt-5.5` | 1/60 (single-agent) | Failed: invalid JSON after 61.79 s; pricing unavailable |
+
+The three failed records were rescored offline after the R9 lifecycle fix and
+are explicitly `not_evaluated` with no analytical score. Their reports show
+59 missing cells each; the aborted v2 report shows all 60 cells missing. Thus
+there are no observed task-success, numerical-accuracy, unsupported-claim, or
+architecture-comparison values to publish. The observed operational outcome is
+one failed pilot cell for each non-aborted attempt, not a claim about full-run
+architecture reliability. Direct minimal API availability checks do not repair
+the agent structured-output failure, and no result was selected or invented to
+favor either architecture.
 
 ## Canonical Phase 1 live acceptance
 

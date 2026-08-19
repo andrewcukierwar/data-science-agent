@@ -3,7 +3,9 @@
 ## Plan Status
 
 **Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R1–R12
-remediations implemented and final R6 preflight verified; paid benchmark pending.
+remediations implemented and final R6 preflight verified. Task 10 execution was
+attempted but is blocked at the paid cost-pilot gate after versioned
+structured-output failures; no benchmark result is published.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1436,7 +1438,7 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 369 passed and 13 opt-in live tests
+full local verification completed with 370 passed and 13 opt-in live tests
 deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
@@ -1445,12 +1447,13 @@ capability, evidence, workspace-identity, evaluator-error, aggregation,
 pilot-binding, attempt-reconciliation, scenario-document, and exclusive-output
 regressions. The final R6 preflight passed, including Docker-backed integration
 tests and the complete 10 × 2 × 3 dry-run.
-No Phase 2 benchmark manifest
-has been frozen, no paid cost pilot or declared matrix has run, and no
-aggregate architecture comparison has been published. Existing canonical MVP
-workspaces are legacy acceptance artifacts rather than Phase 2 benchmark
-records. The live handoff and exact environment constraints are recorded in
-`docs/phase2-status.md`.
+Task 10 was attempted with four versioned manifests, but no paid cost pilot
+completed and the declared matrix was not started. Failure-only offline
+rescores and aggregate reports are retained under
+`.runs/phase2-task10-20260819/`; no aggregate architecture comparison has been
+published. Existing canonical MVP workspaces are legacy acceptance artifacts
+rather than Phase 2 benchmark records. The live handoff and exact environment
+constraints are recorded in `docs/phase2-status.md`.
 
 | Task | Status | Implemented outcome |
 | ---: | --- | --- |
@@ -1463,7 +1466,7 @@ records. The live handoff and exact environment constraints are recorded in
 | 7 | Complete | Bounded generalist architecture sharing runtime, provenance, tools, and report contracts without specialist delegation |
 | 8 | Complete | Immutable resumable matrix runner, paid opt-in, cost pilot gate, failure isolation, and offline rescoring |
 | 9 | Complete | Deterministic denominator-preserving aggregation, uncertainty, paired comparisons, cost/latency, and failure reporting |
-| 10 | Pending | Freeze, pilot, execute, offline-evaluate, inspect, aggregate, and publish the real benchmark without changing frozen rules |
+| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the structured-output contract; the 60-cell matrix was not started and no analytical result is published |
 
 ### Phase 2 implementation order
 
@@ -1852,6 +1855,28 @@ Acceptance:
   outputs, evaluator failure, and successful exclusive creation.
 
 #### Task 10 — Execute and publish the Phase 2 benchmark
+
+Status (2026-08-19): attempted but blocked at the paid cost-pilot gate. The
+retained manifests are under `.runs/phase2-task10-20260819/`:
+
+- `phase2-task10-20260819-luna-v1`: one failed multi-agent pilot record,
+  `ModelBehaviorError: Invalid JSON when parsing model output`; 28,825 tokens,
+  120.38 seconds, and known estimated cost `$0.00372068`.
+- `phase2-task10-20260819-luna-v2`: interrupted during a max-turns pilot before
+  a manifest run record was persisted; the aborted manifest and workspace are
+  retained.
+- `phase2-task10-20260819-luna-v3`: one failed single-agent pilot record with
+  the same invalid-JSON error; no completed pilot.
+- `phase2-task10-20260819-gpt55-v1`: one failed single-agent pilot record with
+  the same invalid-JSON error and unavailable pricing.
+
+Each plan declared 60 cells (ten scenarios × two architectures × three
+repetitions), but no plan passed the pilot gate, so the full matrix was not
+executed. The failed records were rescored offline with the corrected R9
+semantics and published as failure-only aggregate reports. Non-completed
+records remain operational failures, are `not_evaluated`, and have no
+analytical score; missing cells are not treated as observations. These are
+retained attempt artifacts rather than benchmark results.
 
 After R1–R12 are complete, including the final R6 preflight, freeze a benchmark
 manifest, run the declared
