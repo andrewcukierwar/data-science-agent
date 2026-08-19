@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from benchmark.preflight import assert_run_outcome
 from evaluation.canonical import evaluate_canonical_run
 from orchestration.runner import AnalysisRunner
 from scenarios.generator import SyntheticEcommerceConfig
@@ -79,5 +80,8 @@ def test_analysis_runner_live_canonical_end_to_end(
     assert result.ledger.state.elapsed_seconds is not None
     assert result.ledger.tool_events
     assert (result.workspace.outputs / "report.md").exists()
+    # The shared R17 preflight gate: completion, report persistence, usage
+    # accounting, explicit cost, and a reconciled attempt history.
+    assert_run_outcome(result, architecture="multi-agent")
     summary = evaluate_canonical_run(result)
     assert summary.status == RunStatus.COMPLETED.value

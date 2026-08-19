@@ -89,3 +89,7 @@ def test_lead_live_delegates_computation_to_specialists(
     assert all(
         event.tool_name != "delegate_to_lead" for event in context.ledger.tool_events
     )
+    # R17: the Lead run must account for its own and its specialists' usage.
+    assert context.ledger.usage.requests > 0
+    assert context.ledger.usage.total_tokens > 0
+    assert context.ledger.usage_complete is True

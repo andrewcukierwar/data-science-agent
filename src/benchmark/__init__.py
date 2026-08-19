@@ -5,6 +5,13 @@ from benchmark.aggregation import (
     aggregate_manifest,
     build_benchmark_report,
 )
+from benchmark.preflight import (
+    PreflightCheck,
+    PreflightError,
+    PreflightReport,
+    assert_run_outcome,
+    check_run_outcome,
+)
 from benchmark.runner import (
     BenchmarkCell,
     BenchmarkCellResult,
@@ -17,6 +24,11 @@ from benchmark.runner import (
 
 __all__ = [
     "BenchmarkCell",
+    "PreflightCheck",
+    "PreflightError",
+    "PreflightReport",
+    "assert_run_outcome",
+    "check_run_outcome",
     "BenchmarkCellResult",
     "BenchmarkError",
     "BenchmarkExecutionSummary",

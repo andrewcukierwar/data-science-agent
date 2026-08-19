@@ -132,6 +132,9 @@ def test_statistician_live_known_significance_examples(
     assert expected_phrase in text
     assert context.ledger.findings == result.findings
     assert context.ledger.budget.python_executions >= 1
+    # R17: a live agent call that recorded no usage is not a valid smoke run.
+    assert context.ledger.usage.requests > 0
+    assert context.ledger.usage_complete is True
 
 
 @pytest.mark.skipif(
@@ -192,3 +195,6 @@ def test_statistician_live_canonical_meta_ltv_assessment(
     assert "ltv" in text or "lifetime value" in text
     assert context.ledger.findings == result.findings
     assert context.ledger.budget.python_executions >= 1
+    # R17: a live agent call that recorded no usage is not a valid smoke run.
+    assert context.ledger.usage.requests > 0
+    assert context.ledger.usage_complete is True

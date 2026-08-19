@@ -202,6 +202,9 @@ def test_critic_live_passes_or_revises_known_cases(
 
     assert result.status is expected_status
     assert context.ledger.validation_results[-1] == result
+    # R17: a live agent call that recorded no usage is not a valid smoke run.
+    assert context.ledger.usage.requests > 0
+    assert context.ledger.usage_complete is True
     if expected_term is not None:
         issue_text = " ".join(
             issue.message

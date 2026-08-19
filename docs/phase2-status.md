@@ -1,11 +1,11 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-19
-**Implementation:** Tasks 1–9, R1–R12, and R13–R16 complete; R17–R19 open
+**Implementation:** Tasks 1–9, R1–R12, and R13–R17 complete; R18–R19 open
 
-**Remediation:** Post-pilot review reopened R6; R17–R19 and a complete new
+**Remediation:** Post-pilot review reopened R6; R18–R19 and a complete new
 preflight are required. R13 is closed, including both opt-in live canaries, and
-R14, R15, and R16 are closed.
+R14–R17 are closed apart from R17's final R6 rerun, which waits on R18–R19.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -89,11 +89,11 @@ historical verification, but they reopen the final R6 gate.
 | R11 | Verified | Append-only attempt, event-attribution, reconciliation, and interrupted-resume regressions |
 | R12 | Verified | Same-path/alias, existing-output, evaluator-failure, and exclusive-publication regressions |
 
-## Phase 2 Post-Pilot Remediation: R13–R19 (R13–R16 closed, R17–R19 open)
+## Phase 2 Post-Pilot Remediation: R13–R19 (R13–R17 closed, R18–R19 open)
 
 The 2026-08-19 deep review traced the paid-pilot failures through the retained
-workspaces and identified seven additional tasks. R13–R16 are closed;
-R17–R19 remain open and block a new Task 10 manifest. `PROJECT_PLAN.md`
+workspaces and identified seven additional tasks. R13–R17 are closed;
+R18–R19 remain open and block a new Task 10 manifest. `PROJECT_PLAN.md`
 contains their complete acceptance criteria.
 
 | Remediation | Priority | Status | Required closure |
@@ -102,11 +102,11 @@ contains their complete acceptance criteria.
 | R14 — Persist usage and cost across failed model calls | P0 | Complete | Usage is recorded at the response boundary and reconciled once per run on both success and failure paths; parse, turn-limit, and lifecycle failures keep their tokens; unreconcilable usage is marked incomplete and its cost published as unavailable rather than `$0.00` |
 | R15 — Give the single-agent runner a complete attempt lifecycle | P1 | Complete | `GeneralistRunner` opens one attempt before agent execution and finishes it as completed, blocked, failed, or interrupted with matching timing, usage, cost availability, and error; resume appends without recounting; benchmark records built from the real runner expose non-null attempt identity and full history |
 | R16 — Retain interrupted benchmark cells and resume them safely | P1 | Complete | An interrupted cell is persisted as a cancelled/interrupted record before the manifest aborts, retaining workspace, attempt history, partial usage, cost availability, and latency; the workspace status is reconciled to `cancelled`; denominators count it as an observed operational failure; explicit resume retries only cancelled cells and appends a new attempt |
-| R17 — Make the preflight sensitive to benchmark outcomes | P1 | Open | Replace permissive/presence-only assertions with strict schema, completion, report, usage, and attempt-history checks; rerun the complete R6 gate after R13–R19 |
+| R17 — Make the preflight sensitive to benchmark outcomes | P1 | Complete (final R6 rerun pending R18–R19) | One shared outcome-sensitive smoke gate asserts completion, readable report persistence, accounted or explicitly unavailable usage, explicit cost, and a reconciled attempt history; live tests, both canaries, and deterministic failure fixtures all use it, and it rejects all four retained pilot workspaces |
 | R18 — Preserve explicit blocked reasons and accurate failure taxonomy | P1 | Open | Carry machine-readable block reasons and distinguish budget, schema/agent, unresolved analysis, validation revision, and interruption in records and aggregates |
 | R19 — Calibrate the paid pilot across architectures and workload classes | P2 | Open | Declare and bind at least one pilot per architecture, retain per-pilot observations, use a transparent stratified/range estimate, and version any model/schema/budget/pilot-set change |
 
-Task 10 remains blocked until R17–R19 are implemented, their focused
+Task 10 remains blocked until R18–R19 are implemented, their focused
 regressions pass, and the complete R6 preflight—including Docker integrations,
 adversarial suites, both live architecture canaries, Ruff, and the 60-cell
 dry-run—is rerun successfully.
@@ -361,12 +361,52 @@ Retained pre-R16 evidence is not rewritten: the `v2` manifest still records zero
 cells and its workspace still reads `running`, as the Task 10 attempt table
 below describes.
 
+### 11. Outcome-sensitive preflight gate (R17)
+
+The previous preflight was green while every retained pilot failed, because its
+live smoke assertions checked permissive configuration and artifact presence: a
+ledger exists, some agent events were recorded. A run that produced invalid
+JSON, lost its usage, or dropped an interruption satisfied them.
+
+`benchmark/preflight.py` replaces that with one shared gate asserting the
+outcomes a paid matrix actually requires:
+
+- the run completed, with no error, and the persisted status matches the
+  returned status;
+- a report artifact was returned, persisted as the run's final report, and is
+  readable and non-empty on disk;
+- usage is nonzero, or explicitly published as incomplete with a reason — a
+  completed run silently recording zero tokens fails;
+- cost is either a known breakdown or an explained unavailability, and is never
+  a known breakdown over incomplete usage;
+- attempt history exists, its identity matches the run, no attempt is left
+  running, and its usage and elapsed deltas reconcile to the run totals;
+- the architecture's role boundary holds.
+
+Both live lifecycle smoke tests, both live canaries, and the deterministic
+failure fixtures call the same function, so the assertions that authorize a
+paid pilot are exactly the ones proven to reject broken runs. The fixtures
+drive the production runners to real outcomes and prove that invalid JSON, lost
+usage, a dropped interruption, a missing attempt history, unreconciled attempt
+usage, and a deleted report file all fail.
+
+The gate is calibrated against real evidence, not invented thresholds: a
+regression runs it against all four retained Task 10 pilot workspaces and
+requires every one to fail. The failures reproduce the documented modes exactly
+— all four fail completion and report persistence, and the two single-agent
+pilots additionally fail `usage:accounted` and `attempts:recorded`, the losses
+R14 and R15 fixed.
+
+R17's remaining acceptance item is the full R6 rerun, which cannot be completed
+until R18 and R19 land. At this revision Ruff, the Docker-backed integration
+tests, the adversarial fixtures, and the 60-cell dry-run all pass.
+
 ## Verification completed
 
 The latest full deterministic review run completed with:
 
 ```text
-439 passed, 16 deselected
+455 passed, 16 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
@@ -525,18 +565,19 @@ with credential detection.
 
 Before another paid attempt:
 
-1. Implement the remaining R17–R19 and their focused deterministic
+1. Implement the remaining R18–R19 and their focused deterministic
    regressions; do not alter evaluator rules to mask the retained failures.
-   R13–R16 are done: `tests/test_strict_agent_outputs.py`,
+   R13–R17 are done: `tests/test_strict_agent_outputs.py`,
    `tests/test_model_usage_accounting.py`,
-   `tests/test_generalist_attempt_lifecycle.py`, and
-   `tests/test_benchmark_interruption.py` hold their regressions.
+   `tests/test_generalist_attempt_lifecycle.py`,
+   `tests/test_benchmark_interruption.py`, and
+   `tests/test_preflight_smoke_gate.py` hold their regressions.
 2. Run the complete reopened R6 preflight, including strict-schema checks,
    failure-path accounting, lifecycle/taxonomy fixtures, Docker integrations,
    Ruff, and all 60 dry-run cells.
 3. Rerun the two bounded live strict-output canaries in
    `tests/test_strict_output_canary_live.py` (one per architecture) after
-   R17–R19 change lifecycle accounting, and require completion, report
+   R18–R19 change lifecycle accounting, and require completion, report
    persistence, usage accounting, and attempt history. They passed for R13 on
    2026-08-19, before the R14 accounting change.
 4. Recheck variable presence without printing the key and confirm Docker access.

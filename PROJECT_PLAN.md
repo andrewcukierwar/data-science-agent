@@ -1438,7 +1438,7 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 439 passed and 16 opt-in live tests
+full local verification completed with 455 passed and 16 opt-in live tests
 deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
@@ -1458,7 +1458,10 @@ R15 is complete: the single-agent runner opens, attributes, and closes typed
 attempts for every exit, so both architectures publish the same attempt
 protocol. R16 is complete: an interrupted cell is retained as a cancelled
 operational record with its partial accounting and can be resumed into a new
-append-only attempt. R17–R19 remain open. That review reopens R6: its complete preflight must pass again after
+append-only attempt. R17 is complete apart from the final R6 rerun: one shared
+outcome-sensitive smoke gate is used by the live tests, the canaries, and
+deterministic failure fixtures, and it rejects all four retained pilots.
+R18–R19 remain open. That review reopens R6: its complete preflight must pass again after
 R13–R19 before another Task 10 manifest is frozen.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
@@ -2051,9 +2054,38 @@ Acceptance:
 - interruption before agent execution and after partial persistence are both
   covered without losing or double-counting evidence.
 
-#### R17 — Make the preflight sensitive to benchmark outcomes [P1]
+#### R17 — Make the preflight sensitive to benchmark outcomes [P1] — Implemented
 
-Status: open; blocks Task 10.
+Status: implemented, except the final R6 rerun, which cannot be completed until
+R18 and R19 land.
+
+`benchmark/preflight.py` holds one shared, outcome-sensitive smoke gate:
+completion and error state, a report that is persisted *and* readable on disk,
+usage that is nonzero or explicitly unavailable, cost that is explicit rather
+than a silent zero, and an attempt history that reconciles to the run totals
+with no attempt left running. It also asserts the architecture's role
+boundary. The same gate is called by both live lifecycle smoke tests, by both
+live canaries, and by deterministic failure fixtures, so the assertions that
+authorize a paid pilot are the ones proven to reject broken runs.
+
+`tests/test_preflight_smoke_gate.py` drives the production runners to real
+outcomes and proves that invalid JSON, lost usage (a completed run claiming
+complete usage with zero tokens), a dropped interruption (an attempt left
+running), a missing attempt history, unreconciled attempt usage, and a missing
+report file all fail the gate, while a completed run and an honestly
+unavailable usage total pass. It also asserts, deterministically, that one
+bounded live canary per architecture still exists and uses the gate, so canary
+coverage cannot regress silently in normal CI.
+
+The gate is calibrated against real evidence rather than invented thresholds: a
+regression runs it against all four retained Task 10 pilot workspaces and
+requires every one to fail, with the single-agent pilots additionally failing
+the usage and attempt-history checks that R14 and R15 fixed. Live specialist
+smoke tests now also assert recorded, complete usage.
+
+Remaining for closure: the full R6 rerun after R18–R19. Ruff, the Docker-backed
+integrations, the adversarial fixtures, and the 60-cell dry-run pass at this
+revision.
 
 Replace regressions that assert permissive configuration or mere artifact
 presence with assertions on the outcomes Task 10 actually requires. The live

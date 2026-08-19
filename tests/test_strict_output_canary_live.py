@@ -19,6 +19,7 @@ import pytest
 
 from agents.output_contract import PRODUCTION_AGENT_OUTPUT_TYPES
 from agents.runtime import AgentRole
+from benchmark.preflight import assert_run_outcome
 from orchestration.generalist_runner import GeneralistRunner
 from orchestration.runner import AnalysisRunner
 from schemas.audit import AuditResult
@@ -94,6 +95,8 @@ def test_multi_agent_live_strict_output_canary(
     assert isinstance(result.lead_result, LeadResult)
     assert isinstance(result.validation_result, ValidationResult)
     _assert_strict_contract_completed(result.ledger)
+    # R17: the canary must also satisfy the outcome gate a paid pilot requires.
+    assert_run_outcome(result, architecture="multi-agent")
 
 
 @requires_live_credentials
@@ -126,6 +129,8 @@ def test_single_agent_live_strict_output_canary(
     assert result.ledger is not None
     assert result.ledger.specialist_results == []
     _assert_strict_contract_completed(result.ledger)
+    # R17: the canary must also satisfy the outcome gate a paid pilot requires.
+    assert_run_outcome(result, architecture="single-agent")
 
 
 @requires_live_credentials

@@ -92,4 +92,9 @@ def test_analyst_live_canonical_profitability_subtask(
     )
 
     assert result.objective
+    assert result.findings or result.metric_comparisons
     assert context.ledger.budget.specialist_invocations == 1
+    # R17: a live agent call that recorded no usage is not a valid smoke run.
+    assert context.ledger.usage.requests > 0
+    assert context.ledger.usage.total_tokens > 0
+    assert context.ledger.usage_complete is True

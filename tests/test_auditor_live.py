@@ -87,3 +87,7 @@ def test_data_auditor_live_does_not_invent_quality_issues(
     assert audit.tables
     assert audit.issues == [], audit.model_dump(mode="json")
     assert context.ledger.audit == audit
+    # R17: a live agent call that recorded no usage is not a valid smoke run.
+    assert context.ledger.usage.requests > 0
+    assert context.ledger.usage.total_tokens > 0
+    assert context.ledger.usage_complete is True
