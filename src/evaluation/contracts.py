@@ -835,6 +835,11 @@ class BenchmarkManifest(ContractModel):
     model: NonEmptyString
     model_provider: NonEmptyString
     unknown_cost_acknowledged: bool = False
+    unknown_cost_pilot_id: NonEmptyString | None = None
+    unknown_cost_pilot_record_digest: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     run_configuration: RunConfiguration
     budgets: BudgetConfiguration
     aggregation_version: VersionString
@@ -843,6 +848,19 @@ class BenchmarkManifest(ContractModel):
     architecture_comparisons: tuple[ArchitectureComparison, ...] = Field(
         default_factory=tuple
     )
+
+    @model_validator(mode="after")
+    def unknown_cost_acknowledgement_is_bound(self) -> BenchmarkManifest:
+        bound = (
+            self.unknown_cost_pilot_id is not None
+            and self.unknown_cost_pilot_record_digest is not None
+        )
+        if self.unknown_cost_acknowledged != bound:
+            raise ValueError(
+                "unknown-cost acknowledgement must include the exact pilot ID "
+                "and run-record digest"
+            )
+        return self
 
     @model_validator(mode="after")
     def manifest_has_unique_and_matching_cells(self) -> BenchmarkManifest:

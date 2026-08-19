@@ -12,6 +12,7 @@ from benchmark.runner import (
     BenchmarkExecutionSummary,
     BenchmarkPilotReport,
     BenchmarkRunner,
+    canonical_run_record_digest,
 )
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "BenchmarkExecutionSummary",
     "BenchmarkPilotReport",
     "BenchmarkRunner",
+    "canonical_run_record_digest",
     "AGGREGATION_VERSION",
     "aggregate_manifest",
     "build_benchmark_report",

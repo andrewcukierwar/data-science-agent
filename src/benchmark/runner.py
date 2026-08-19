@@ -17,10 +17,11 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from benchmark.aggregation import AGGREGATION_VERSION, aggregate_manifest
 from evaluation.contracts import (
@@ -127,17 +128,28 @@ class BenchmarkPilotReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    report_version: Literal["1.0"] = "1.0"
+    report_version: Literal["1.1"] = "1.1"
     pilot_id: str = Field(min_length=1)
     manifest_id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
+    record_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model: str = Field(min_length=1)
+    model_provider: str = Field(min_length=1)
+    run_configuration: RunConfiguration
+    budgets: BudgetConfiguration
     planned_cells: int = Field(ge=1)
     observed_requests: int = Field(ge=0)
     observed_input_tokens: int = Field(ge=0)
+    observed_cached_tokens: int = Field(ge=0)
     observed_output_tokens: int = Field(ge=0)
+    observed_reasoning_tokens: int = Field(ge=0)
+    observed_total_tokens: int = Field(ge=0)
     observed_cost_usd: float | None = Field(default=None, ge=0)
+    observed_cost: CostSummary
     estimated_full_matrix_cost_usd: float | None = Field(default=None, ge=0)
     observed_elapsed_seconds: float = Field(ge=0)
+    observed_started_at: datetime
+    observed_finished_at: datetime
     estimated_full_matrix_elapsed_seconds: float = Field(ge=0)
     created_at: datetime
     methodology: str = Field(min_length=1)
@@ -151,6 +163,13 @@ RuleMap = Mapping[str | tuple[str, str], ScenarioRules]
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def canonical_run_record_digest(record: BenchmarkRunRecord) -> str:
+    """Hash the canonical JSON representation of one immutable run record."""
+
+    payload = dump_stable_json(record.model_dump(mode="json"))
+    return sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _cell_key_string(
@@ -492,11 +511,19 @@ class BenchmarkRunner:
             )
             if (
                 pilot.observed_cost_usd is None
-                and unknown_cost
                 and not manifest.unknown_cost_acknowledged
             ):
+                if not unknown_cost:
+                    raise BenchmarkError(
+                        "pilot cost is unknown; pass the explicit unknown-cost "
+                        "acknowledgement before continuing beyond the pilot"
+                    )
                 manifest = manifest.model_copy(
-                    update={"unknown_cost_acknowledged": True}
+                    update={
+                        "unknown_cost_acknowledged": True,
+                        "unknown_cost_pilot_id": pilot.pilot_id,
+                        "unknown_cost_pilot_record_digest": pilot.record_digest,
+                    }
                 )
 
         manifest = self._replace_manifest(manifest, status=ManifestStatus.RUNNING)
@@ -618,15 +645,26 @@ class BenchmarkRunner:
             pilot_id=f"pilot-{uuid.uuid4().hex}",
             manifest_id=summary.manifest.manifest_id,
             run_id=run_id,
+            record_digest=canonical_run_record_digest(record),
+            model=summary.manifest.model,
+            model_provider=summary.manifest.model_provider,
+            run_configuration=summary.manifest.run_configuration,
+            budgets=summary.manifest.budgets,
             planned_cells=total_cells,
             observed_requests=record.usage.requests,
             observed_input_tokens=record.usage.input_tokens,
+            observed_cached_tokens=record.usage.cached_tokens,
             observed_output_tokens=record.usage.output_tokens,
+            observed_reasoning_tokens=record.usage.reasoning_tokens,
+            observed_total_tokens=record.usage.total_tokens,
             observed_cost_usd=observed_cost,
+            observed_cost=record.cost,
             estimated_full_matrix_cost_usd=(
                 observed_cost * scale if observed_cost is not None else None
             ),
             observed_elapsed_seconds=record.latency.elapsed_seconds,
+            observed_started_at=record.latency.started_at,
+            observed_finished_at=record.latency.finished_at,
             estimated_full_matrix_elapsed_seconds=record.latency.elapsed_seconds
             * scale,
             created_at=_now(),
@@ -1249,12 +1287,30 @@ class BenchmarkRunner:
             raise BenchmarkError(
                 f"cost-estimation pilot is required before the full matrix: {path}"
             )
-        report = BenchmarkPilotReport.model_validate_json(
-            path.read_text(encoding="utf-8")
-        )
+        try:
+            report = BenchmarkPilotReport.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValidationError) as error:
+            raise BenchmarkError(
+                f"invalid cost-estimation pilot report: {error}"
+            ) from error
         manifest = load_manifest(manifest_path)
         if report.manifest_id != manifest.manifest_id:
             raise BenchmarkError("pilot report belongs to a different manifest")
+        if (
+            report.model != manifest.model
+            or report.model_provider != manifest.model_provider
+        ):
+            raise BenchmarkError(
+                "pilot report model identity does not match the manifest"
+            )
+        if report.run_configuration != manifest.run_configuration:
+            raise BenchmarkError(
+                "pilot report run configuration does not match the manifest"
+            )
+        if report.budgets != manifest.budgets:
+            raise BenchmarkError("pilot report budgets do not match the manifest")
         expected_cells = (
             len(manifest.scenario_references)
             * len(manifest.architectures)
@@ -1277,6 +1333,72 @@ class BenchmarkRunner:
                 "cost-estimation pilot did not complete successfully; "
                 "full matrix execution is blocked"
             )
+        expected_digest = canonical_run_record_digest(pilot_record)
+        if report.record_digest != expected_digest:
+            raise BenchmarkError("pilot report run-record digest does not match")
+        if report.observed_requests != pilot_record.usage.requests:
+            raise BenchmarkError(
+                "pilot report request usage does not match the run record"
+            )
+        if report.observed_input_tokens != pilot_record.usage.input_tokens:
+            raise BenchmarkError(
+                "pilot report input-token usage does not match the run record"
+            )
+        if report.observed_cached_tokens != pilot_record.usage.cached_tokens:
+            raise BenchmarkError(
+                "pilot report cached-token usage does not match the run record"
+            )
+        if report.observed_output_tokens != pilot_record.usage.output_tokens:
+            raise BenchmarkError(
+                "pilot report output-token usage does not match the run record"
+            )
+        if report.observed_reasoning_tokens != pilot_record.usage.reasoning_tokens:
+            raise BenchmarkError(
+                "pilot report reasoning-token usage does not match the run record"
+            )
+        if report.observed_total_tokens != pilot_record.usage.total_tokens:
+            raise BenchmarkError(
+                "pilot report total-token usage does not match the run record"
+            )
+        if report.observed_elapsed_seconds != pilot_record.latency.elapsed_seconds:
+            raise BenchmarkError("pilot report latency does not match the run record")
+        if (
+            report.observed_started_at != pilot_record.latency.started_at
+            or report.observed_finished_at != pilot_record.latency.finished_at
+        ):
+            raise BenchmarkError(
+                "pilot report latency timestamps do not match the run record"
+            )
+        if report.observed_cost != pilot_record.cost:
+            raise BenchmarkError(
+                "pilot report cost breakdown does not match the run record"
+            )
+        if report.observed_cost_usd != pilot_record.cost.estimated_cost_usd:
+            raise BenchmarkError("pilot report cost does not match the run record")
+        recorded_cost = pilot_record.cost.estimated_cost_usd
+        expected_cost = (
+            recorded_cost * expected_cells if recorded_cost is not None else None
+        )
+        if report.estimated_full_matrix_cost_usd != expected_cost:
+            raise BenchmarkError("pilot full-matrix cost estimate is inconsistent")
+        expected_elapsed = pilot_record.latency.elapsed_seconds * expected_cells
+        if report.estimated_full_matrix_elapsed_seconds != expected_elapsed:
+            raise BenchmarkError("pilot full-matrix latency estimate is inconsistent")
+        if pilot_record.cost.availability is CostAvailability.KNOWN:
+            if (
+                pilot_record.cost.estimated_cost_usd is None
+                or not pilot_record.cost.pricing_model
+            ):
+                raise BenchmarkError(
+                    "known pilot pricing requires a cost and pricing model"
+                )
+        if manifest.unknown_cost_acknowledged and (
+            report.pilot_id != manifest.unknown_cost_pilot_id
+            or report.record_digest != manifest.unknown_cost_pilot_record_digest
+        ):
+            raise BenchmarkError(
+                "unknown-cost acknowledgement is not bound to this pilot report"
+            )
         if report.observed_cost_usd is None and not allow_unknown_cost:
             raise BenchmarkError(
                 "pilot cost is unknown; pass the explicit unknown-cost "
@@ -1293,4 +1415,5 @@ __all__ = [
     "BenchmarkPilotReport",
     "BenchmarkRunner",
     "aggregate_manifest",
+    "canonical_run_record_digest",
 ]

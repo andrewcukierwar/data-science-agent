@@ -12,7 +12,12 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from benchmark import BenchmarkCellResult, BenchmarkError, BenchmarkRunner
+from benchmark import (
+    BenchmarkCellResult,
+    BenchmarkError,
+    BenchmarkRunner,
+    canonical_run_record_digest,
+)
 from evaluation.contracts import (
     EvaluationCheck,
     EvaluationCheckStatus,
@@ -22,6 +27,7 @@ from evaluation.contracts import (
     FailureCategory,
     LifecycleOutcome,
     LifecycleStatus,
+    ManifestStatus,
     ScoreBreakdown,
 )
 from evaluation.engine import ScenarioRules, load_manifest
@@ -29,6 +35,7 @@ from evaluation.workspace_identity import (
     load_workspace_identity,
     workspace_identity_path,
 )
+from schemas.run_state import CostBreakdown, ModelUsage
 
 FIXED_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 SCENARIO_ID = "meaningful-ab-treatment-effect"
@@ -565,8 +572,152 @@ def test_cost_pilot_is_persisted_and_required_before_full_resume(tmp_path):
     )
     assert full.manifest.status.value == "complete"
     assert full.manifest.unknown_cost_acknowledged is True
+    assert full.manifest.unknown_cost_pilot_id == pilot.pilot_id
+    pilot_record = next(
+        record
+        for record in pilot_summary.manifest.run_records
+        if record.run_id == pilot.run_id
+    )
+    assert full.manifest.unknown_cost_pilot_record_digest == (
+        canonical_run_record_digest(pilot_record)
+    )
     assert len(full.skipped_run_ids) == 1
     assert len(calls) == 3
+
+
+@pytest.mark.parametrize(
+    ("field", "mutate"),
+    [
+        ("cost", lambda payload: payload.update(observed_cost_usd=0.0)),
+        ("usage", lambda payload: payload.update(observed_requests=99)),
+        ("latency", lambda payload: payload.update(observed_elapsed_seconds=99.0)),
+        ("run_id", lambda payload: payload.update(run_id="tampered-run")),
+        ("model", lambda payload: payload.update(model="tampered-model")),
+        ("matrix", lambda payload: payload.update(planned_cells=999)),
+        (
+            "record_digest",
+            lambda payload: payload.update(record_digest="0" * 64),
+        ),
+    ],
+)
+def test_full_run_refuses_tampered_cost_pilot_binding(tmp_path, field, mutate):
+    runner = _runner(tmp_path, lambda cell, _workspace: _completed(cell))
+    manifest_path = _plan(runner, tmp_path)
+    pilot_path = tmp_path / "pilot.json"
+    runner.run_pilot(manifest_path, pilot_path=pilot_path)
+    payload = json.loads(pilot_path.read_text(encoding="utf-8"))
+    mutate(payload)
+    pilot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BenchmarkError, match="pilot"):
+        runner.execute(
+            manifest_path,
+            resume=True,
+            require_pilot=True,
+            pilot_path=pilot_path,
+        )
+
+
+def test_unknown_cost_acknowledgement_is_bound_to_the_pilot_record(tmp_path):
+    runner = _runner(tmp_path, lambda cell, _workspace: _completed(cell))
+    manifest_path = _plan(runner, tmp_path)
+    pilot_path = tmp_path / "pilot.json"
+    runner.run_pilot(manifest_path, pilot_path=pilot_path)
+    runner.execute(
+        manifest_path,
+        resume=True,
+        require_pilot=True,
+        unknown_cost=True,
+        pilot_path=pilot_path,
+        max_cells=1,
+    )
+
+    payload = json.loads(pilot_path.read_text(encoding="utf-8"))
+    payload["pilot_id"] = "tampered-pilot"
+    pilot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BenchmarkError, match="acknowledgement"):
+        runner.execute(
+            manifest_path,
+            resume=True,
+            require_pilot=True,
+            pilot_path=pilot_path,
+        )
+
+
+def _completed_with_known_cost(cell, _workspace):
+    usage = ModelUsage(
+        requests=1,
+        input_tokens=100,
+        cached_tokens=0,
+        output_tokens=20,
+        reasoning_tokens=0,
+        total_tokens=120,
+    )
+    cost_breakdown = CostBreakdown(
+        pricing_model="fixture-pricing-v1",
+        input_per_1m=1.0,
+        cached_input_per_1m=0.1,
+        output_per_1m=2.0,
+        input_tokens=usage.input_tokens,
+        cached_tokens=usage.cached_tokens,
+        uncached_input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        uncached_input_cost_usd=0.0001,
+        cached_input_cost_usd=0.0,
+        output_cost_usd=0.00004,
+        estimated_cost_usd=0.00014,
+    )
+    state = SimpleNamespace(
+        run_id=cell.run_id,
+        created_at=FIXED_TIME,
+        updated_at=FIXED_TIME,
+        elapsed_seconds=2.5,
+        usage=usage,
+        cost_breakdown=cost_breakdown,
+    )
+    return BenchmarkCellResult(
+        lifecycle=LifecycleOutcome(status=LifecycleStatus.COMPLETED),
+        evaluator_result=_evaluated(cell),
+        state=state,
+        started_at=FIXED_TIME,
+        finished_at=FIXED_TIME,
+    )
+
+
+def test_known_cost_pilot_can_pass_with_recorded_pricing(tmp_path):
+    runner = _runner(tmp_path, _completed_with_known_cost)
+    manifest_path = _plan(runner, tmp_path)
+    pilot_path = tmp_path / "pilot.json"
+    runner.run_pilot(manifest_path, pilot_path=pilot_path)
+
+    summary = runner.execute(
+        manifest_path,
+        resume=True,
+        require_pilot=True,
+        pilot_path=pilot_path,
+    )
+
+    assert summary.manifest.status is ManifestStatus.COMPLETE
+    assert summary.manifest.unknown_cost_acknowledged is False
+
+
+def test_known_cost_pilot_rejects_pricing_tamper(tmp_path):
+    runner = _runner(tmp_path, _completed_with_known_cost)
+    manifest_path = _plan(runner, tmp_path)
+    pilot_path = tmp_path / "pilot.json"
+    runner.run_pilot(manifest_path, pilot_path=pilot_path)
+    payload = json.loads(pilot_path.read_text(encoding="utf-8"))
+    payload["observed_cost"]["pricing_model"] = "tampered-pricing"
+    pilot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BenchmarkError, match="cost"):
+        runner.execute(
+            manifest_path,
+            resume=True,
+            require_pilot=True,
+            pilot_path=pilot_path,
+        )
 
 
 def test_benchmark_workspace_persists_manifest_bound_source_identity(tmp_path):

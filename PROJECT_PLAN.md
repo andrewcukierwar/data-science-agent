@@ -2,8 +2,8 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R7–R9 remediations
-implemented; paid benchmark pending.
+**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R7–R10
+remediations implemented; paid benchmark pending.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1436,16 +1436,17 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 340 passed, 3 Docker integration tests
+full local verification completed with 350 passed, 3 Docker integration tests
 skipped, and 13 opt-in live tests deselected; Ruff lint and formatting checks
 passed. This status describes the
 implementation, not an architecture-performance result.
 
 R1–R5 have initial implementations, but the 2026-08-18 follow-up review found
 residual validity gaps. R2 meets its current acceptance criteria; R1, R4, and
-R5 remain partial, while R3 is closed by R8. R7, R8, and R9 are implemented
-with deterministic capability, identity, evaluator-error, and aggregation
-regressions. R6 and follow-up tasks R10–R12 must be completed before Task 10.
+R5 remain partial, while R3 is closed by R8. R7, R8, R9, and R10 are
+implemented with deterministic capability, identity, evaluator-error,
+aggregation, and pilot-binding regressions. R6 and follow-up tasks R11–R12
+must be completed before Task 10.
 No Phase 2 benchmark manifest
 has been frozen, no paid cost pilot or declared matrix has run, and no
 aggregate architecture comparison has been published. Existing canonical MVP
@@ -1783,7 +1784,10 @@ Acceptance:
 - tests exercise a non-empty multi-record manifest, including one evaluator
   crash and previously populated aggregates.
 
-#### R10 — Bind the cost pilot to its recorded benchmark cell [P2]
+#### R10 — Bind the cost pilot to its recorded benchmark cell [P2] — Implemented
+
+Status: implemented in the benchmark runner and manifest contracts; final R6
+preflight remains pending.
 
 Treat the pilot report as a derived view of an immutable run record, not an
 independent source of truth. Bind it to the manifest/model/configuration and a

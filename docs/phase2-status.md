@@ -1,10 +1,10 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-19
-**Implementation:** Tasks 1–9 complete
+**Implementation:** Tasks 1–9 complete; R7–R10 implemented
 
-**Remediation:** R2, R7, R8, and R9 verified; R1/R4/R5 partial; R3 closed by
-R8; R6 and R10–R12 pending before Task 10
+**Remediation:** R2, R7, R8, R9, and R10 verified; R1/R4/R5 partial; R3 closed
+by R8; R6 and R11–R12 pending before Task 10
 
 **Experiment:** Task 10 not started; no results published
 
@@ -55,9 +55,11 @@ verified before Task 10 begins:
 9. **R9 — Consolidate aggregation-safe rescoring [P1] (implemented).** Route APIs and CLIs
    through one per-record error-isolated implementation, then recompute
    aggregates and paired comparisons from the rescored records.
-10. **R10 — Bind the pilot to its run record [P2].** Verify a canonical run-record
-    digest and re-derive usage, latency, pricing availability, and cost before
-    permitting the remaining matrix.
+10. **R10 — Bind the pilot to its run record [P2] (implemented).** Verify a
+    canonical run-record digest and re-derive usage, latency, pricing
+    availability, and cost before permitting the remaining matrix. Unknown-cost
+    acknowledgements are bound to the exact manifest, pilot ID, and record
+    digest; tampering, including `null` to `0.0` cost substitution, is rejected.
 11. **R11 — Persist append-only attempt history [P2].** Retain every attempt ID,
     timing, outcome, usage/cost delta, and event attribution; reconcile those
     records to cumulative benchmark totals.
@@ -73,11 +75,12 @@ verified before Task 10 begins:
 | R2 | Verified | Retain all four failed-evidence adversarial fixtures |
 | R3 | Implemented | Retain identity mismatch and source-tamper regressions in final R6 preflight |
 | R4 | Partial | Retain evaluator-error denominator and taxonomy regressions in final R6 preflight |
-| R5 | Partial | R10 pilot binding and R11 durable attempt history |
+| R5 | Partial | R11 durable attempt history |
 | R6 | Pending | Remove false documents and rerun the final preflight after R7–R12 |
 | R7 | Implemented | Retain capability/tool-mix regressions; rerun them in final R6 preflight |
 | R8 | Implemented | Retain identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
 | R9 | Implemented | Retain multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
+| R10 | Implemented | Retain pilot/run-record digest, metadata, cost, latency, and unknown-cost acknowledgement regressions |
 
 ## What is implemented
 
@@ -196,6 +199,14 @@ Paid execution requires all of the following:
 - `OPENAI_DEFAULT_MODEL` exactly matching the frozen manifest model;
 - a persisted cost-estimation pilot before the full matrix.
 
+R10 makes the pilot a derived, versioned view of one completed manifest run
+record. The report carries the manifest/model/configuration identity, complete
+usage and latency observations, cost availability, and a canonical SHA-256
+digest of that record. The full-run gate re-derives and compares those values,
+and persists any unknown-cost acknowledgement against the exact pilot ID and
+record digest. Known pricing must include the recorded pricing model and cost
+breakdown; `null` cost cannot be replaced with `0.0` to bypass the gate.
+
 Plan, dry-run, offline evaluation, rescore, and report modes require no
 credentials and intentionally do not load `.env`. The first declared benchmark
 defaults to three repetitions per scenario and architecture; fewer repetitions
@@ -214,7 +225,7 @@ for later README tables without manual transcription.
 The latest full deterministic review run completed with:
 
 ```text
-340 passed, 3 skipped, 13 deselected
+350 passed, 3 skipped, 13 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
@@ -223,7 +234,8 @@ workspace paths. Deterministic fake-run coverage includes resume, interruption,
 duplicate IDs, failed cells, immutable workspaces, paid-execution guards, pilot
 enforcement, and offline rescoring. The follow-up review is now covered by
 tool-mix neutrality, workspace identity mismatch/tamper, and multi-record
-aggregation-safe rescore fixtures; tampered pilot cost remains a follow-up gap.
+aggregation-safe rescore fixtures; pilot/run-record tamper and unknown-cost
+acknowledgement fixtures now cover R10.
 
 ## Task 10 is intentionally blocked pending R1–R12
 
