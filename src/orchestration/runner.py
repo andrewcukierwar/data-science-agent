@@ -25,6 +25,7 @@ from agents.runtime import (
     AgentRunContext,
     normalize_agent_turn_limits,
 )
+from orchestration.block_reasons import RunConstraint, constraint_from_exception
 from orchestration.budgets import BudgetExhaustedError, BudgetResource
 from orchestration.ledger import AnalysisLedger
 from orchestration.pricing import resolve_model_pricing
@@ -36,6 +37,7 @@ from schemas.run_state import (
     Artifact,
     ArtifactKind,
     AttemptStatus,
+    RunBlockReason,
     RunBudget,
     RunStatus,
 )
@@ -64,6 +66,8 @@ class AnalysisRunResult:
     report: Artifact | None = None
     constrained: bool = False
     error: str | None = None
+    block_reason: RunBlockReason | None = None
+    block_detail: str | None = None
 
     @property
     def state(self) -> AnalysisRunState | None:
@@ -164,7 +168,7 @@ class AnalysisRunner:
         validation_result: ValidationResult | None = None
         report: Artifact | None = None
         constrained = False
-        constraint_reason: str | None = None
+        constraint: RunConstraint | None = None
         active_agent: tuple[str, AgentRole, str] | None = None
         active_agent_recorded = False
         runtime_metadata_finalized = False
@@ -258,8 +262,14 @@ class AnalysisRunner:
                     if lead_follow_up_cycles >= MAX_LEAD_FOLLOW_UP_CYCLES:
                         return (
                             candidate,
-                            "Lead requested additional objective-critical "
-                            "analysis after the configured continuation limit.",
+                            RunConstraint(
+                                reason=RunBlockReason.UNRESOLVED_FOLLOW_UP,
+                                detail=(
+                                    "Lead requested additional "
+                                    "objective-critical analysis after the "
+                                    "configured continuation limit."
+                                ),
+                            ),
                         )
 
                     lead_follow_up_cycles += 1
@@ -298,7 +308,7 @@ class AnalysisRunner:
                             prior_result=candidate,
                         )
                     except Exception as error:
-                        reason = self._follow_up_failure_reason(error)
+                        follow_up = self._follow_up_failure_reason(error)
                         if active_agent is not None and not active_agent_recorded:
                             agent_name, role, agent_objective = active_agent
                             ledger.record_agent_event(
@@ -307,17 +317,17 @@ class AnalysisRunner:
                                 status=AgentEventStatus.FAILED,
                                 model=self.model,
                                 objective=agent_objective,
-                                error=reason,
+                                error=follow_up.detail,
                             )
                             active_agent_recorded = True
-                        return candidate, reason
+                        return candidate, follow_up
 
                 return candidate, None
 
             lead_result, follow_up_constraint = await run_lead_candidate(objective)
             if follow_up_constraint is not None:
                 constrained = True
-                constraint_reason = follow_up_constraint
+                constraint = follow_up_constraint
 
             completion_validation = None
             if follow_up_constraint is None:
@@ -344,12 +354,12 @@ class AnalysisRunner:
                     )
                     if completion_constraint is not None:
                         constrained = True
-                        constraint_reason = completion_constraint
+                        constraint = completion_constraint
                 except Exception as error:
                     constrained = True
-                    constraint_reason = (
-                        "Lead completion pass could not finish: "
-                        f"{type(error).__name__}: {error}"
+                    constraint = constraint_from_exception(
+                        error,
+                        context="Lead completion pass",
                     )
 
             critic_context, critic_agent = self._agent_context(
@@ -392,7 +402,7 @@ class AnalysisRunner:
                     if validation_result is None:
                         raise
                     constrained = True
-                    constraint_reason = self._critic_failure_reason(error)
+                    constraint = self._critic_failure_reason(error)
                     if active_agent is not None and not active_agent_recorded:
                         agent_name, role, agent_objective = active_agent
                         ledger.record_agent_event(
@@ -401,7 +411,7 @@ class AnalysisRunner:
                             status=AgentEventStatus.FAILED,
                             model=self.model,
                             objective=agent_objective,
-                            error=constraint_reason,
+                            error=constraint.detail,
                         )
                         active_agent_recorded = True
                     break
@@ -423,9 +433,13 @@ class AnalysisRunner:
 
                 if critic_attempts >= available_critic_loops:
                     constrained = True
-                    constraint_reason = (
-                        "Critic returned REVISE and the configured maximum of "
-                        f"{available_critic_loops} critic loop(s) was reached."
+                    constraint = RunConstraint(
+                        reason=RunBlockReason.VALIDATION_REVISION,
+                        detail=(
+                            "Critic returned REVISE and the configured maximum "
+                            f"of {available_critic_loops} critic loop(s) was "
+                            "reached."
+                        ),
                     )
                     break
 
@@ -452,13 +466,13 @@ class AnalysisRunner:
                     lead_result = remediated_lead_result
                     if follow_up_constraint is not None:
                         constrained = True
-                        constraint_reason = follow_up_constraint
+                        constraint = follow_up_constraint
                 except Exception as error:
                     # A usable candidate and Critic result already exist. Keep
                     # them and produce a constrained report when bounded
                     # remediation cannot complete, including its stop reason.
                     constrained = True
-                    constraint_reason = self._remediation_failure_reason(error)
+                    constraint = self._remediation_failure_reason(error)
                     if active_agent is not None and not active_agent_recorded:
                         agent_name, role, agent_objective = active_agent
                         ledger.record_agent_event(
@@ -467,7 +481,7 @@ class AnalysisRunner:
                             status=AgentEventStatus.FAILED,
                             model=self.model,
                             objective=agent_objective,
-                            error=constraint_reason,
+                            error=constraint.detail,
                         )
                         active_agent_recorded = True
                     break
@@ -482,10 +496,14 @@ class AnalysisRunner:
                 lead_result,
                 validation_result,
                 constrained=constrained,
-                constraint_reason=constraint_reason,
+                constraint_reason=constraint.detail if constraint else None,
             )
             if constrained:
-                ledger.set_status(RunStatus.BLOCKED)
+                blocking = constraint or RunConstraint(
+                    reason=RunBlockReason.OTHER,
+                    detail="The analysis was constrained without a stated cause.",
+                )
+                ledger.mark_blocked(blocking.reason, blocking.detail)
                 attempt_terminal_status = AttemptStatus.BLOCKED
             else:
                 ledger.set_status(RunStatus.COMPLETED)
@@ -499,9 +517,12 @@ class AnalysisRunner:
                 validation_result=validation_result,
                 report=report,
                 constrained=constrained,
+                block_reason=ledger.state.block_reason,
+                block_detail=ledger.state.block_detail,
             )
         except Exception as error:
             message = f"{type(error).__name__}: {error}"
+            constraint = constraint_from_exception(error, context="The analysis")
             if ledger is not None:
                 if active_agent is not None and not active_agent_recorded:
                     agent_name, role, agent_objective = active_agent
@@ -515,7 +536,11 @@ class AnalysisRunner:
                     )
                 attempt_terminal_status = AttemptStatus.FAILED
                 attempt_terminal_error = message
-                ledger.mark_failed(message)
+                ledger.mark_failed(
+                    message,
+                    reason=constraint.reason,
+                    detail=constraint.detail,
+                )
             return AnalysisRunResult(
                 status=RunStatus.FAILED,
                 workspace=run_workspace,
@@ -526,6 +551,8 @@ class AnalysisRunner:
                 report=report,
                 constrained=constrained,
                 error=message,
+                block_reason=constraint.reason,
+                block_detail=constraint.detail,
             )
         finally:
             if ledger is not None and not runtime_metadata_finalized:
@@ -593,34 +620,22 @@ class AnalysisRunner:
         )
 
     @staticmethod
-    def _remediation_failure_reason(error: Exception) -> str:
-        """Describe why an existing candidate could not be remediated."""
+    def _remediation_failure_reason(error: Exception) -> RunConstraint:
+        """Classify why an existing candidate could not be remediated."""
 
-        if isinstance(error, BudgetExhaustedError):
-            return f"Remediation stopped by budget exhaustion: {error}"
-        if isinstance(error, MaxTurnsExceeded):
-            return f"Remediation stopped by the Lead turn limit: {error}"
-        return f"Remediation stopped by a bounded execution failure: {error}"
+        return constraint_from_exception(error, context="Remediation")
 
     @staticmethod
-    def _critic_failure_reason(error: Exception) -> str:
-        """Describe why a later Critic review could not be completed."""
+    def _critic_failure_reason(error: Exception) -> RunConstraint:
+        """Classify why a later Critic review could not be completed."""
 
-        if isinstance(error, BudgetExhaustedError):
-            return f"Critic re-review stopped by budget exhaustion: {error}"
-        if isinstance(error, MaxTurnsExceeded):
-            return f"Critic re-review stopped by its turn limit: {error}"
-        return f"Critic re-review stopped by a bounded execution failure: {error}"
+        return constraint_from_exception(error, context="Critic re-review")
 
     @staticmethod
-    def _follow_up_failure_reason(error: Exception) -> str:
-        """Describe why an objective-critical Lead continuation stopped."""
+    def _follow_up_failure_reason(error: Exception) -> RunConstraint:
+        """Classify why an objective-critical Lead continuation stopped."""
 
-        if isinstance(error, BudgetExhaustedError):
-            return f"Lead follow-up stopped by budget exhaustion: {error}"
-        if isinstance(error, MaxTurnsExceeded):
-            return f"Lead follow-up stopped by the Lead turn limit: {error}"
-        return f"Lead follow-up stopped by a bounded execution failure: {error}"
+        return constraint_from_exception(error, context="Lead follow-up")
 
     @staticmethod
     def _ensure_budget_increment(

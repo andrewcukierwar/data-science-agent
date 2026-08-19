@@ -33,6 +33,7 @@ from schemas.run_state import (
     HypothesisStatus,
     ModelPricing,
     ModelUsage,
+    RunBlockReason,
     RunBudget,
     RunStatus,
     SpecialistResultRecord,
@@ -246,6 +247,9 @@ class AnalysisLedger(ToolEventLedger):
         self._state.status = RunStatus(status)
         if self._state.status is RunStatus.RUNNING:
             self._state.error = None
+        if self._state.status is RunStatus.COMPLETED:
+            self._state.block_reason = None
+            self._state.block_detail = None
         self.save()
         return self._state.status
 
@@ -714,12 +718,39 @@ class AnalysisLedger(ToolEventLedger):
         self.save()
         return artifact
 
-    def mark_failed(self, error: str | Exception) -> None:
+    def mark_failed(
+        self,
+        error: str | Exception,
+        *,
+        reason: RunBlockReason = RunBlockReason.OTHER,
+        detail: str | None = None,
+    ) -> None:
         """Persist a failed status and concise observable error state."""
 
         message = str(error).strip() or error.__class__.__name__
         self._state.status = RunStatus.FAILED
         self._state.error = message
+        self._state.block_reason = RunBlockReason(reason)
+        self._state.block_detail = (detail or "").strip() or message
+        self.save()
+
+    def mark_blocked(
+        self,
+        reason: RunBlockReason,
+        detail: str,
+    ) -> None:
+        """Persist a blocked status with its explicit originating condition.
+
+        A blocked analysis is not automatically a budget failure. The caller
+        names the condition, so operational reporting can distinguish budget
+        exhaustion from an unresolved self-critique, an unresolved follow-up,
+        a schema violation, or an interruption.
+        """
+
+        message = detail.strip() or RunBlockReason(reason).value
+        self._state.status = RunStatus.BLOCKED
+        self._state.block_reason = RunBlockReason(reason)
+        self._state.block_detail = message
         self.save()
 
     def mark_cancelled(self, reason: str | Exception) -> None:
@@ -733,6 +764,8 @@ class AnalysisLedger(ToolEventLedger):
         message = str(reason).strip() or reason.__class__.__name__
         self._state.status = RunStatus.CANCELLED
         self._state.error = message
+        self._state.block_reason = RunBlockReason.INTERRUPTED
+        self._state.block_detail = message
         self.save()
 
     def add_hypothesis(self, hypothesis: Hypothesis) -> Hypothesis:

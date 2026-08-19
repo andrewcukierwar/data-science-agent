@@ -15,6 +15,7 @@ from schemas.run_state import (
     ArtifactKind,
     AttemptStatus,
     Hypothesis,
+    RunBlockReason,
     RunBudget,
     RunStatus,
 )
@@ -533,6 +534,8 @@ def test_runner_preserves_candidate_when_sql_budget_stops_remediation(
     assert result.ledger.budget.sql_executions == 0
     report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
     assert "Remediation stopped by budget exhaustion" in report_text
+    assert result.block_reason is RunBlockReason.BUDGET_EXHAUSTED
+    assert result.ledger.state.block_reason is RunBlockReason.BUDGET_EXHAUSTED
     assert "sql_executions" in report_text
     assert "V-SQL" in report_text
     assert result.ledger.agent_events[-1].status.value == "failed"
@@ -592,6 +595,8 @@ def test_runner_constrains_when_analytical_specialist_budget_stops_remediation(
     assert result.ledger.budget.specialist_invocations == 1
     report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
     assert "Remediation stopped by budget exhaustion" in report_text
+    assert result.block_reason is RunBlockReason.BUDGET_EXHAUSTED
+    assert result.ledger.state.block_reason is RunBlockReason.BUDGET_EXHAUSTED
     assert "V-ANALYTICAL-REMEDIATION" in report_text
 
 
@@ -646,7 +651,10 @@ def test_runner_preserves_candidate_when_lead_turns_stop_remediation(
     assert result.ledger is not None
     assert result.ledger.state.error is None
     report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
-    assert "Remediation stopped by the Lead turn limit" in report_text
+    assert "Remediation stopped by the agent turn limit" in report_text
+    # R18: a turn-limit stop is an agent bound, not the configured budget.
+    assert result.block_reason is RunBlockReason.AGENT_FAILURE
+    assert result.ledger.state.block_reason is RunBlockReason.AGENT_FAILURE
     assert "V-TURNS" in report_text
 
 

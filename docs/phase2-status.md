@@ -1,11 +1,11 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-19
-**Implementation:** Tasks 1–9, R1–R12, and R13–R17 complete; R18–R19 open
+**Implementation:** Tasks 1–9, R1–R12, and R13–R18 complete; R19 open
 
-**Remediation:** Post-pilot review reopened R6; R18–R19 and a complete new
+**Remediation:** Post-pilot review reopened R6; R19 and a complete new
 preflight are required. R13 is closed, including both opt-in live canaries, and
-R14–R17 are closed apart from R17's final R6 rerun, which waits on R18–R19.
+R14–R18 are closed apart from R17's final R6 rerun, which waits on R19.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -89,12 +89,12 @@ historical verification, but they reopen the final R6 gate.
 | R11 | Verified | Append-only attempt, event-attribution, reconciliation, and interrupted-resume regressions |
 | R12 | Verified | Same-path/alias, existing-output, evaluator-failure, and exclusive-publication regressions |
 
-## Phase 2 Post-Pilot Remediation: R13–R19 (R13–R17 closed, R18–R19 open)
+## Phase 2 Post-Pilot Remediation: R13–R19 (R13–R18 closed, R19 open)
 
 The 2026-08-19 deep review traced the paid-pilot failures through the retained
-workspaces and identified seven additional tasks. R13–R17 are closed;
-R18–R19 remain open and block a new Task 10 manifest. `PROJECT_PLAN.md`
-contains their complete acceptance criteria.
+workspaces and identified seven additional tasks. R13–R18 are closed; R19
+remains open and blocks a new Task 10 manifest. `PROJECT_PLAN.md` contains
+their complete acceptance criteria.
 
 | Remediation | Priority | Status | Required closure |
 | --- | --- | --- | --- |
@@ -103,10 +103,10 @@ contains their complete acceptance criteria.
 | R15 — Give the single-agent runner a complete attempt lifecycle | P1 | Complete | `GeneralistRunner` opens one attempt before agent execution and finishes it as completed, blocked, failed, or interrupted with matching timing, usage, cost availability, and error; resume appends without recounting; benchmark records built from the real runner expose non-null attempt identity and full history |
 | R16 — Retain interrupted benchmark cells and resume them safely | P1 | Complete | An interrupted cell is persisted as a cancelled/interrupted record before the manifest aborts, retaining workspace, attempt history, partial usage, cost availability, and latency; the workspace status is reconciled to `cancelled`; denominators count it as an observed operational failure; explicit resume retries only cancelled cells and appends a new attempt |
 | R17 — Make the preflight sensitive to benchmark outcomes | P1 | Complete (final R6 rerun pending R18–R19) | One shared outcome-sensitive smoke gate asserts completion, readable report persistence, accounted or explicitly unavailable usage, explicit cost, and a reconciled attempt history; live tests, both canaries, and deterministic failure fixtures all use it, and it rejects all four retained pilot workspaces |
-| R18 — Preserve explicit blocked reasons and accurate failure taxonomy | P1 | Open | Carry machine-readable block reasons and distinguish budget, schema/agent, unresolved analysis, validation revision, and interruption in records and aggregates |
+| R18 — Preserve explicit blocked reasons and accurate failure taxonomy | P1 | Complete | Orchestration persists a typed `RunBlockReason` plus a readable detail for every non-completion; the benchmark maps it to an explicit category instead of hard-coding budget; blocked and cancelled runs stay operational observations rather than evaluator failures; the aggregate taxonomy reproduces per-record categories exactly |
 | R19 — Calibrate the paid pilot across architectures and workload classes | P2 | Open | Declare and bind at least one pilot per architecture, retain per-pilot observations, use a transparent stratified/range estimate, and version any model/schema/budget/pilot-set change |
 
-Task 10 remains blocked until R18–R19 are implemented, their focused
+Task 10 remains blocked until R19 is implemented, its focused
 regressions pass, and the complete R6 preflight—including Docker integrations,
 adversarial suites, both live architecture canaries, Ruff, and the 60-cell
 dry-run—is rerun successfully.
@@ -398,15 +398,53 @@ pilots additionally fail `usage:accounted` and `attempts:recorded`, the losses
 R14 and R15 fixed.
 
 R17's remaining acceptance item is the full R6 rerun, which cannot be completed
-until R18 and R19 land. At this revision Ruff, the Docker-backed integration
-tests, the adversarial fixtures, and the 60-cell dry-run all pass.
+until R19 lands. At this revision Ruff, the Docker-backed integration tests, the
+adversarial fixtures, and the 60-cell dry-run all pass.
+
+### 12. Explicit block reasons and accurate failure taxonomy (R18)
+
+Every blocked analysis used to be recorded as a budget failure, and every other
+non-completion had its category guessed by matching substrings in an error
+message. A self-critique that still required revision, an unresolved follow-up,
+a schema violation, and an interruption were all published as `budget`, which
+would have made the Task 10 failure taxonomy actively misleading.
+
+Orchestration now persists a typed `RunBlockReason` and a human-readable
+`block_detail` for every non-completion. Classification happens where the
+condition is known:
+
+| Condition | Reason | Benchmark category |
+| --- | --- | --- |
+| Run resource budget exhausted | `budget_exhausted` | `budget` |
+| Critic/self-critique still REVISE | `validation_revision` | `validation` |
+| Objective-critical follow-up unresolved | `unresolved_follow_up` | `unresolved_follow_up` |
+| Structured-output violation | `schema_failure` | `schema` |
+| Agent turn limit reached | `agent_failure` | `agent` |
+| Mandatory audit blocked | `data_quality` | `data_quality` |
+| User or provider interruption | `interrupted` | `interrupted` |
+
+Only `BudgetExhaustedError` is budget exhaustion. A turn limit is an agent
+bound, not the configured resource budget, and a structured-output violation is
+a schema failure — the distinction the retained pilots needed and did not have.
+
+`BenchmarkRunner` reads the persisted reason instead of hard-coding
+`FailureCategory.BUDGET` for blocked runs; prose inference survives only for
+pre-R18 workspaces that carry no reason. Blocked and cancelled records keep
+`NOT_EVALUATED` rather than `FAIL`, so they stay operational observations inside
+the denominators and are never silently converted into analytical evaluator
+failures. The aggregate taxonomy is asserted to reproduce the per-record
+categories exactly.
+
+Retained evidence is not rewritten: the two retained invalid-JSON pilot records
+still read `failed / other`, because their workspaces predate the persisted
+reason. An equivalent run today records `schema_failure` / `schema`.
 
 ## Verification completed
 
 The latest full deterministic review run completed with:
 
 ```text
-455 passed, 16 deselected
+472 passed, 16 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
@@ -565,19 +603,20 @@ with credential detection.
 
 Before another paid attempt:
 
-1. Implement the remaining R18–R19 and their focused deterministic
-   regressions; do not alter evaluator rules to mask the retained failures.
-   R13–R17 are done: `tests/test_strict_agent_outputs.py`,
+1. Implement the remaining R19 and its focused deterministic regressions; do
+   not alter evaluator rules to mask the retained failures. R13–R18 are done:
+   `tests/test_strict_agent_outputs.py`,
    `tests/test_model_usage_accounting.py`,
    `tests/test_generalist_attempt_lifecycle.py`,
-   `tests/test_benchmark_interruption.py`, and
-   `tests/test_preflight_smoke_gate.py` hold their regressions.
+   `tests/test_benchmark_interruption.py`,
+   `tests/test_preflight_smoke_gate.py`, and
+   `tests/test_failure_taxonomy.py` hold their regressions.
 2. Run the complete reopened R6 preflight, including strict-schema checks,
    failure-path accounting, lifecycle/taxonomy fixtures, Docker integrations,
    Ruff, and all 60 dry-run cells.
 3. Rerun the two bounded live strict-output canaries in
    `tests/test_strict_output_canary_live.py` (one per architecture) after
-   R18–R19 change lifecycle accounting, and require completion, report
+   R19 changes pilot calibration, and require completion, report
    persistence, usage accounting, and attempt history. They passed for R13 on
    2026-08-19, before the R14 accounting change.
 4. Recheck variable presence without printing the key and confirm Docker access.

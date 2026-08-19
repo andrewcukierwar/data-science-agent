@@ -334,6 +334,10 @@ class FailureCategory(StrEnum):
     PROVIDER = "provider"
     WORKSPACE = "workspace"
     INTERRUPTED = "interrupted"
+    # Analytical constraints that stopped a run without any operational fault.
+    VALIDATION = "validation"
+    UNRESOLVED_FOLLOW_UP = "unresolved_follow_up"
+    DATA_QUALITY = "data_quality"
     OTHER = "other"
 
 

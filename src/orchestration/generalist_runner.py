@@ -10,6 +10,7 @@ from pathlib import Path
 from agents.critic import persist_validation_result
 from agents.generalist import persist_generalist_result, run_generalist
 from agents.runtime import AgentRole
+from orchestration.block_reasons import RunConstraint, constraint_from_exception
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
 from schemas.audit import AuditResult, AuditStatus
@@ -20,10 +21,15 @@ from schemas.run_state import (
     AnalysisRunState,
     Artifact,
     AttemptStatus,
+    RunBlockReason,
     RunStatus,
 )
 from schemas.validation import ValidationResult, ValidationStatus
 from tools.workspace import Workspace
+
+
+class BlockedAuditError(RuntimeError):
+    """Raised when the generalist's mandatory data audit is blocked."""
 
 
 @dataclass(slots=True)
@@ -40,6 +46,8 @@ class GeneralistRunResult:
     report: Artifact | None = None
     constrained: bool = False
     error: str | None = None
+    block_reason: RunBlockReason | None = None
+    block_detail: str | None = None
 
     @property
     def state(self) -> AnalysisRunState | None:
@@ -92,6 +100,7 @@ class GeneralistRunner(AnalysisRunner):
         validation_result: ValidationResult | None = None
         report: Artifact | None = None
         constrained = False
+        constraint: RunConstraint | None = None
         active_agent: tuple[str, str] | None = None
         active_agent_recorded = False
         runtime_metadata_finalized = False
@@ -166,11 +175,22 @@ class GeneralistRunner(AnalysisRunner):
             active_agent_recorded = True
 
             if audit.status is AuditStatus.BLOCKED:
-                raise RuntimeError("generalist data audit was blocked")
-            constrained = (
-                validation_result.status is ValidationStatus.REVISE
-                or lead_result.follow_up_analysis
-            )
+                raise BlockedAuditError("generalist data audit was blocked")
+            # Name the originating condition rather than defaulting every
+            # constrained single-agent run to a budget failure.
+            if validation_result.status is ValidationStatus.REVISE:
+                constraint = RunConstraint(
+                    reason=RunBlockReason.VALIDATION_REVISION,
+                    detail="The generalist self-critique returned REVISE.",
+                )
+            elif lead_result.follow_up_analysis:
+                constraint = RunConstraint(
+                    reason=RunBlockReason.UNRESOLVED_FOLLOW_UP,
+                    detail=(
+                        "The generalist left objective-critical follow-up unresolved."
+                    ),
+                )
+            constrained = constraint is not None
 
             self._finalize_runtime_metadata(ledger, started)
             runtime_metadata_finalized = True
@@ -182,16 +202,10 @@ class GeneralistRunner(AnalysisRunner):
                 lead_result,
                 validation_result,
                 constrained=constrained,
-                constraint_reason=(
-                    "The generalist self-critique returned REVISE."
-                    if validation_result.status is ValidationStatus.REVISE
-                    else "The generalist left objective-critical follow-up unresolved."
-                    if lead_result.follow_up_analysis
-                    else None
-                ),
+                constraint_reason=constraint.detail if constraint else None,
             )
-            if constrained:
-                ledger.set_status(RunStatus.BLOCKED)
+            if constraint is not None:
+                ledger.mark_blocked(constraint.reason, constraint.detail)
                 attempt_terminal_status = AttemptStatus.BLOCKED
             else:
                 ledger.set_status(RunStatus.COMPLETED)
@@ -206,9 +220,22 @@ class GeneralistRunner(AnalysisRunner):
                 validation_result=validation_result,
                 report=report,
                 constrained=constrained,
+                block_reason=ledger.state.block_reason,
+                block_detail=ledger.state.block_detail,
             )
         except Exception as error:
             message = f"{type(error).__name__}: {error}"
+            constraint = (
+                RunConstraint(
+                    reason=RunBlockReason.DATA_QUALITY,
+                    detail=(
+                        "The mandatory data audit was blocked by data-quality "
+                        f"conditions: {error}"
+                    ),
+                )
+                if isinstance(error, BlockedAuditError)
+                else constraint_from_exception(error, context="The analysis")
+            )
             if ledger is not None:
                 if active_agent is not None and not active_agent_recorded:
                     agent_name, agent_objective = active_agent
@@ -222,7 +249,11 @@ class GeneralistRunner(AnalysisRunner):
                     )
                 attempt_terminal_status = AttemptStatus.FAILED
                 attempt_terminal_error = message
-                ledger.mark_failed(message)
+                ledger.mark_failed(
+                    message,
+                    reason=constraint.reason,
+                    detail=constraint.detail,
+                )
             return GeneralistRunResult(
                 status=RunStatus.FAILED,
                 workspace=run_workspace,
@@ -234,6 +265,8 @@ class GeneralistRunner(AnalysisRunner):
                 report=report,
                 constrained=constrained,
                 error=message,
+                block_reason=constraint.reason,
+                block_detail=constraint.detail,
             )
         finally:
             if ledger is not None and not runtime_metadata_finalized:

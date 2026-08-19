@@ -71,7 +71,7 @@ from evaluation.workspace_identity import (
 from orchestration.ledger import AnalysisLedger
 from scenarios import discover_scenarios
 from scenarios.catalog import ScenarioCatalog, ScenarioRegistration
-from schemas.run_state import RunBudget
+from schemas.run_state import RunBlockReason, RunBudget
 from tools.workspace import Workspace, WorkspaceManager
 
 BENCHMARK_RUNNER_VERSION = "1.0"
@@ -293,7 +293,37 @@ def _not_evaluated(
     )
 
 
+_BLOCK_REASON_CATEGORIES: dict[RunBlockReason, FailureCategory] = {
+    RunBlockReason.BUDGET_EXHAUSTED: FailureCategory.BUDGET,
+    RunBlockReason.VALIDATION_REVISION: FailureCategory.VALIDATION,
+    RunBlockReason.UNRESOLVED_FOLLOW_UP: FailureCategory.UNRESOLVED_FOLLOW_UP,
+    RunBlockReason.AGENT_FAILURE: FailureCategory.AGENT,
+    RunBlockReason.SCHEMA_FAILURE: FailureCategory.SCHEMA,
+    RunBlockReason.TOOL_FAILURE: FailureCategory.TOOL,
+    RunBlockReason.PROVIDER_FAILURE: FailureCategory.PROVIDER,
+    RunBlockReason.SANDBOX_FAILURE: FailureCategory.SANDBOX,
+    RunBlockReason.WORKSPACE_FAILURE: FailureCategory.WORKSPACE,
+    RunBlockReason.DATA_QUALITY: FailureCategory.DATA_QUALITY,
+    RunBlockReason.TIMEOUT: FailureCategory.TIMEOUT,
+    RunBlockReason.INTERRUPTED: FailureCategory.INTERRUPTED,
+    RunBlockReason.OTHER: FailureCategory.OTHER,
+}
+
+
+def category_for_block_reason(reason: RunBlockReason) -> FailureCategory:
+    """Map a persisted orchestration block reason to its benchmark category."""
+
+    return _BLOCK_REASON_CATEGORIES[RunBlockReason(reason)]
+
+
 def _failure_category(message: str) -> FailureCategory:
+    """Infer a category from prose.
+
+    This is the compatibility path for pre-R18 workspaces that persisted no
+    machine-readable block reason. Live runs now carry an explicit reason and
+    never reach this inference.
+    """
+
     lowered = message.lower()
     if any(term in lowered for term in ("api", "provider", "credential", "rate limit")):
         return FailureCategory.PROVIDER
@@ -1046,19 +1076,57 @@ class BenchmarkRunner:
         )
         state = getattr(raw_result, "state", None)
         error = getattr(raw_result, "error", None) or getattr(state, "error", None)
+        # Orchestration persists the originating condition, so the category is
+        # read rather than guessed. Not every blocked analysis is a budget
+        # failure: a self-critique revision, an unresolved follow-up, a schema
+        # violation, and an interruption are distinct outcomes.
+        block_reason = getattr(raw_result, "block_reason", None) or getattr(
+            state,
+            "block_reason",
+            None,
+        )
+        block_detail = getattr(raw_result, "block_detail", None) or getattr(
+            state,
+            "block_detail",
+            None,
+        )
         if status == LifecycleStatus.COMPLETED.value:
             lifecycle = LifecycleOutcome(status=LifecycleStatus.COMPLETED)
+        elif status == LifecycleStatus.CANCELLED.value:
+            message = block_detail or error or "analysis was interrupted"
+            lifecycle = LifecycleOutcome(
+                status=LifecycleStatus.CANCELLED,
+                failure_category=(
+                    category_for_block_reason(block_reason)
+                    if block_reason is not None
+                    else FailureCategory.INTERRUPTED
+                ),
+                failure_message=message,
+            )
         elif status == LifecycleStatus.BLOCKED.value:
+            message = block_detail or error or "analysis was constrained"
             lifecycle = LifecycleOutcome(
                 status=LifecycleStatus.BLOCKED,
-                failure_category=FailureCategory.BUDGET,
-                failure_message=error or "analysis was constrained",
+                failure_category=(
+                    category_for_block_reason(block_reason)
+                    if block_reason is not None
+                    else _failure_category(message)
+                ),
+                failure_message=message,
             )
         else:
-            message = error or f"analysis returned lifecycle status {status}"
+            message = (
+                error
+                or block_detail
+                or (f"analysis returned lifecycle status {status}")
+            )
             lifecycle = LifecycleOutcome(
                 status=LifecycleStatus.FAILED,
-                failure_category=_failure_category(message),
+                failure_category=(
+                    category_for_block_reason(block_reason)
+                    if block_reason is not None
+                    else _failure_category(message)
+                ),
                 failure_message=message,
             )
         return BenchmarkCellResult(

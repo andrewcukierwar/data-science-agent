@@ -162,6 +162,31 @@ class RunStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class RunBlockReason(StrEnum):
+    """Machine-readable reason a run did not complete normally.
+
+    Orchestration records the originating condition so downstream operational
+    reporting never has to infer it from prose. Not every non-completion is a
+    budget problem: a self-critique that still requires revision, an unresolved
+    objective-critical follow-up, a schema violation, and an interruption are
+    all distinct outcomes.
+    """
+
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    VALIDATION_REVISION = "validation_revision"
+    UNRESOLVED_FOLLOW_UP = "unresolved_follow_up"
+    AGENT_FAILURE = "agent_failure"
+    SCHEMA_FAILURE = "schema_failure"
+    TOOL_FAILURE = "tool_failure"
+    PROVIDER_FAILURE = "provider_failure"
+    SANDBOX_FAILURE = "sandbox_failure"
+    WORKSPACE_FAILURE = "workspace_failure"
+    DATA_QUALITY = "data_quality"
+    TIMEOUT = "timeout"
+    INTERRUPTED = "interrupted"
+    OTHER = "other"
+
+
 class AttemptStatus(StrEnum):
     """Lifecycle state of one append-only execution attempt."""
 
@@ -414,6 +439,10 @@ class AnalysisRunState(BaseModel):
     cost_estimation_note: NonEmptyString | None = None
     final_report: Artifact | None = None
     error: NonEmptyString | None = None
+    # Explicit, machine-readable non-completion cause. Persisted by
+    # orchestration so operational reporting never infers it from prose.
+    block_reason: RunBlockReason | None = None
+    block_detail: NonEmptyString | None = None
 
     @model_validator(mode="after")
     def timestamps_are_timezone_aware(self) -> "AnalysisRunState":

@@ -9,7 +9,8 @@ complete. Phase 2 Tasks 1–9 and remediations R1–R12 are implemented. Task
 as R13–R19. R13 (strict analytical output schemas, including both live
 architecture canaries), R14 (failure-safe usage and cost accounting), R15
 (single-agent attempt lifecycle), R16 (retained and resumable interrupted
-cells), and R17 (outcome-sensitive preflight gate) are complete; R18–R19 remain
+cells), R17 (outcome-sensitive preflight gate), and R18 (explicit block reasons
+and accurate failure taxonomy) are complete; R19 remains
 open. The paid matrix remains blocked, the
 final R6 gate is open again,
 and no complete benchmark result is claimed. See
@@ -56,7 +57,8 @@ The post-pilot review adds strict analytical output schemas (R13, complete),
 failure-safe usage and cost accounting (R14, complete), complete single-agent
 attempt lifecycle (R15, complete), interrupted-cell retention and resume (R16,
 complete), outcome-sensitive preflight tests (R17, complete), accurate
-blocked-run taxonomy (R18), and representative pilot calibration across
+blocked-run taxonomy (R18, complete), and representative pilot calibration
+across
 architectures/workload classes (R19).
 
 R13 replaces every open-ended dimension map with a typed `MetricDimension`
@@ -66,7 +68,7 @@ truncated, or extra-field model output now raises an explicit
 `AgentOutputContractError` instead of being re-parsed permissively. The two
 opt-in live canaries — one per architecture — passed on 2026-08-19, the first
 live evidence that the contract holds against a real provider. They must be
-rerun inside the reopened R6 preflight after R18–R19.
+rerun inside the reopened R6 preflight after R19.
 
 R14 records model usage as each provider response arrives and reconciles it once
 per run on both the success and the failure path, so an invalid-JSON final
@@ -95,7 +97,15 @@ unavailable, explicit cost, and a reconciled attempt history with no attempt
 left running. The live smoke tests, both live canaries, and deterministic
 failure fixtures all use the same gate, and it rejects all four retained Task 10
 pilot workspaces. Its remaining acceptance item is the full R6 rerun, which
-waits on R18–R19.
+waits on R19.
+
+R18 persists a typed block reason and a readable detail for every
+non-completion, so the benchmark reads the originating condition instead of
+hard-coding every blocked run as a budget failure. Only genuine run-budget
+exhaustion is categorized as budget; an unresolved self-critique, an unresolved
+follow-up, a schema violation, an agent turn limit, a blocking data-quality
+audit, and an interruption each get their own category. Blocked and cancelled
+runs stay operational observations rather than analytical evaluator failures.
 
 R1–R12 are implemented and covered by architecture-equivalence, capability/tool-
 mix, failed-evidence, workspace identity, evaluator-error, lifecycle,
@@ -104,7 +114,7 @@ reconciliation, scenario-document integrity, and exclusive atomic offline-output
 fixtures. The final R6 preflight passed, including all Docker-backed integration
 tests and all 60 declared dry-run cells. The catalog evaluator version is now
 `1.1` for these scoring changes. That historical preflight does not close the
-new gate: R18–R19 must still be implemented and the complete R6 preflight rerun
+new gate: R19 must still be implemented and the complete R6 preflight rerun
 before another Task 10 manifest is frozen.
 
 Task 10 execution is currently blocked before the paid matrix. Four immutable
@@ -120,7 +130,7 @@ pilot reports, workspaces, offline-rescored manifests, and aggregate reports
 are retained.
 Because no pilot completed, the full 60-cell matrix was not started. Existing
 canonical MVP workspaces predate the declared Phase 2 matrix and are not
-substitutes for its results. R18–R19 must be completed, the reopened R6 gate
+substitutes for its results. R19 must be completed, the reopened R6 gate
 must pass, and then a new manifest version and pilot set must be frozen.
 
 ### Task 10 execution record (blocked)
@@ -198,7 +208,7 @@ uv run python scripts/run_benchmark.py plan benchmark.json --model gpt-5.6-luna
 ```
 
 The paid commands below are the current CLI surface, but **must not be run again
-until R18–R19 are complete and the reopened R6 gate passes**. R19 will replace
+until R19 is complete and the reopened R6 gate passes**. R19 will replace
 the single first-cell estimate with a declared pilot set containing at least one
 cell per architecture before the remaining immutable cells can resume:
 

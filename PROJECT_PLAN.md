@@ -1438,7 +1438,7 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 455 passed and 16 opt-in live tests
+full local verification completed with 472 passed and 16 opt-in live tests
 deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
@@ -1461,7 +1461,8 @@ operational record with its partial accounting and can be resumed into a new
 append-only attempt. R17 is complete apart from the final R6 rerun: one shared
 outcome-sensitive smoke gate is used by the live tests, the canaries, and
 deterministic failure fixtures, and it rejects all four retained pilots.
-R18–R19 remain open. That review reopens R6: its complete preflight must pass again after
+R18 is complete: every non-completion persists a typed reason and detail, and
+only genuine budget exhaustion is categorized as budget. R19 remains open. That review reopens R6: its complete preflight must pass again after
 R13–R19 before another Task 10 manifest is frozen.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
@@ -2109,9 +2110,36 @@ Acceptance:
 R13 already contributes the strict-schema compilation checks and the two opt-in
 live canaries this task must run; R17 adds the remaining outcome assertions.
 
-#### R18 — Preserve explicit blocked reasons and accurate failure taxonomy [P1]
+#### R18 — Preserve explicit blocked reasons and accurate failure taxonomy [P1] — Implemented
 
-Status: open; blocks Task 10 publication validity.
+Status: implemented.
+
+Orchestration now persists a typed `RunBlockReason` and a human-readable
+`block_detail` on the run state for every non-completion, through
+`AnalysisLedger.mark_blocked`, `mark_failed`, and `mark_cancelled`. Both
+architectures name the originating condition where it is known:
+`orchestration/block_reasons.py` classifies exceptions by type — only
+`BudgetExhaustedError` is budget exhaustion, `MaxTurnsExceeded` is an agent
+bound, and a structured-output violation is a schema failure — while the
+constraint decisions themselves are stated directly (an unresolved Critic
+revision is `validation_revision`, an unresolved objective-critical
+continuation is `unresolved_follow_up`, a blocked mandatory audit is
+`data_quality`, and an interruption is `interrupted`).
+
+`BenchmarkRunner._coerce_result` reads that persisted reason and maps it through
+`category_for_block_reason`, replacing the previous behavior of hard-coding
+`FailureCategory.BUDGET` for every blocked run and guessing every other category
+from substrings in an error message. Prose inference survives only as the
+compatibility path for pre-R18 workspaces that persisted no reason.
+`FailureCategory` gains `validation`, `unresolved_follow_up`, and `data_quality`
+so analytical constraints are not reported as operational faults.
+
+Blocked and cancelled records keep `EvaluatorStatus.NOT_EVALUATED` rather than
+`FAIL`, so they remain observed operational outcomes and are never converted
+into analytical evaluator failures, while still counting in the operational
+denominators. `tests/test_failure_taxonomy.py` covers the major block paths for
+both architectures and asserts that the aggregate taxonomy reproduces the
+per-record categories exactly.
 
 Do not classify every blocked analysis as a budget failure. Persist a
 machine-readable block reason from orchestration and map budget exhaustion,
