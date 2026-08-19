@@ -6,8 +6,8 @@ Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
 complete. Phase 2 Tasks 1–9 and remediations R1–R12 are implemented. Task
 10—the paid single-agent versus five-agent benchmark—was attempted on
 2026-08-19, but the retained pilots exposed additional release blockers tracked
-as R13–R19. R13 (strict analytical output schemas) is now implemented; R14–R19
-remain open. The paid matrix remains blocked, the final R6 gate is open again,
+as R13–R19. R13 (strict analytical output schemas) is complete, including both
+live architecture canaries; R14–R19 remain open. The paid matrix remains blocked, the final R6 gate is open again,
 and no complete benchmark result is claimed. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, retained run artifacts, and the blocked live-run report.
@@ -48,7 +48,7 @@ workspace binding (R8), canonical aggregation-safe rescoring (R9), pilot/run
 binding (R10), durable attempt history (R11), and non-destructive offline
 outputs (R12).
 
-The post-pilot review adds strict analytical output schemas (R13, implemented),
+The post-pilot review adds strict analytical output schemas (R13, complete),
 failure-safe
 usage and cost accounting (R14), complete single-agent attempt lifecycle (R15),
 interrupted-cell retention and resume (R16), outcome-sensitive preflight tests
@@ -59,9 +59,10 @@ R13 replaces every open-ended dimension map with a typed `MetricDimension`
 list, so all six production agent output types compile through the Agents SDK
 strict-schema converter with no `strict_json_schema=False` opt-out. Malformed,
 truncated, or extra-field model output now raises an explicit
-`AgentOutputContractError` instead of being re-parsed permissively. Two opt-in
-live canaries — one per architecture — must complete their strict top-level
-output contract before a paid pilot is attempted.
+`AgentOutputContractError` instead of being re-parsed permissively. The two
+opt-in live canaries — one per architecture — passed on 2026-08-19, the first
+live evidence that the contract holds against a real provider. They must be
+rerun inside the reopened R6 preflight after R14–R19.
 
 R1–R12 are implemented and covered by architecture-equivalence, capability/tool-
 mix, failed-evidence, workspace identity, evaluator-error, lifecycle,

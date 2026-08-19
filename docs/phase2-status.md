@@ -4,8 +4,7 @@
 **Implementation:** Tasks 1–9, R1–R12, and R13 complete; R14–R19 open
 
 **Remediation:** Post-pilot review reopened R6; R14–R19 and a complete new
-preflight are required. R13 is implemented; its two opt-in live canaries must be
-run before a paid pilot.
+preflight are required. R13 is closed, including both opt-in live canaries.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -89,16 +88,16 @@ historical verification, but they reopen the final R6 gate.
 | R11 | Verified | Append-only attempt, event-attribution, reconciliation, and interrupted-resume regressions |
 | R12 | Verified | Same-path/alias, existing-output, evaluator-failure, and exclusive-publication regressions |
 
-## Open Phase 2 Post-Pilot Remediation: R13–R19
+## Phase 2 Post-Pilot Remediation: R13–R19 (R13 closed, R14–R19 open)
 
 The 2026-08-19 deep review traced the paid-pilot failures through the retained
-workspaces and identified seven additional tasks. R13 is now implemented; R14–R19
-remain open and block a new Task 10 manifest. `PROJECT_PLAN.md` contains their
-complete acceptance criteria.
+workspaces and identified seven additional tasks. R13 is closed; R14–R19 remain
+open and block a new Task 10 manifest. `PROJECT_PLAN.md` contains their complete
+acceptance criteria.
 
 | Remediation | Priority | Status | Required closure |
 | --- | --- | --- | --- |
-| R13 — Make every analytical agent output strictly structured | P0 | Implemented | Typed `MetricDimension` list replaces every open-ended dimension map, all six production agents build strict output schemas with no opt-out, invalid final output raises `AgentOutputContractError`, and both opt-in live canaries are in place awaiting an opted-in run |
+| R13 — Make every analytical agent output strictly structured | P0 | Complete | Typed `MetricDimension` list replaces every open-ended dimension map, all six production agents build strict output schemas with no opt-out, invalid final output raises `AgentOutputContractError`, and both live architecture canaries passed on 2026-08-19 |
 | R14 — Persist usage and cost across failed model calls | P0 | Open | Record response usage incrementally, retain usage through parse/max-turn failures, prevent incomplete usage from becoming known `$0.00`, and reconcile response, attempt, and run totals exactly once |
 | R15 — Give the single-agent runner a complete attempt lifecycle | P1 | Open | Begin and finish typed attempts for every Generalist exit, attribute events, preserve prior attempts on resume, and expose the history in real benchmark records |
 | R16 — Retain interrupted benchmark cells and resume them safely | P1 | Open | Write an observed cancelled/interrupted record with partial accounting, align workspace status, count it operationally, and append a new attempt when explicitly resumed |
@@ -310,6 +309,24 @@ failure-path accounting, Generalist attempts, interruption persistence,
 outcome assertions, failure taxonomy, and pilot representativeness. The final
 R6 gate is therefore open again despite the earlier green run.
 
+### Live strict-output canaries (R13)
+
+Both opt-in canaries were run on 2026-08-19 against the configured live model
+and passed:
+
+```text
+uv run pytest -m live tests/test_strict_output_canary_live.py
+3 passed in 74.01s (0:01:14)
+```
+
+The multi-agent and single-agent canaries each completed their top-level strict
+output contract — typed `AuditResult`, `LeadResult`, and `ValidationResult`, with
+recorded requests and elapsed time — with no strict-schema or final-output
+parsing failure. This is the first live evidence that the contract holds against
+a real provider; the four retained Task 10 pilots all failed here. It is a
+point-in-time observation for the current output types, so the canaries must be
+rerun as part of the reopened R6 preflight after R14–R19.
+
 ## Task 10 attempt — blocked before the paid matrix
 
 Task 10 was attempted on 2026-08-19 after the final R6 preflight. Four immutable
@@ -439,9 +456,11 @@ Before another paid attempt:
 2. Run the complete reopened R6 preflight, including strict-schema checks,
    failure-path accounting, lifecycle/taxonomy fixtures, Docker integrations,
    Ruff, and all 60 dry-run cells.
-3. Run the two bounded live strict-output canaries in
-   `tests/test_strict_output_canary_live.py` (one per architecture) and require
-   completion, report persistence, usage accounting, and attempt history.
+3. Rerun the two bounded live strict-output canaries in
+   `tests/test_strict_output_canary_live.py` (one per architecture) after
+   R14–R19 change lifecycle accounting, and require completion, report
+   persistence, usage accounting, and attempt history. They passed for R13 on
+   2026-08-19.
 4. Recheck variable presence without printing the key and confirm Docker access.
 5. Select the compatible model and freeze a new manifest before any paid execution.
 6. Review the declared ten-scenario × two-architecture × three-repetition matrix,

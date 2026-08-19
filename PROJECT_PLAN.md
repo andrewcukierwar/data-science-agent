@@ -1448,10 +1448,10 @@ pilot-binding, attempt-reconciliation, scenario-document, and exclusive-output
 regressions. The final R6 preflight passed, including Docker-backed integration
 tests and the complete 10 × 2 × 3 dry-run. A subsequent review of the retained
 paid-pilot failures found seven additional gaps, now tracked as R13–R19. R13 is
-implemented: every production agent output type compiles through the installed
+complete: every production agent output type compiles through the installed
 Agents SDK strict-schema converter, no analytical agent opts out of strict mode,
-and invalid final output is an explicit model/schema failure. R14–R19 remain
-open. That review reopens R6: its complete preflight must pass again after
+invalid final output is an explicit model/schema failure, and both live
+architecture canaries passed on 2026-08-19. R14–R19 remain open. That review reopens R6: its complete preflight must pass again after
 R13–R19 before another Task 10 manifest is frozen.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
@@ -1870,10 +1870,12 @@ gaps that deterministic R1–R12 fixtures did not detect. R13–R19 are required
 before Task 10 can resume. Completing them reopens R6: run the complete final
 preflight again after all seven tasks are implemented.
 
-#### R13 — Make every analytical agent output strictly structured [P0] — Implemented
+#### R13 — Make every analytical agent output strictly structured [P0] — Complete
 
-Status: implemented; one opt-in live canary per architecture remains to be run
-before a paid pilot.
+Status: complete. Both opt-in live canaries passed on 2026-08-19
+(`uv run pytest -m live tests/test_strict_output_canary_live.py`, 3 passed in
+74.01 s), so every acceptance criterion is met. They must be rerun inside the
+reopened R6 preflight after R14–R19.
 
 Segment dimensions are now a typed `MetricDimension` list (`name`/`value`)
 instead of an open-ended JSON object, so `MetricObservation`,
