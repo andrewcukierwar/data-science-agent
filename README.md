@@ -3,11 +3,11 @@
 Foundation for an evidence-backed, multi-agent business analytics system.
 
 Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
-complete. Phase 2 Tasks 1–9 and remediations R1–R12 are implemented and
-deterministically verified. Task 10—the paid single-agent versus five-agent
-benchmark—was attempted on 2026-08-19, but every versioned cost-pilot attempt
-failed the agent's structured-output contract before a completed pilot could
-unlock the matrix. No complete benchmark result is claimed. See
+complete. Phase 2 Tasks 1–9 and remediations R1–R12 are implemented. Task
+10—the paid single-agent versus five-agent benchmark—was attempted on
+2026-08-19, but the retained pilots exposed additional release blockers now
+tracked as R13–R19. The paid matrix remains blocked, the final R6 gate is open
+again, and no complete benchmark result is claimed. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, retained run artifacts, and the blocked live-run report.
 
@@ -37,7 +37,7 @@ deterministic verification completed with **370 passed and 13 live tests
 deselected**; Ruff lint and formatting checks passed, and the 10 × 2 × 3 matrix
 dry-run produced 60 unique cells.
 
-Before Task 10, review the twelve documented remediation tasks in
+Before Task 10, review the nineteen documented remediation tasks in
 [`PROJECT_PLAN.md`](PROJECT_PLAN.md): architecture-neutral evaluation (R1),
 hardened evidence provenance (R2), scenario-bound workspaces (R3), explicit
 evaluator errors (R4), hardened benchmark execution semantics (R5), and
@@ -47,26 +47,37 @@ workspace binding (R8), canonical aggregation-safe rescoring (R9), pilot/run
 binding (R10), durable attempt history (R11), and non-destructive offline
 outputs (R12).
 
+The post-pilot review adds strict analytical output schemas (R13), failure-safe
+usage and cost accounting (R14), complete single-agent attempt lifecycle (R15),
+interrupted-cell retention and resume (R16), outcome-sensitive preflight tests
+(R17), accurate blocked-run taxonomy (R18), and representative pilot
+calibration across architectures/workload classes (R19).
+
 R1–R12 are implemented and covered by architecture-equivalence, capability/tool-
 mix, failed-evidence, workspace identity, evaluator-error, lifecycle,
 aggregation-safe rescore, pilot/run-record binding, append-only attempt
 reconciliation, scenario-document integrity, and exclusive atomic offline-output
 fixtures. The final R6 preflight passed, including all Docker-backed integration
 tests and all 60 declared dry-run cells. The catalog evaluator version is now
-`1.1` for these scoring changes.
+`1.1` for these scoring changes. That historical preflight does not close the
+new gate: R13–R19 must be implemented and the complete R6 preflight rerun before
+another Task 10 manifest is frozen.
 
-Task 10 execution is currently blocked at the paid-pilot gate. Four immutable
+Task 10 execution is currently blocked before the paid matrix. Four immutable
 attempts were retained under `.runs/phase2-task10-20260819/`: three attempts
 with `gpt-5.6-luna` (two invalid structured-output responses and one interrupted
-max-turns attempt) and one `gpt-5.5` attempt (invalid structured-output
-response). The first attempt consumed 28,825 tokens and recorded a known
-estimated cost of **$0.00372068** over **120.38 seconds**; the other attempts
-did not produce a completed pilot. The corresponding manifests, pilot reports,
-workspaces, offline-rescored manifests, and aggregate reports are retained.
+partial multi-agent attempt) and one `gpt-5.5` attempt (invalid structured-output
+response). The first manifest retained 28,825 accounted tokens and
+**$0.00372068** over **120.38 seconds**, but those totals omit the failed Lead
+response and are not a trustworthy complete cost. Failed single-agent calls
+lost their usage entirely, and the interrupted v2 cell was omitted from its
+manifest despite retained workspace evidence. The corresponding manifests,
+pilot reports, workspaces, offline-rescored manifests, and aggregate reports
+are retained.
 Because no pilot completed, the full 60-cell matrix was not started. Existing
 canonical MVP workspaces predate the declared Phase 2 matrix and are not
-substitutes for its results. A compatible model/output contract must be fixed,
-then a new manifest version must be frozen and the affected pilot rerun.
+substitutes for its results. R13–R19 must be completed, the reopened R6 gate
+must pass, and then a new manifest version and pilot set must be frozen.
 
 ### Task 10 execution record (blocked)
 
@@ -75,10 +86,10 @@ The runner's `multi-agent` label denotes the planned five-agent architecture.
 
 | Manifest | Model | Persisted observations | Outcome |
 | --- | --- | ---: | --- |
-| `phase2-task10-20260819-luna-v1` | `gpt-5.6-luna` | 1/60 (multi-agent) | Failed: invalid JSON; pilot cost `$0.00372068` |
-| `phase2-task10-20260819-luna-v2` | `gpt-5.6-luna` | 0/60 | Aborted during max-turns pilot; orphan workspace retained |
-| `phase2-task10-20260819-luna-v3` | `gpt-5.6-luna` | 1/60 (single-agent) | Failed: invalid JSON after 71.98 s; no provider usage cost |
-| `phase2-task10-20260819-gpt55-v1` | `gpt-5.5` | 1/60 (single-agent) | Failed: invalid JSON after 61.79 s; pricing unavailable |
+| `phase2-task10-20260819-luna-v1` | `gpt-5.6-luna` | 1/60 (multi-agent) | Invalid JSON; persisted usage/cost omit the failed Lead response |
+| `phase2-task10-20260819-luna-v2` | `gpt-5.6-luna` | 0/60 | Interrupted after partial progress; workspace evidence retained but manifest record dropped |
+| `phase2-task10-20260819-luna-v3` | `gpt-5.6-luna` | 1/60 (single-agent) | Invalid JSON after 71.98 s; failed-call usage lost and cost incorrectly recorded as known zero |
+| `phase2-task10-20260819-gpt55-v1` | `gpt-5.5` | 1/60 (single-agent) | Invalid JSON after 61.79 s; failed-call usage lost and pricing unavailable |
 
 The three failed records were rescored offline after the R9 lifecycle fix and
 are explicitly `not_evaluated` with no analytical score. Their reports show
@@ -142,7 +153,10 @@ Planning writes the manifest before any workspace or agent execution:
 uv run python scripts/run_benchmark.py plan benchmark.json --model gpt-5.6-luna
 ```
 
-Run one paid cost-estimation cell, then resume the remaining immutable cells:
+The paid commands below are the current CLI surface, but **must not be run again
+until R13–R19 are complete and the reopened R6 gate passes**. R19 will replace
+the single first-cell estimate with a declared pilot set containing at least one
+cell per architecture before the remaining immutable cells can resume:
 
 ```bash
 uv run python scripts/run_benchmark.py pilot benchmark.json --allow-paid

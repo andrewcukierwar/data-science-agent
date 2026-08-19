@@ -1,11 +1,12 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-19
-**Implementation:** Tasks 1–9 complete; R1–R12 implemented and final R6 preflight verified
+**Implementation:** Tasks 1–9 and R1–R12 complete; R13–R19 open
 
-**Remediation:** R1–R12 verified; final pre-benchmark gate passed
+**Remediation:** Post-pilot review reopened R6; R13–R19 and a complete new
+preflight are required
 
-**Experiment:** Task 10 attempted; blocked at the paid cost-pilot gate; no
+**Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
 
 This document records the Phase 2 work, the required pre-benchmark remediation,
@@ -13,10 +14,11 @@ the attempted paid pilots, and the exact boundary between tested infrastructure
 and empirical results. It is a benchmark-attempt and handoff record, not a
 successful architecture-comparison report.
 
-## Phase 2 Pre-Benchmark Remediation: R1–R12
+## Completed Phase 2 Pre-Benchmark Remediation: R1–R12
 
 The following remediation tasks were completed and deterministically verified
-before the first Task 10 attempt:
+before the first Task 10 attempt. The later R13–R19 findings do not erase that
+historical verification, but they reopen the final R6 gate.
 
 1. **R1 — Make the evaluator architecture-neutral [P0].** Remove
    role-presence requirements from scoring and replace them with
@@ -38,13 +40,14 @@ before the first Task 10 attempt:
    state or explicit attempt IDs with cumulative accounting on resume; require
    known pricing or an explicit `unknown-cost` acknowledgement beyond the
    pilot; and remove the misleading `configured-model` CLI default.
-6. **R6 — Fix scenario-document integrity + full preflight (verified).** Remove the false
+6. **R6 — Fix scenario-document integrity + full preflight (gate reopened).** Remove the false
    model-visible clean/no-injection assertion, test that injected scenarios do
    not retain baseline-only assertions, and run the complete deterministic
    preflight: tests, Ruff, architecture-neutral fixtures, workspace mismatch,
    failed evidence, evaluator exceptions, interrupted resume, unknown pricing,
    all 10 × 2 × 3 dry-run cells, and a benchmark-validity-focused Sol High code
-   review. This is the final gate and must be rerun after R7–R12.
+   review. This is the final gate and must be rerun after any later remediation,
+   including R13–R19.
 7. **R7 — Make tool use capability-driven [P0] (implemented).** Remove unconditional SQL and
    Python presence gates. Express requirements as scenario-specific typed
    capabilities and test equivalent outputs across different valid tool mixes.
@@ -77,13 +80,34 @@ before the first Task 10 attempt:
 | R3 | Verified | Identity mismatch and source-tamper regressions |
 | R4 | Verified | Evaluator-error denominator and taxonomy regressions |
 | R5 | Verified | Explicit model, pricing gate, cumulative resume, and pilot semantics |
-| R6 | Verified | False-document removal, injected-scenario regressions, and complete preflight |
+| R6 | Reopened | Rerun the complete preflight after R13–R19; the earlier green run is historical evidence only |
 | R7 | Verified | Capability/tool-mix and architecture-equivalence regressions |
 | R8 | Verified | Identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
 | R9 | Verified | Multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
 | R10 | Verified | Pilot/run-record digest, metadata, cost, latency, and unknown-cost acknowledgement regressions |
 | R11 | Verified | Append-only attempt, event-attribution, reconciliation, and interrupted-resume regressions |
 | R12 | Verified | Same-path/alias, existing-output, evaluator-failure, and exclusive-publication regressions |
+
+## Open Phase 2 Post-Pilot Remediation: R13–R19
+
+The 2026-08-19 deep review traced the paid-pilot failures through the retained
+workspaces and identified seven additional tasks. All are open and block a new
+Task 10 manifest. `PROJECT_PLAN.md` contains their complete acceptance criteria.
+
+| Remediation | Priority | Status | Required closure |
+| --- | --- | --- | --- |
+| R13 — Make every analytical agent output strictly structured | P0 | Open | Replace open-ended dimension maps with a strict-compatible typed representation, enable strict JSON Schema for Generalist/Lead/Analyst/Statistician, compile every production schema, and complete one live strict-output canary per architecture |
+| R14 — Persist usage and cost across failed model calls | P0 | Open | Record response usage incrementally, retain usage through parse/max-turn failures, prevent incomplete usage from becoming known `$0.00`, and reconcile response, attempt, and run totals exactly once |
+| R15 — Give the single-agent runner a complete attempt lifecycle | P1 | Open | Begin and finish typed attempts for every Generalist exit, attribute events, preserve prior attempts on resume, and expose the history in real benchmark records |
+| R16 — Retain interrupted benchmark cells and resume them safely | P1 | Open | Write an observed cancelled/interrupted record with partial accounting, align workspace status, count it operationally, and append a new attempt when explicitly resumed |
+| R17 — Make the preflight sensitive to benchmark outcomes | P1 | Open | Replace permissive/presence-only assertions with strict schema, completion, report, usage, and attempt-history checks; rerun the complete R6 gate after R13–R19 |
+| R18 — Preserve explicit blocked reasons and accurate failure taxonomy | P1 | Open | Carry machine-readable block reasons and distinguish budget, schema/agent, unresolved analysis, validation revision, and interruption in records and aggregates |
+| R19 — Calibrate the paid pilot across architectures and workload classes | P2 | Open | Declare and bind at least one pilot per architecture, retain per-pilot observations, use a transparent stratified/range estimate, and version any model/schema/budget/pilot-set change |
+
+Task 10 remains blocked until R13–R19 are implemented, their focused
+regressions pass, and the complete R6 preflight—including Docker integrations,
+adversarial suites, both live architecture canaries, Ruff, and the 60-cell
+dry-run—is rerun successfully.
 
 ## What is implemented
 
@@ -253,11 +277,13 @@ architecture-equivalence and tool-mix fixtures, corrupted/mismatched-workspace
 and failed-evidence adversarial suites, evaluator-exception and aggregation
 checks, interrupted-resume and unknown-pricing checks, and the scenario-document
 integrity regressions. Docker-backed integration tests passed with Docker access.
-The benchmark-validity-focused Sol High review found no additional
-release-blocking defects in the evaluated identity, provenance, aggregation,
-pilot, attempt-history, or offline-output paths.
+That preflight was green before live pilot evidence existed. The subsequent
+post-pilot deep review found the R13–R19 release blockers in structured output,
+failure-path accounting, Generalist attempts, interruption persistence,
+outcome assertions, failure taxonomy, and pilot representativeness. The final
+R6 gate is therefore open again despite the earlier green run.
 
-## Task 10 attempt — blocked at the paid pilot gate
+## Task 10 attempt — blocked before the paid matrix
 
 Task 10 was attempted on 2026-08-19 after the final R6 preflight. Four immutable
 manifest versions and their raw workspaces were retained under
@@ -266,10 +292,10 @@ The runner's `multi-agent` label denotes the planned five-agent architecture.
 
 | Manifest | Model | Persisted run records | Pilot/operational result |
 | --- | --- | ---: | --- |
-| `phase2-task10-20260819-luna-v1` | `gpt-5.6-luna` | 1/60, multi-agent | Invalid JSON structured-output failure; 28,825 tokens, 120.38 s, known cost `$0.00372068` |
-| `phase2-task10-20260819-luna-v2` | `gpt-5.6-luna` | 0/60 | Aborted during `Max turns (10) exceeded`; failed workspace retained |
-| `phase2-task10-20260819-luna-v3` | `gpt-5.6-luna` | 1/60, single-agent | Invalid JSON structured-output failure after 71.98 s; no provider usage cost |
-| `phase2-task10-20260819-gpt55-v1` | `gpt-5.5` | 1/60, single-agent | Invalid JSON structured-output failure after 61.79 s; pricing unavailable |
+| `phase2-task10-20260819-luna-v1` | `gpt-5.6-luna` | 1/60, multi-agent | Invalid JSON; persisted 28,825 tokens and `$0.00372068` omit the failed Lead response |
+| `phase2-task10-20260819-luna-v2` | `gpt-5.6-luna` | 0/60 | Interrupted after partial progress; workspace retains 34 requests and an interrupted attempt, but the manifest dropped the cell |
+| `phase2-task10-20260819-luna-v3` | `gpt-5.6-luna` | 1/60, single-agent | Invalid JSON after 71.98 s; failed-call usage was lost and known pricing became `$0.00` |
+| `phase2-task10-20260819-gpt55-v1` | `gpt-5.5` | 1/60, single-agent | Invalid JSON after 61.79 s; failed-call usage was lost and pricing was unavailable |
 
 Every plan declared the same 60 cells (ten scenarios × two architectures ×
 three repetitions). Since no pilot completed, the full-run gate correctly
@@ -294,7 +320,9 @@ Each corresponding report observes one failed record and 59 missing cells,
 while the aborted v2 report observes zero records and 60 missing cells. There
 are therefore no honest task-success, numerical-accuracy, unsupported-claim,
 latency-distribution, cost-distribution, or architecture-comparison values to
-publish. The known `$0.00372068` is the cost of one failed pilot only. The
+publish. The persisted `$0.00372068` is incomplete because usage from the
+failed Lead response was not recorded, so it is a lower bound rather than a
+valid pilot cost. The
 observed one-failure-per-attempt outcome is a pilot calibration observation,
 not a full-matrix reliability estimate. Existing canonical MVP workspaces are
 legacy acceptance artifacts and were not substituted for missing cells.
@@ -306,18 +334,17 @@ The publishable observations are limited to the following:
 | Task success | 0 completed/evaluable pilot records | Not estimable; no success rate claimed |
 | Numerical accuracy | 0 analytical scores | Not estimable |
 | Unsupported claims | 0 evaluated reports | Not estimable |
-| Operational reliability | 3 persisted pilot cells failed; v2 aborted before a record | Calibration failures only, not a matrix reliability estimate |
-| Cost | `$0.00372068` for the v1 failed pilot; other attempts unavailable | No full-run cost estimate |
+| Operational reliability | 3 persisted pilot records failed; v2 workspace retained an interrupted attempt that its manifest omitted | Calibration evidence only; R16 must restore the missing operational record |
+| Cost | v1 persisted `$0.00372068` but omitted the failed Lead response; v2 workspace retained `$0.0360329`; single-agent failed-call usage was lost | Accounting is incomplete; no valid pilot or full-run cost estimate |
 | Latency | 120.38 s (v1), 71.98 s (v3), 61.79 s (gpt55) | Failed-pilot elapsed times only |
 | Architecture comparison | No matched completed pair | Not estimable |
 
-The failure is model/integration-specific: minimal API availability checks for
-`gpt-5.5` and `gpt-5.4` returned successfully, while the agent execution path
-failed to produce the required structured result. No evaluator rule or score
-was changed to make an attempt pass, and no result was selected because it
-favored either architecture. A compatible structured-output configuration must
-be fixed first; then a new manifest version must be frozen and the affected
-pilot/matrix rerun under the same offline-evaluation rules.
+The repeated invalid-JSON outcome across models and architectures points to the
+permissive output-schema integration, not simple API availability or one model
+identity. No evaluator rule or score was changed to make an attempt pass, and
+no result was selected because it favored either architecture. R13–R19 must be
+implemented and the reopened R6 gate must pass before a new manifest and pilot
+set are frozen under the same offline-evaluation rules.
 
 ## Diagnosed local execution issues
 
@@ -379,24 +406,29 @@ with credential detection.
 
 Before another paid attempt:
 
-1. Fix and deterministically verify the model/agent structured-output contract
-   that blocked all retained pilots; do not alter evaluator rules to mask it.
-2. Recheck variable presence without printing the key and confirm Docker access.
-3. Select the compatible model and freeze a new manifest before any paid execution.
-4. Review the declared ten-scenario × two-architecture × three-repetition matrix,
+1. Implement R13–R19 and their focused deterministic regressions; do not alter
+   evaluator rules to mask the retained failures.
+2. Run the complete reopened R6 preflight, including strict-schema checks,
+   failure-path accounting, lifecycle/taxonomy fixtures, Docker integrations,
+   Ruff, and all 60 dry-run cells.
+3. Run one bounded live strict-output canary for each architecture and require
+   completion, report persistence, usage accounting, and attempt history.
+4. Recheck variable presence without printing the key and confirm Docker access.
+5. Select the compatible model and freeze a new manifest before any paid execution.
+6. Review the declared ten-scenario × two-architecture × three-repetition matrix,
    budgets, evaluator versions, code revision, and output paths.
-5. Run and retain the one-cell cost-estimation pilot.
-6. Decide whether the declared repetition count remains affordable. If it must
+7. Run and retain the R19 pilot set, including at least one cell per architecture.
+8. Decide whether the declared repetition count remains affordable. If it must
    change, create a new manifest/version and record the justification before the
    full run.
-7. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
+9. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
    overwrite workspaces.
-8. Evaluate every persisted workspace offline using the frozen evaluator rules.
-9. Inspect failures without changing rules mid-experiment. If code or evaluator
+10. Evaluate every persisted workspace offline using the frozen evaluator rules.
+11. Inspect failures without changing rules mid-experiment. If code or evaluator
    changes are required, version the benchmark and rerun the affected declared
    matrix rather than silently patching scores.
-10. Generate and retain raw manifests, run records, evaluator results, pilot
+12. Generate and retain raw manifests, run records, evaluator results, pilot
     report, and aggregate report.
-11. Publish real results and limitations, including denominators, failed runs,
+13. Publish real results and limitations, including denominators, failed runs,
     sample size, model specificity, evaluator limitations, uncertainty, cost,
     and latency—regardless of which architecture performs better.
