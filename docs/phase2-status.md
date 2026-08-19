@@ -1,10 +1,10 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-19
-**Implementation:** Tasks 1–9 complete; R7–R11 implemented
+**Implementation:** Tasks 1–9 complete; R7–R12 implemented
 
-**Remediation:** R2, R7, R8, R9, R10, and R11 verified; R1/R4/R5 partial; R3
-closed by R8; R6 and R12 pending before Task 10
+**Remediation:** R2, R7, R8, R9, R10, R11, and R12 verified; R1/R4/R5 partial;
+R3 closed by R8; R6 pending before Task 10
 
 **Experiment:** Task 10 not started; no results published
 
@@ -64,9 +64,9 @@ verified before Task 10 begins:
     every attempt ID, timing, outcome, usage/cost delta, and event attribution;
     reconcile those records to cumulative benchmark totals and expose the full
     history on benchmark records.
-12. **R12 — Make offline outputs non-destructive and atomic [P2].** Refuse input
-    paths and existing outputs, consolidate exclusive writes, and retire or
-    delegate unsafe legacy CLI behavior.
+12. **R12 — Make offline outputs non-destructive and atomic [P2] (implemented).**
+    Refuse input paths and existing outputs, consolidate exclusive writes, and
+    retire or delegate unsafe legacy CLI behavior.
 
 ### Follow-up review disposition
 
@@ -83,6 +83,7 @@ verified before Task 10 begins:
 | R9 | Implemented | Retain multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
 | R10 | Implemented | Retain pilot/run-record digest, metadata, cost, latency, and unknown-cost acknowledgement regressions |
 | R11 | Implemented | Retain append-only attempt, event-attribution, reconciliation, and interrupted-resume regressions |
+| R12 | Implemented | Retain same-path/alias, existing-output, evaluator-failure, and exclusive-publication regressions |
 
 ## What is implemented
 
@@ -123,12 +124,18 @@ The benchmark runner and manifest evaluator verify the complete identity for
 every record before scoring or classifying evaluator errors. Both manifest
 rescore entry points delegate to the same canonical per-record rescorer, which
 rebuilds aggregates and paired comparisons from the rescored raw records.
-Benchmark manifests should use `scripts/run_benchmark.py offline-rescore` until
-R12 consolidates the remaining output handling.
+Benchmark manifests should use `scripts/run_benchmark.py offline-rescore`; both
+that command and the legacy manifest CLI publish only exclusive atomic outputs.
 Stable serialization supports
 byte-for-byte repeatability where timestamps or equivalent semantics do not
 require normalization. The final report, Critic, and evaluator use the same
 compiled final metric set.
+
+R12 centralizes offline output publication behind a same-filesystem temporary
+file and exclusive atomic link. Canonical path checks reject relative and
+symlink aliases before evaluation; existing destinations are never replaced.
+The benchmark report, manifest rescore, pilot/plan persistence, and legacy
+manifest CLI all use this boundary.
 
 ### 3. Scenario framework and catalog
 
@@ -234,7 +241,7 @@ for later README tables without manual transcription.
 The latest full deterministic review run completed with:
 
 ```text
-355 passed, 3 skipped, 13 deselected
+359 passed, 3 skipped, 13 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also

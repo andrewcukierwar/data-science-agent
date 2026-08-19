@@ -2,7 +2,7 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R7–R11
+**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 implemented; R7–R12
 remediations implemented; paid benchmark pending.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
@@ -1436,17 +1436,17 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 355 passed, 3 Docker integration tests
+full local verification completed with 359 passed, 3 Docker integration tests
 skipped, and 13 opt-in live tests deselected; Ruff lint and formatting checks
 passed. This status describes the
 implementation, not an architecture-performance result.
 
 R1–R5 have initial implementations, but the 2026-08-18 follow-up review found
 residual validity gaps. R2 meets its current acceptance criteria; R1, R4, and
-R5 remains partial, while R3 is closed by R8. R7, R8, R9, R10, and R11 are
+R5 remains partial, while R3 is closed by R8. R7, R8, R9, R10, R11, and R12 are
 implemented with deterministic capability, identity, evaluator-error,
-aggregation, pilot-binding, and attempt-reconciliation regressions. R6 and
-follow-up task R12 must be completed before Task 10.
+aggregation, pilot-binding, attempt-reconciliation, and exclusive-output
+regressions. Only R6 remains before Task 10.
 No Phase 2 benchmark manifest
 has been frozen, no paid cost pilot or declared matrix has run, and no
 aggregate architecture comparison has been published. Existing canonical MVP
@@ -1826,7 +1826,11 @@ Acceptance:
 - the final benchmark record exposes or references the full attempt history,
   not only the latest attempt ID.
 
-#### R12 — Make every offline output non-destructive and atomic [P2]
+#### R12 — Make every offline output non-destructive and atomic [P2] — Implemented
+
+Status: implemented through the shared exclusive atomic writer, canonical
+rescore/report entry points, and legacy manifest CLI delegation; final R6
+preflight remains pending.
 
 All offline evaluation, rescore, and report writers must refuse the input path
 and existing output files. Consolidate exclusive/atomic writing behavior and

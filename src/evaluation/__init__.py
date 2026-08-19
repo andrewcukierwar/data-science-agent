@@ -55,6 +55,13 @@ from evaluation.engine import (
     load_workspace_snapshot,
     rescore_manifest,
 )
+from evaluation.output import (
+    OfflineOutputError,
+    canonical_path,
+    ensure_distinct_paths,
+    ensure_output_is_new,
+    write_exclusive_text,
+)
 from evaluation.primitives import (
     AnalyticalCapability,
     CapabilityPolicy,
@@ -101,6 +108,7 @@ __all__ = [
     "CapabilityPolicy",
     "DataQualityPolicy",
     "OfflineEvaluation",
+    "OfflineOutputError",
     "ScenarioRules",
     "StatisticsPolicy",
     "TaskCompletenessPolicy",
@@ -144,11 +152,14 @@ __all__ = [
     "WorkspaceVersionCompatibilityError",
     "check_workspace_version_compatibility",
     "canonical_rules",
+    "canonical_path",
     "channel_mix_rules",
     "cogs_margin_rules",
     "discount_refund_rules",
     "compile_final_metric_set",
     "dump_stable_json",
+    "ensure_distinct_paths",
+    "ensure_output_is_new",
     "evaluate_data_quality",
     "evaluate_capabilities",
     "evaluate_lifecycle",
@@ -176,4 +187,5 @@ __all__ = [
     "verify_identity_matches_rules",
     "verify_workspace_identity",
     "verify_workspace_identity_for_rules",
+    "write_exclusive_text",
 ]

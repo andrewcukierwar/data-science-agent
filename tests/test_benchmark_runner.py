@@ -395,9 +395,11 @@ def test_offline_rescore_evaluator_crash_preserves_completed_run_and_no_zero_sco
         raise RuntimeError("rescore evaluator crashed")
 
     monkeypatch.setattr("benchmark.runner.evaluate_workspace", crash)
+    source_before = manifest_path.read_bytes()
+    output_path = tmp_path / "rescored.json"
     rescored = runner.rescore(
         manifest_path,
-        output_path=tmp_path / "rescored.json",
+        output_path=output_path,
     )
     record = rescored.run_records[0]
 
@@ -409,6 +411,16 @@ def test_offline_rescore_evaluator_crash_preserves_completed_run_and_no_zero_sco
     assert aggregate.evaluator_error_runs == 1
     assert aggregate.evaluated_runs == 0
     assert aggregate.mean_scores == {}
+    assert manifest_path.read_bytes() == source_before
+    output_before = output_path.read_bytes()
+
+    with pytest.raises(BenchmarkError, match="refusing to overwrite"):
+        runner.rescore(manifest_path, output_path=output_path)
+    assert output_path.read_bytes() == output_before
+
+    with pytest.raises(BenchmarkError, match="must differ from input"):
+        runner.rescore(manifest_path, output_path=manifest_path)
+    assert manifest_path.read_bytes() == source_before
 
 
 def test_canonical_rescore_isolates_crashes_and_rebuilds_aggregates(

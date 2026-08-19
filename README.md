@@ -4,7 +4,7 @@ Foundation for an evidence-backed, multi-agent business analytics system.
 
 Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
 complete. Phase 2 Tasks 1–9 are implemented and deterministically tested, and
-remediations R7–R11 are implemented, but
+remediations R7–R12 are implemented, but
 the required Phase 2 Pre-Benchmark Remediation R1–R12 is not yet complete. Task
 10—the paid single-agent versus five-agent benchmark—must wait for that
 remediation and has not yet run, so this repository does not claim benchmark
@@ -34,7 +34,7 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **355 passed, 3 Docker tests skipped,
+deterministic verification completed with **359 passed, 3 Docker tests skipped,
 and 13 live tests deselected**; Ruff lint and formatting checks passed, and the
 10 × 2 × 3 matrix
 dry-run produced 60 unique cells.
@@ -49,11 +49,11 @@ workspace binding (R8), canonical aggregation-safe rescoring (R9), pilot/run
 binding (R10), durable attempt history (R11), and non-destructive offline
 outputs (R12).
 
-R7, R8, R9, R10, and R11 are implemented and covered by capability/tool-mix,
+R7, R8, R9, R10, R11, and R12 are implemented and covered by capability/tool-mix,
 workspace identity, evaluator-error, lifecycle, aggregation-safe rescore,
-pilot/run-record binding, and append-only attempt reconciliation fixtures. R12
-and the final R6 preflight remain outstanding. The catalog evaluator version is
-now `1.1` for these scoring changes.
+pilot/run-record binding, append-only attempt reconciliation, and exclusive
+atomic offline-output fixtures. Only the final R6 preflight remains outstanding.
+The catalog evaluator version is now `1.1` for these scoring changes.
 
 No Phase 2 experiment manifest has been frozen and no paid matrix cells have
 been executed. Existing canonical MVP workspaces predate the declared Phase 2
@@ -100,8 +100,8 @@ uv run python scripts/run_benchmark.py offline-rescore benchmark-manifest.json \
   --output benchmark-rescored.json
 ```
 
-The legacy `scripts/evaluate_manifest.py` path now delegates to the same
-canonical rescorer; its output handling remains diagnostic-only until R12.
+The legacy `scripts/evaluate_manifest.py` path delegates to the same canonical
+rescorer and uses the same exclusive atomic output handling.
 
 ## Resumable benchmark matrix
 

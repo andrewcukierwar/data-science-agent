@@ -14,8 +14,14 @@ for import_root in (REPOSITORY_ROOT / "src", REPOSITORY_ROOT):
 
 from evaluation.engine import (  # noqa: E402
     dump_stable_json,
-    evaluate_manifest,
     load_manifest,
+    rescore_manifest,
+)
+from evaluation.output import (  # noqa: E402
+    canonical_path,
+    ensure_distinct_paths,
+    ensure_output_is_new,
+    write_exclusive_text,
 )
 from evaluation.rules import rules_for_scenario  # noqa: E402
 
@@ -33,8 +39,12 @@ def _arguments() -> argparse.Namespace:
 
 def main() -> int:
     args = _arguments()
-    manifest_path = args.manifest.expanduser().resolve()
     try:
+        manifest_path = canonical_path(args.manifest)
+        output_path = None
+        if args.output is not None:
+            _, output_path = ensure_distinct_paths(manifest_path, args.output)
+            ensure_output_is_new(args.output)
         manifest = load_manifest(manifest_path)
         rules = {
             (reference.scenario_id, reference.scenario_version): rules_for_scenario(
@@ -42,7 +52,7 @@ def main() -> int:
             )
             for reference in manifest.scenario_references
         }
-        updated, evaluations = evaluate_manifest(
+        updated, evaluations = rescore_manifest(
             manifest,
             rules,
             workspace_base_dir=manifest_path.parent,
@@ -52,9 +62,8 @@ def main() -> int:
             "evaluations": [evaluation.as_dict() for evaluation in evaluations],
         }
         output = dump_stable_json(payload)
-        if args.output is not None:
-            output_path = args.output.expanduser().resolve()
-            output_path.write_text(output, encoding="utf-8")
+        if output_path is not None:
+            write_exclusive_text(output_path, output)
         else:
             print(output, end="")
     except Exception as error:  # noqa: BLE001

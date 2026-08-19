@@ -24,6 +24,13 @@ from benchmark import (  # noqa: E402
 )
 from evaluation.contracts import ExecutionMode  # noqa: E402
 from evaluation.engine import dump_stable_json, load_manifest  # noqa: E402
+from evaluation.output import (  # noqa: E402
+    OfflineOutputError,
+    canonical_path,
+    ensure_distinct_paths,
+    ensure_output_is_new,
+    write_exclusive_text,
+)
 
 
 def _common_matrix_arguments(parser: argparse.ArgumentParser) -> None:
@@ -163,11 +170,12 @@ def _print_summary(summary) -> None:
 
 
 def _write_exclusive(path: Path, text: str) -> None:
-    path = path.expanduser().resolve()
-    if path.exists():
-        raise BenchmarkError(f"refusing to overwrite existing report: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8", newline="\n")
+    try:
+        write_exclusive_text(path, text)
+    except OfflineOutputError as error:
+        raise BenchmarkError(
+            f"refusing to overwrite existing report: {canonical_path(path)}"
+        ) from error
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -234,13 +242,24 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         if args.command == "report":
-            manifest = load_manifest(args.manifest)
+            manifest_path = canonical_path(args.manifest)
+            output_path = None
+            if args.output is not None:
+                try:
+                    _, output_path = ensure_distinct_paths(
+                        manifest_path,
+                        args.output,
+                    )
+                    ensure_output_is_new(args.output)
+                except OfflineOutputError as error:
+                    raise BenchmarkError(str(error)) from error
+            manifest = load_manifest(manifest_path)
             report = build_benchmark_report(manifest)
             output = dump_stable_json(report.model_dump(mode="json"))
-            if args.output is None:
+            if output_path is None:
                 print(output, end="")
             else:
-                _write_exclusive(args.output, output)
+                _write_exclusive(output_path, output)
             return 0
     except (BenchmarkError, ValueError, OSError) as error:
         print(f"BENCHMARK ERROR: {type(error).__name__}: {error}", file=sys.stderr)

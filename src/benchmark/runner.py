@@ -55,6 +55,13 @@ from evaluation.engine import (
     load_manifest,
     rescore_manifest,
 )
+from evaluation.output import (
+    OfflineOutputError,
+    canonical_path,
+    ensure_distinct_paths,
+    ensure_output_is_new,
+    write_exclusive_text,
+)
 from evaluation.workspace_identity import (
     WorkspaceIdentityError,
     persist_workspace_identity,
@@ -689,17 +696,23 @@ class BenchmarkRunner:
     ) -> BenchmarkManifest:
         """Rescore persisted workspaces into a new manifest without agents."""
 
-        input_path = Path(manifest_path).expanduser().resolve()
+        input_path = canonical_path(manifest_path)
+        if output_path is not None:
+            try:
+                _, output = ensure_distinct_paths(input_path, output_path)
+                ensure_output_is_new(output_path)
+            except OfflineOutputError as error:
+                message = str(error)
+                if "must differ from input" in message:
+                    message = "offline rescore output must differ from input manifest"
+                raise BenchmarkError(message) from error
+        else:
+            output = input_path.with_name(input_path.stem + ".rescored.json")
+            try:
+                ensure_output_is_new(output)
+            except OfflineOutputError as error:
+                raise BenchmarkError(str(error)) from error
         manifest = load_manifest(input_path)
-        output = (
-            Path(output_path).expanduser().resolve()
-            if output_path is not None
-            else input_path.with_name(input_path.stem + ".rescored.json")
-        )
-        if output == input_path:
-            raise BenchmarkError(
-                "offline rescore output must differ from input manifest"
-            )
         base_dir = (
             Path(workspace_base_dir).expanduser().resolve()
             if workspace_base_dir is not None
@@ -1139,10 +1152,12 @@ class BenchmarkRunner:
 
     @staticmethod
     def _persist_text_exclusive(path: Path, text: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            raise BenchmarkError(f"refusing to overwrite existing file: {path}")
-        path.write_text(text, encoding="utf-8", newline="\n")
+        try:
+            write_exclusive_text(path, text)
+        except OfflineOutputError as error:
+            raise BenchmarkError(
+                f"refusing to overwrite existing file: {canonical_path(path)}"
+            ) from error
 
     @classmethod
     def _persist_manifest(

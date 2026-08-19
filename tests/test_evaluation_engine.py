@@ -381,3 +381,107 @@ def test_batch_cli_is_offline_and_does_not_overwrite_manifest(tmp_path: Path) ->
     assert second.returncode == 0, second.stderr
     assert first.stdout == second.stdout
     assert manifest_path.read_text(encoding="utf-8") == original
+
+
+def test_batch_cli_output_is_exclusive_and_rejects_input_aliases(
+    tmp_path: Path,
+) -> None:
+    manifest = BenchmarkManifest(
+        manifest_id="offline-output-manifest",
+        manifest_version="1.0",
+        status="declared",
+        created_at=datetime(2026, 8, 17, 12, 0, tzinfo=UTC),
+        scenario_references=(
+            ScenarioReference(
+                scenario_id=CANONICAL_PROFITABILITY_SCENARIO.scenario_id,
+                scenario_version="1.0",
+                evaluator_version="1.0",
+                seed=42,
+            ),
+        ),
+        architectures=("multi-agent",),
+        repetitions=1,
+        model="offline-fixture",
+        model_provider="none",
+        run_configuration=RunConfiguration(
+            execution_mode=ExecutionMode.DETERMINISTIC,
+            tool_contract_version="1.0",
+        ),
+        budgets=BudgetConfiguration(
+            resource_limits={"sql": 1},
+            turn_limits={"lead": 1},
+        ),
+        aggregation_version="1.0",
+    )
+    manifest_path = tmp_path / "manifest.json"
+    original = manifest.model_dump_json(indent=2)
+    manifest_path.write_text(original, encoding="utf-8")
+    script = Path(__file__).resolve().parents[1] / "scripts" / "evaluate_manifest.py"
+    environment = os.environ.copy()
+    environment.pop("OPENAI_API_KEY", None)
+
+    output_path = tmp_path / "rescored.json"
+    command = [
+        sys.executable,
+        str(script),
+        str(manifest_path),
+        "--output",
+        str(output_path),
+    ]
+    first = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    output_before = output_path.read_bytes()
+    second = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 2
+    assert "refusing to overwrite" in second.stderr
+    assert output_path.read_bytes() == output_before
+    assert manifest_path.read_text(encoding="utf-8") == original
+
+    same_path = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(manifest_path),
+            "--output",
+            str(tmp_path / "nested" / ".." / "manifest.json"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert same_path.returncode == 2
+    assert "must differ from input" in same_path.stderr
+    assert manifest_path.read_text(encoding="utf-8") == original
+
+    symlink_path = tmp_path / "manifest-alias.json"
+    symlink_path.symlink_to(manifest_path)
+    symlink = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(manifest_path),
+            "--output",
+            str(symlink_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert symlink.returncode == 2
+    assert "must differ from input" in symlink.stderr
+    assert manifest_path.read_text(encoding="utf-8") == original
