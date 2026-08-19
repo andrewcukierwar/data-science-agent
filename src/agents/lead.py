@@ -9,12 +9,11 @@ from pydantic import ValidationError
 from agents import (
     Agent,
     RunContextWrapper,
-    RunHooks,
-    Runner,
     ToolOutputText,
     function_tool,
 )
 from agents.evidence import executed_references, has_source_lineage
+from agents.model_usage import ModelUsageHooks, run_agent_with_usage
 from agents.output_contract import (
     STRUCTURED_DIMENSION_GUIDANCE,
     AgentOutputContractError,
@@ -204,8 +203,14 @@ class LeadEvidenceError(ValueError):
     """Raised when a Lead result cites evidence that was not executed."""
 
 
-class _NestedSpecialistHooks(RunHooks[AgentRunContext]):
-    """Apply specialist permissions and budgets to an agent-as-tool run."""
+class _NestedSpecialistHooks(ModelUsageHooks):
+    """Apply specialist permissions and budgets to an agent-as-tool run.
+
+    Extending ``ModelUsageHooks`` keeps a nested specialist response accounted
+    for at its own boundary. A nested run shares the parent run's usage
+    accumulator, so the Lead's end-of-run reconciliation still covers any
+    specialist response whose hook did not fire.
+    """
 
     def __init__(self, role: AgentRole) -> None:
         self.role = role
@@ -878,7 +883,7 @@ async def run_lead(
     if context.agent_role is not AgentRole.LEAD:
         raise ValueError("run_lead requires a Lead AgentRunContext")
     selected_agent = agent or build_lead_agent(context.run_config)
-    result = await Runner.run(
+    result = await run_agent_with_usage(
         selected_agent,
         _lead_input(
             objective,
@@ -888,8 +893,6 @@ async def run_lead(
         context=context,
         max_turns=context.run_config.turn_limit,
     )
-    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
-    context.record_sdk_usage(usage)
     output = require_strict_output(
         result.final_output,
         LeadResult,

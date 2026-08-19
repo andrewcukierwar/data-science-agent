@@ -1,10 +1,11 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-19
-**Implementation:** Tasks 1–9, R1–R12, and R13 complete; R14–R19 open
+**Implementation:** Tasks 1–9, R1–R12, R13, and R14 complete; R15–R19 open
 
-**Remediation:** Post-pilot review reopened R6; R14–R19 and a complete new
-preflight are required. R13 is closed, including both opt-in live canaries.
+**Remediation:** Post-pilot review reopened R6; R15–R19 and a complete new
+preflight are required. R13 is closed, including both opt-in live canaries, and
+R14 is closed.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -88,24 +89,24 @@ historical verification, but they reopen the final R6 gate.
 | R11 | Verified | Append-only attempt, event-attribution, reconciliation, and interrupted-resume regressions |
 | R12 | Verified | Same-path/alias, existing-output, evaluator-failure, and exclusive-publication regressions |
 
-## Phase 2 Post-Pilot Remediation: R13–R19 (R13 closed, R14–R19 open)
+## Phase 2 Post-Pilot Remediation: R13–R19 (R13–R14 closed, R15–R19 open)
 
 The 2026-08-19 deep review traced the paid-pilot failures through the retained
-workspaces and identified seven additional tasks. R13 is closed; R14–R19 remain
-open and block a new Task 10 manifest. `PROJECT_PLAN.md` contains their complete
-acceptance criteria.
+workspaces and identified seven additional tasks. R13 and R14 are closed;
+R15–R19 remain open and block a new Task 10 manifest. `PROJECT_PLAN.md` contains
+their complete acceptance criteria.
 
 | Remediation | Priority | Status | Required closure |
 | --- | --- | --- | --- |
 | R13 — Make every analytical agent output strictly structured | P0 | Complete | Typed `MetricDimension` list replaces every open-ended dimension map, all six production agents build strict output schemas with no opt-out, invalid final output raises `AgentOutputContractError`, and both live architecture canaries passed on 2026-08-19 |
-| R14 — Persist usage and cost across failed model calls | P0 | Open | Record response usage incrementally, retain usage through parse/max-turn failures, prevent incomplete usage from becoming known `$0.00`, and reconcile response, attempt, and run totals exactly once |
+| R14 — Persist usage and cost across failed model calls | P0 | Complete | Usage is recorded at the response boundary and reconciled once per run on both success and failure paths; parse, turn-limit, and lifecycle failures keep their tokens; unreconcilable usage is marked incomplete and its cost published as unavailable rather than `$0.00` |
 | R15 — Give the single-agent runner a complete attempt lifecycle | P1 | Open | Begin and finish typed attempts for every Generalist exit, attribute events, preserve prior attempts on resume, and expose the history in real benchmark records |
 | R16 — Retain interrupted benchmark cells and resume them safely | P1 | Open | Write an observed cancelled/interrupted record with partial accounting, align workspace status, count it operationally, and append a new attempt when explicitly resumed |
 | R17 — Make the preflight sensitive to benchmark outcomes | P1 | Open | Replace permissive/presence-only assertions with strict schema, completion, report, usage, and attempt-history checks; rerun the complete R6 gate after R13–R19 |
 | R18 — Preserve explicit blocked reasons and accurate failure taxonomy | P1 | Open | Carry machine-readable block reasons and distinguish budget, schema/agent, unresolved analysis, validation revision, and interruption in records and aggregates |
 | R19 — Calibrate the paid pilot across architectures and workload classes | P2 | Open | Declare and bind at least one pilot per architecture, retain per-pilot observations, use a transparent stratified/range estimate, and version any model/schema/budget/pilot-set change |
 
-Task 10 remains blocked until R14–R19 are implemented, their focused
+Task 10 remains blocked until R15–R19 are implemented, their focused
 regressions pass, and the complete R6 preflight—including Docker integrations,
 adversarial suites, both live architecture canaries, Ruff, and the 60-cell
 dry-run—is rerun successfully.
@@ -286,12 +287,39 @@ through an explicit compatibility coercion at the schema boundary, so retained
 pilot evidence under `.runs/` remains offline-evaluable without weakening the
 strict wire contract.
 
+### 8. Failure-safe usage and cost accounting (R14)
+
+Model usage is recorded when each provider response arrives, through the shared
+`ModelUsageHooks.on_llm_end` hook, and every agent run goes through
+`run_agent_with_usage`. That wrapper reconciles the usage it recorded against
+the run's authoritative cumulative total on both the success and the exception
+path, recording only the remainder, so a response is never counted twice and
+never dropped. The Agents SDK attaches that cumulative total to
+`run_data.context_wrapper` for `ModelBehaviorError` and `MaxTurnsExceeded`, so
+the exact pilot failure — an invalid-JSON final output — now keeps every token
+the provider reported and billed.
+
+When no authoritative total is available, the ledger marks the run and its
+active attempt as having incomplete usage and refuses to publish a cost: both
+become `unavailable` with an explicit note. Known pricing over incomplete usage
+can therefore no longer be published as `$0.00`. Benchmark run records expose
+the same facts through `UsageSummary.complete` and the ledger's cost note.
+
+Incomplete usage reuses the existing `unavailable` cost representation rather
+than introducing a third availability state, so the R10 unknown-cost
+acknowledgement gate, the attempt-cost reconciliation, and aggregation keep
+their verified semantics.
+
+This applies to runs executed from now on. The retained Task 10 pilot records
+keep their historical values, including the `$0.00372068` that the status table
+below already describes as an incomplete lower bound.
+
 ## Verification completed
 
 The latest full deterministic review run completed with:
 
 ```text
-403 passed, 16 deselected
+420 passed, 16 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint and format checks also
@@ -450,17 +478,18 @@ with credential detection.
 
 Before another paid attempt:
 
-1. Implement the remaining R14–R19 and their focused deterministic
+1. Implement the remaining R15–R19 and their focused deterministic
    regressions; do not alter evaluator rules to mask the retained failures.
-   R13 is done: `tests/test_strict_agent_outputs.py` holds its regressions.
+   R13 and R14 are done: `tests/test_strict_agent_outputs.py` and
+   `tests/test_model_usage_accounting.py` hold their regressions.
 2. Run the complete reopened R6 preflight, including strict-schema checks,
    failure-path accounting, lifecycle/taxonomy fixtures, Docker integrations,
    Ruff, and all 60 dry-run cells.
 3. Rerun the two bounded live strict-output canaries in
    `tests/test_strict_output_canary_live.py` (one per architecture) after
-   R14–R19 change lifecycle accounting, and require completion, report
+   R15–R19 change lifecycle accounting, and require completion, report
    persistence, usage accounting, and attempt history. They passed for R13 on
-   2026-08-19.
+   2026-08-19, before the R14 accounting change.
 4. Recheck variable presence without printing the key and confirm Docker access.
 5. Select the compatible model and freeze a new manifest before any paid execution.
 6. Review the declared ten-scenario × two-architecture × three-repetition matrix,

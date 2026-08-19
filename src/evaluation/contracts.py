@@ -262,6 +262,9 @@ class UsageSummary(ContractModel):
     output_tokens: int = Field(ge=0)
     reasoning_tokens: int = Field(ge=0)
     total_tokens: int = Field(ge=0)
+    # False when a model call's usage could not be reconciled, which makes
+    # every count above a lower bound rather than the run's real usage.
+    complete: bool = True
 
     @model_validator(mode="after")
     def usage_is_consistent(self) -> UsageSummary:

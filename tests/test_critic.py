@@ -16,7 +16,7 @@ from agents import (
     build_critic_agent,
     run_critic,
 )
-from agents.critic import Runner
+from agents.model_usage import Runner
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.metrics import MetricComparison

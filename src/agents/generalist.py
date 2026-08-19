@@ -9,7 +9,7 @@ five-agent architecture.
 
 from __future__ import annotations
 
-from agents import Agent, Runner
+from agents import Agent
 from agents.critic import persist_validation_result
 from agents.lead import (
     persist_lead_result,
@@ -17,6 +17,7 @@ from agents.lead import (
     record_open_question,
     update_investigation_plan,
 )
+from agents.model_usage import run_agent_with_usage
 from agents.output_contract import (
     STRUCTURED_DIMENSION_GUIDANCE,
     require_strict_output,
@@ -161,14 +162,12 @@ async def run_generalist(
     if context.agent_role is not AgentRole.GENERALIST:
         raise ValueError("run_generalist requires a Generalist AgentRunContext")
     selected_agent = agent or build_generalist_agent(context.run_config)
-    result = await Runner.run(
+    result = await run_agent_with_usage(
         selected_agent,
         _generalist_input(objective, business_context=business_context),
         context=context,
         max_turns=context.run_config.turn_limit,
     )
-    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
-    context.record_sdk_usage(usage)
     output = require_strict_output(
         result.final_output,
         GeneralistResult,

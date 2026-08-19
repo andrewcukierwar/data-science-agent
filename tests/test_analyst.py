@@ -16,7 +16,7 @@ from agents import (
     run_analyst,
     validate_analyst_result,
 )
-from agents.analyst import Runner
+from agents.model_usage import Runner
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.run_state import ToolEvent, ToolEventStatus

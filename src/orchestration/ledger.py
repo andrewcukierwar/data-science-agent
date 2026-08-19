@@ -37,6 +37,7 @@ from schemas.run_state import (
     RunStatus,
     SpecialistResultRecord,
     ToolEvent,
+    model_usage_snapshot,
 )
 from schemas.statistics import StatisticalAssessment
 from schemas.validation import ValidationIssue, ValidationResult
@@ -424,31 +425,19 @@ class AnalysisLedger(ToolEventLedger):
     def record_model_usage(self, usage: Any) -> ModelUsage:
         """Add one Agents SDK usage snapshot to the persisted run totals."""
 
-        if usage is None:
+        return self.record_usage_delta(model_usage_snapshot(usage))
+
+    def record_usage_delta(self, increment: ModelUsage | None) -> ModelUsage:
+        """Add one typed usage delta to cumulative and attempt-level totals.
+
+        Callers record at the provider response boundary, so a later parsing,
+        turn-limit, or lifecycle failure cannot discard usage that was already
+        reported. Each delta is applied exactly once.
+        """
+
+        if increment is None or increment == ModelUsage():
             return self.usage
-
-        def _integer(name: str) -> int:
-            value = getattr(usage, name, 0)
-            return int(value or 0)
-
-        input_details = getattr(usage, "input_tokens_details", None)
-        output_details = getattr(usage, "output_tokens_details", None)
-        increment = ModelUsage(
-            requests=_integer("requests"),
-            input_tokens=_integer("input_tokens"),
-            output_tokens=_integer("output_tokens"),
-            total_tokens=_integer("total_tokens"),
-            cached_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
-            reasoning_tokens=int(getattr(output_details, "reasoning_tokens", 0) or 0),
-        )
-        self._state.usage = ModelUsage(
-            requests=self.usage.requests + increment.requests,
-            input_tokens=self.usage.input_tokens + increment.input_tokens,
-            output_tokens=self.usage.output_tokens + increment.output_tokens,
-            total_tokens=self.usage.total_tokens + increment.total_tokens,
-            cached_tokens=self.usage.cached_tokens + increment.cached_tokens,
-            reasoning_tokens=self.usage.reasoning_tokens + increment.reasoning_tokens,
-        )
+        self._state.usage = self._add_usage(self.usage, increment)
         index = self._active_attempt_index()
         if index is not None:
             current = self.attempt_history[index]
@@ -457,6 +446,34 @@ class AnalysisLedger(ToolEventLedger):
             )
         self.save()
         return self.usage
+
+    def mark_usage_incomplete(self, reason: str) -> None:
+        """Record that some provider usage could not be reconciled.
+
+        Incomplete usage is a lower bound. Cost must then be published as
+        unavailable rather than as a known total that silently omits the
+        missing calls.
+        """
+
+        note = reason.strip() or "Model usage could not be reconciled."
+        self._state.usage_complete = False
+        self._state.usage_incompleteness_note = note
+        index = self._active_attempt_index()
+        if index is not None:
+            current = self.attempt_history[index]
+            self._state.attempt_history[index] = current.model_copy(
+                update={"usage_complete": False}
+            )
+        self._state.cost_breakdown = None
+        self._state.estimated_cost_usd = None
+        self._state.cost_estimation_note = f"Cost unavailable: {note}"
+        self.save()
+
+    @property
+    def usage_complete(self) -> bool:
+        """Whether every model response is represented in the totals."""
+
+        return self._state.usage_complete
 
     def record_elapsed(self, elapsed_seconds: float) -> float:
         """Persist total wall-clock duration for the run."""
@@ -644,6 +661,14 @@ class AnalysisLedger(ToolEventLedger):
             self._state.cost_estimation_note = (
                 "Cost estimate unavailable because an earlier attempt has unknown cost."
             )
+        elif not self._state.usage_complete:
+            # Known pricing over incomplete usage would publish a confident
+            # total that omits real model calls, so it stays unavailable.
+            self._state.cost_breakdown = None
+            self._state.estimated_cost_usd = None
+            self._state.cost_estimation_note = "Cost estimate unavailable: " + (
+                self._state.usage_incompleteness_note or "recorded usage is incomplete."
+            )
         else:
             breakdown = calculate_cost_breakdown(
                 self.usage,
@@ -658,10 +683,11 @@ class AnalysisLedger(ToolEventLedger):
             )
         if index is not None:
             current = self.attempt_history[index]
-            if pricing is None:
+            if pricing is None or not current.usage_complete:
                 attempt_cost = AttemptCost(
                     availability=AttemptCostAvailability.UNAVAILABLE,
-                    note=self._state.cost_estimation_note,
+                    note=self._state.cost_estimation_note
+                    or "Attempt usage is incomplete, so its cost is unavailable.",
                 )
             else:
                 attempt_breakdown = calculate_cost_breakdown(

@@ -252,6 +252,9 @@ class AgentRunContext:
     python_service: PythonExecutionService
     artifact_manager: ArtifactManager
     run_config: AgentRunConfig
+    # Set for the duration of one agent run so response-boundary hooks can
+    # persist provider usage as it arrives. See ``agents.model_usage``.
+    usage_recorder: Any | None = field(default=None, init=False, repr=False)
     budget_manager: RunBudgetManager = field(init=False, repr=False)
     _role_stack: ContextVar[tuple[AgentRole, ...]] = field(
         default_factory=lambda: ContextVar("agent_role_stack", default=()),

@@ -15,7 +15,7 @@ from agents import (
     build_data_auditor_agent,
     run_data_auditor,
 )
-from agents.auditor import Runner
+from agents.model_usage import Runner
 from orchestration.ledger import AnalysisLedger
 from schemas.audit import AuditResult, AuditStatus, DateRange, TableAudit
 from tools.artifacts import ArtifactManager

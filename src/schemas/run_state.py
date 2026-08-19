@@ -199,6 +199,60 @@ class ModelUsage(BaseModel):
     reasoning_tokens: int = Field(default=0, ge=0)
 
 
+def model_usage_snapshot(usage: object) -> ModelUsage:
+    """Convert one Agents SDK usage object into the typed persisted form.
+
+    The SDK reports usage both per response and cumulatively per run using the
+    same attribute names, so one duck-typed adapter serves the response
+    boundary and the end-of-run reconciliation.
+    """
+
+    if usage is None:
+        return ModelUsage()
+    if isinstance(usage, ModelUsage):
+        return usage
+
+    def _integer(name: str) -> int:
+        return int(getattr(usage, name, 0) or 0)
+
+    input_details = getattr(usage, "input_tokens_details", None)
+    output_details = getattr(usage, "output_tokens_details", None)
+    return ModelUsage(
+        requests=_integer("requests"),
+        input_tokens=_integer("input_tokens"),
+        output_tokens=_integer("output_tokens"),
+        total_tokens=_integer("total_tokens"),
+        cached_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
+        reasoning_tokens=int(getattr(output_details, "reasoning_tokens", 0) or 0),
+    )
+
+
+def add_model_usage(first: ModelUsage, second: ModelUsage) -> ModelUsage:
+    """Return the field-wise sum of two typed usage snapshots."""
+
+    return ModelUsage(
+        **{
+            name: getattr(first, name) + getattr(second, name)
+            for name in ModelUsage.model_fields
+        }
+    )
+
+
+def subtract_model_usage(total: ModelUsage, recorded: ModelUsage) -> ModelUsage:
+    """Return the part of ``total`` that has not been recorded yet.
+
+    Fields are clamped at zero so a provider snapshot that is smaller than what
+    was already persisted can never remove usage from the totals.
+    """
+
+    return ModelUsage(
+        **{
+            name: max(getattr(total, name) - getattr(recorded, name), 0)
+            for name in ModelUsage.model_fields
+        }
+    )
+
+
 class AttemptCostAvailability(StrEnum):
     """Whether an attempt-level cost delta was resolved."""
 
@@ -241,6 +295,9 @@ class AttemptRecord(BaseModel):
     started_at: datetime
     finished_at: datetime | None = None
     usage_delta: ModelUsage = Field(default_factory=ModelUsage)
+    # False when at least one model response for this attempt could not be
+    # reconciled, so the delta is a lower bound rather than the full usage.
+    usage_complete: bool = True
     cost: AttemptCost | None = None
     elapsed_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
     error: NonEmptyString | None = None
@@ -344,6 +401,10 @@ class AnalysisRunState(BaseModel):
     attempt_history: list[AttemptRecord] = Field(default_factory=list)
     run_budget: RunBudget = Field(default_factory=RunBudget)
     usage: ModelUsage = Field(default_factory=ModelUsage)
+    # Defaults to True so pre-R14 workspaces stay loadable. It becomes False
+    # only when a model call's usage is known to be missing from the totals.
+    usage_complete: bool = True
+    usage_incompleteness_note: NonEmptyString | None = None
     elapsed_seconds: float | None = Field(default=None, ge=0)
     cost_breakdown: CostBreakdown | None = None
     estimated_cost_usd: float | None = Field(default=None, ge=0)
@@ -407,6 +468,12 @@ class AnalysisRunState(BaseModel):
             )
             if not has_running_attempt and self.usage != usage_totals:
                 raise ValueError("run usage must equal the sum of attempt deltas")
+            if self.usage_complete and any(
+                not item.usage_complete for item in self.attempt_history
+            ):
+                raise ValueError(
+                    "run usage cannot be complete while an attempt delta is not"
+                )
             elapsed_total = sum(item.elapsed_seconds for item in self.attempt_history)
             if not has_running_attempt and (
                 self.elapsed_seconds is not None

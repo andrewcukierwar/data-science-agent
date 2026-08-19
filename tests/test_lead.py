@@ -27,7 +27,8 @@ from agents import (
     update_investigation_plan,
     validate_lead_result,
 )
-from agents.lead import Runner, _canonical_specialist_output, _NestedSpecialistHooks
+from agents.lead import _canonical_specialist_output, _NestedSpecialistHooks
+from agents.model_usage import Runner
 from orchestration.budgets import BudgetExhaustedError
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult

@@ -19,6 +19,7 @@ from benchmark import (
     canonical_run_record_digest,
 )
 from evaluation.contracts import (
+    CostAvailability,
     EvaluationCheck,
     EvaluationCheckStatus,
     EvaluatorResult,
@@ -36,6 +37,7 @@ from evaluation.workspace_identity import (
     workspace_identity_path,
 )
 from orchestration.ledger import AnalysisLedger
+from orchestration.pricing import MODEL_PRICING
 from schemas.run_state import (
     AttemptStatus,
     CostBreakdown,
@@ -827,6 +829,61 @@ def test_benchmark_record_exposes_reconciled_attempt_history(tmp_path):
     assert record.attempt_history[0].status is AttemptStatus.COMPLETED
     assert record.attempt_history[0].usage_delta.requests == record.usage.requests
     assert record.attempt_history[0].elapsed_seconds == record.latency.elapsed_seconds
+
+
+def test_benchmark_record_marks_incomplete_usage_and_refuses_known_cost(tmp_path):
+    """R14: a lost model call cannot be published as a complete $0.00 cell."""
+
+    def execute(cell, workspace):
+        ledger = AnalysisLedger(
+            workspace,
+            run_id=cell.run_id,
+            objective=cell.scenario.metadata.user_question,
+        )
+        ledger.begin_attempt()
+        ledger.record_usage_delta(
+            ModelUsage(
+                requests=1,
+                input_tokens=1_000,
+                output_tokens=400,
+                total_tokens=1_400,
+            )
+        )
+        ledger.mark_usage_incomplete(
+            "A failed model response was not reconciled into the totals."
+        )
+        ledger.record_elapsed(1.0)
+        ledger.record_cost_estimate(
+            pricing=MODEL_PRICING["gpt-5.6-luna"],
+            pricing_model="gpt-5.6-luna",
+        )
+        ledger.finish_attempt(AttemptStatus.FAILED, error="invalid final output")
+        return BenchmarkCellResult(
+            lifecycle=LifecycleOutcome(
+                status=LifecycleStatus.FAILED,
+                failure_category=FailureCategory.SCHEMA,
+                failure_message="invalid final output",
+            ),
+            workspace=workspace,
+            state=ledger.state,
+            started_at=FIXED_TIME,
+            finished_at=FIXED_TIME,
+        )
+
+    runner = _runner(tmp_path, execute)
+    manifest_path = _plan(runner, tmp_path, repetitions=1)
+    summary = runner.execute(manifest_path)
+    record = summary.manifest.run_records[0]
+
+    # The usage that was recorded is retained, but explicitly as a lower bound.
+    assert record.usage.requests == 1
+    assert record.usage.total_tokens == 1_400
+    assert record.usage.complete is False
+    # Known pricing over incomplete usage must not become a confident total.
+    assert record.cost.availability is CostAvailability.UNAVAILABLE
+    assert record.cost.estimated_cost_usd is None
+    assert record.cost.note is not None
+    assert record.attempt_history[0].usage_complete is False
 
 
 def test_benchmark_workspace_persists_manifest_bound_source_identity(tmp_path):

@@ -6,12 +6,13 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
-from agents import Agent, Runner
+from agents import Agent
 from agents.evidence import (
     canonicalize_evidence_refs,
     executed_references,
     finding_reference_aliases,
 )
+from agents.model_usage import run_agent_with_usage
 from agents.output_contract import (
     STRUCTURED_DIMENSION_GUIDANCE,
     require_strict_output,
@@ -369,14 +370,12 @@ async def run_statistician(
         raise ValueError("run_statistician requires a Statistician context")
     context.record_specialist_invocation()
     selected_agent = agent or build_statistician_agent(context.run_config)
-    result = await Runner.run(
+    result = await run_agent_with_usage(
         selected_agent,
         objective,
         context=context,
         max_turns=context.run_config.turn_limit,
     )
-    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
-    context.record_sdk_usage(usage)
     output = require_strict_output(
         result.final_output,
         SpecialistResult,

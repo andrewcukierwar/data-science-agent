@@ -1438,7 +1438,7 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 403 passed and 16 opt-in live tests
+full local verification completed with 420 passed and 16 opt-in live tests
 deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
@@ -1451,7 +1451,10 @@ paid-pilot failures found seven additional gaps, now tracked as R13–R19. R13 i
 complete: every production agent output type compiles through the installed
 Agents SDK strict-schema converter, no analytical agent opts out of strict mode,
 invalid final output is an explicit model/schema failure, and both live
-architecture canaries passed on 2026-08-19. R14–R19 remain open. That review reopens R6: its complete preflight must pass again after
+architecture canaries passed on 2026-08-19. R14 is complete: usage is recorded
+at the response boundary and survives parsing, turn-limit, and lifecycle
+failures, and incomplete usage can no longer be published as a known `$0.00`.
+R15–R19 remain open. That review reopens R6: its complete preflight must pass again after
 R13–R19 before another Task 10 manifest is frozen.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
@@ -1912,9 +1915,30 @@ Acceptance:
 - one opt-in live canary for each architecture completes its top-level strict
   output contract before a paid benchmark pilot is attempted.
 
-#### R14 — Persist usage and cost across failed model calls [P0]
+#### R14 — Persist usage and cost across failed model calls [P0] — Implemented
 
-Status: open; blocks Task 10.
+Status: implemented.
+
+`agents.model_usage` records usage at the provider response boundary through
+`ModelUsageHooks.on_llm_end`, and every agent run goes through
+`run_agent_with_usage`, which reconciles what was recorded against the run's
+authoritative cumulative usage on both the success and the exception path.
+`AgentsException` carries that total on `run_data.context_wrapper`, so an
+invalid-JSON final output or a turn-limit failure keeps every token the
+provider reported. Reconciliation records only the remainder, and remainders
+are clamped at zero, so no response is counted twice or removed. Nested
+specialist runs share the parent's accumulator and are additionally recorded by
+`_NestedSpecialistHooks`.
+
+When no authoritative total is available, the ledger marks usage incomplete
+(`AnalysisRunState.usage_complete` and `AttemptRecord.usage_complete`) and
+`record_cost_estimate` refuses to publish a cost: the run and attempt cost
+become `unavailable` with an explicit note rather than a confident `$0.00`.
+Benchmark records surface the same facts through `UsageSummary.complete` and
+the ledger's cost note. Incompleteness reuses the existing verified
+`unavailable` representation rather than adding a third cost-availability
+state, so the R10 unknown-cost gate and aggregation keep their semantics.
+`tests/test_model_usage_accounting.py` holds the regressions.
 
 Record model usage incrementally at the response boundary instead of only after
 `Runner.run()` returns. Parsing errors, max-turn failures, and later lifecycle

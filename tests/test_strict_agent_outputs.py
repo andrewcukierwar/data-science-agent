@@ -443,8 +443,7 @@ def test_specialist_runs_reject_unparsed_final_output(
         assert agent.output_type.is_strict_json_schema() is True
         return SimpleNamespace(final_output='{"objective": "truncated"')
 
-    monkeypatch.setattr("agents.analyst.Runner.run", fake_run)
-    monkeypatch.setattr("agents.statistician.Runner.run", fake_run)
+    monkeypatch.setattr("agents.model_usage.Runner.run", fake_run)
 
     with pytest.raises(AgentOutputContractError):
         asyncio.run(runner(context, "Compare the periods."))
@@ -460,7 +459,7 @@ def test_lead_run_rejects_unparsed_final_output(
         assert agent.output_type.output_type is LeadResult
         return SimpleNamespace(final_output={"objective": "no answer field"})
 
-    monkeypatch.setattr("agents.lead.Runner.run", fake_run)
+    monkeypatch.setattr("agents.model_usage.Runner.run", fake_run)
 
     with pytest.raises(AgentOutputContractError):
         asyncio.run(run_lead(context, "Explain the observed change."))
@@ -476,7 +475,7 @@ def test_generalist_run_rejects_unparsed_final_output(
         assert agent.output_type.output_type is GeneralistResult
         return SimpleNamespace(final_output="}{ truncated generalist output")
 
-    monkeypatch.setattr("agents.generalist.Runner.run", fake_run)
+    monkeypatch.setattr("agents.model_usage.Runner.run", fake_run)
 
     with pytest.raises(AgentOutputContractError):
         asyncio.run(run_generalist(context, "Explain the observed change."))

@@ -17,7 +17,8 @@ from agents import (
     run_statistician,
     validate_statistician_result,
 )
-from agents.statistician import Runner, persist_statistician_result
+from agents.model_usage import Runner
+from agents.statistician import persist_statistician_result
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.metrics import MetricComparison

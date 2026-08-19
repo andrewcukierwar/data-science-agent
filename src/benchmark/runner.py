@@ -1064,6 +1064,7 @@ class BenchmarkRunner:
             output_tokens=getattr(usage_state, "output_tokens", 0),
             reasoning_tokens=getattr(usage_state, "reasoning_tokens", 0),
             total_tokens=getattr(usage_state, "total_tokens", 0),
+            complete=bool(getattr(state, "usage_complete", True)),
         )
         cost_breakdown = getattr(state, "cost_breakdown", None)
         cost = (
@@ -1075,7 +1076,10 @@ class BenchmarkRunner:
             if cost_breakdown is not None
             else CostSummary(
                 availability=CostAvailability.UNAVAILABLE,
-                note="No pricing breakdown was persisted for this run.",
+                # Prefer the ledger's own reason so an incomplete-usage run is
+                # not reported as a missing-pricing run.
+                note=getattr(state, "cost_estimation_note", None)
+                or "No pricing breakdown was persisted for this run.",
             )
         )
         elapsed = getattr(state, "elapsed_seconds", None)

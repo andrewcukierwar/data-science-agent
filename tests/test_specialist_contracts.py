@@ -9,9 +9,9 @@ import pytest
 
 from agents import AgentRole, AgentRunConfig, AgentRunContext
 from agents.analyst import persist_analyst_result, validate_analyst_result
-from agents.critic import Runner as CriticRunner
 from agents.critic import run_critic
 from agents.lead import persist_lead_result
+from agents.model_usage import Runner as CriticRunner
 from agents.statistician import (
     persist_statistician_result,
     validate_statistician_result,

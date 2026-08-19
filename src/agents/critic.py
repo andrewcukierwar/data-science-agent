@@ -5,8 +5,9 @@ from __future__ import annotations
 from math import isclose
 from pathlib import Path
 
-from agents import Agent, Runner
+from agents import Agent
 from agents.evidence import evidence_events, has_source_lineage
+from agents.model_usage import run_agent_with_usage
 from agents.output_contract import require_strict_output, strict_output_type
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
@@ -846,14 +847,12 @@ async def run_critic(
         )
 
     selected_agent = agent or build_critic_agent(context.run_config)
-    result = await Runner.run(
+    result = await run_agent_with_usage(
         selected_agent,
         _candidate_prompt(candidate),
         context=context,
         max_turns=context.run_config.turn_limit,
     )
-    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
-    context.record_sdk_usage(usage)
     output = require_strict_output(
         result.final_output,
         ValidationResult,

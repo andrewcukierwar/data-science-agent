@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agents import Agent, Runner
+from agents import Agent
+from agents.model_usage import run_agent_with_usage
 from agents.output_contract import require_strict_output, strict_output_type
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
@@ -128,14 +129,12 @@ async def run_data_auditor(
         raise ValueError("run_data_auditor requires a Data Auditor context")
     context.record_specialist_invocation()
     selected_agent = agent or build_data_auditor_agent(context.run_config)
-    result = await Runner.run(
+    result = await run_agent_with_usage(
         selected_agent,
         objective,
         context=context,
         max_turns=context.run_config.turn_limit,
     )
-    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
-    context.record_sdk_usage(usage)
     output = require_strict_output(
         result.final_output,
         AuditResult,

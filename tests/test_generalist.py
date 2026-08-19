@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-import agents.generalist as generalist_module
+import agents.model_usage as usage_module
 from agents import (
     AgentRole,
     AgentRunConfig,
@@ -205,7 +205,7 @@ def test_generalist_run_uses_bounded_turns_and_shared_provenance(
         assert "ground_truth" not in prompt
         return SimpleNamespace(final_output=expected)
 
-    monkeypatch.setattr(generalist_module.Runner, "run", fake_run)
+    monkeypatch.setattr(usage_module.Runner, "run", fake_run)
     returned = asyncio.run(run_generalist(context, "Explain the observed change."))
 
     assert returned.candidate.metric_comparisons == context.ledger.metric_comparisons
