@@ -26,6 +26,19 @@ remediated candidate that re-raised `follow_up_analysis` therefore could not be
 completed and could not be reviewed: each remaining Critic loop was spent
 rediscovering a free check.
 
+The replacement pilot at the fixed revision then blocked the same way on a
+different gate. `V-COMPLETENESS-MARGIN` requires a profitability candidate to
+complete the revenue, COGS, contribution-before-marketing, and margin
+comparison. The candidate carried all four as typed `MetricComparison` objects
+— `net_revenue`, `cogs`, `contribution_before_marketing`, `contribution_margin`,
+and `cogs_to_revenue_ratio` — and stated "Broad margin deterioration was
+therefore not a material driver". The gate additionally required one of a fixed
+list of literal phrases such as `not material` or `margin was stable`, none of
+which is a substring of that sentence, so it rejected a completed comparison
+twice and consumed the remaining review budget. The issue message it published
+("does not complete the ... comparison") was factually wrong about the
+candidate.
+
 ## Decision
 
 - Evaluate the deterministic completeness gates in the runner before each
@@ -39,6 +52,12 @@ rediscovering a free check.
   replacement `LeadResult` must set `follow_up_analysis=false`, completing
   materially useful follow-up inside that call, or record the unanswerable
   question as an open question or caveat.
+- Treat the four typed metric comparisons as satisfying
+  `V-COMPLETENESS-MARGIN`. The structured comparison is the completeness
+  evidence the gate names; whether the candidate then dispositions margin
+  correctly is an analytical judgment that belongs to the Critic model, which
+  the gate would otherwise pre-empt. The prose-only path keeps its existing
+  component and disposition requirements unchanged.
 
 ## Consequences
 
@@ -56,9 +75,14 @@ already require `follow_up_analysis=false`.
 
 ## Verification
 
+`tests/test_critic.py` pins the margin gate against the exact pilot candidate
+shape: four typed comparisons plus a paraphrased non-driver conclusion passes
+the deterministic gate, while a profitability answer that ignores COGS entirely
+still raises `V-COMPLETENESS-MARGIN`.
+
 `tests/test_runner.py` covers both directions: a remediated candidate that
 re-raises `follow_up_analysis` gets one completion pass and then a real Critic
 review of a completed candidate, and a Lead that never clears the gate consumes
 at most `MAX_LEAD_COMPLETION_PASSES` passes before the Critic runs and the run
-terminates. The full deterministic suite passes 693 tests including the three
+terminates. The full deterministic suite passes 694 tests including the three
 Docker-backed integrations, and Ruff passes across 167 files.

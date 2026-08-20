@@ -263,8 +263,16 @@ def _profitability_requires_margin_review(
         "margin changed materially",
         "cogs changed materially",
     )
+    if has_structured_components:
+        # Typed comparisons for revenue, COGS, contribution before marketing,
+        # and margin are the comparison this gate asks for. Whether the
+        # candidate then dispositions margin correctly is an analytical
+        # judgment, and ``run_critic`` consumes a critic loop and returns
+        # before any model review, so requiring a phrase here would spend the
+        # review budget rejecting a completed comparison.
+        return False
     return not (
-        (has_structured_components or has_prose_components)
+        has_prose_components
         and any(term in candidate_text for term in (*non_driver_terms, *driver_terms))
     )
 

@@ -16,6 +16,7 @@ from agents import (
     build_critic_agent,
     run_critic,
 )
+from agents.critic import candidate_completeness_validation
 from agents.model_usage import Runner
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding
@@ -302,6 +303,76 @@ def test_critic_requires_cogs_or_margin_when_profitability_data_has_cogs(
     assert result.status is ValidationStatus.REVISE
     assert result.issues[0].id == "V-COMPLETENESS-MARGIN"
     assert "COGS" in result.issues[0].message
+
+
+def test_structured_margin_comparison_satisfies_the_completeness_gate(
+    tmp_path: Path,
+) -> None:
+    """Typed revenue/COGS/contribution/margin comparisons complete the gate.
+
+    The 2026-08-20 v6 pilot produced all four structured components and stated
+    "Broad margin deterioration was therefore not a material driver", but the
+    gate matched fixed phrases such as "not material" and rejected it twice.
+    ``run_critic`` consumes a critic loop before short-circuiting, so the cell
+    exhausted its review budget on a comparison that was already complete.
+    """
+
+    source = tmp_path / "source"
+    source.mkdir()
+    pd.DataFrame(
+        {
+            "order_id": ["O1"],
+            "customer_id": ["C1"],
+            "order_date": ["2025-01-01"],
+            "net_revenue": [100.0],
+            "cogs": [40.0],
+        }
+    ).to_parquet(source / "orders.parquet", index=False)
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(
+        "run-critic-structured-margin",
+        inputs_source=source,
+    )
+    ledger = AnalysisLedger(workspace, objective="Why did profitability change?")
+    context = AgentRunContext(
+        workspace=workspace,
+        ledger=ledger,
+        sql_service=DuckDBExecutionService(workspace, ledger),
+        python_service=PythonExecutionService(workspace, ledger),
+        artifact_manager=ArtifactManager(workspace, ledger),
+        run_config=AgentRunConfig(
+            run_id="run-critic-structured-margin",
+            agent_role=AgentRole.CRITIC,
+            model="test-model",
+        ),
+    )
+
+    def comparison(metric_key: str, value: float) -> MetricComparison:
+        return MetricComparison(
+            metric_key=metric_key,
+            dimensions=[],
+            baseline_period="Q1 2025",
+            comparison_period="Q2 2025",
+            comparison_type="relative_change",
+            value=value,
+            unit="relative_change_fraction",
+            evidence_refs=["working/queries/profitability_decomposition.sql"],
+        )
+
+    candidate = CriticCandidate(
+        objective="Why did profitability change?",
+        answer=(
+            "Q2 profitability declined primarily through acquisition economics, "
+            "especially Meta, rather than broad product-margin deterioration."
+        ),
+        metric_comparisons=[
+            comparison("net_revenue", -0.0398),
+            comparison("cogs", -0.0398),
+            comparison("contribution_before_marketing", -0.0410),
+            comparison("contribution_margin", -0.000362),
+        ],
+    )
+
+    assert candidate_completeness_validation(candidate, context=context) is None
 
 
 def test_critic_requires_complete_acquisition_funnel_when_inputs_exist(
