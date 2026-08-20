@@ -242,6 +242,25 @@ def test_benchmark_cli_requires_an_explicit_model_for_planning():
     assert "required" in result.stderr
 
 
+def test_default_benchmark_budget_reserves_two_remediation_cycles(tmp_path):
+    runner = BenchmarkRunner(tmp_path / "workspaces")
+
+    manifest = runner.build_manifest(
+        manifest_id="budget-contract",
+        scenario_ids=[SCENARIO_ID],
+        architectures=("multi-agent", "single-agent"),
+        repetitions=3,
+        model="fixture-model",
+        execution_mode=ExecutionMode.DETERMINISTIC,
+    )
+
+    assert manifest.budgets.resource_limits["sql"] == 40
+    assert manifest.budgets.resource_limits["critic_loops"] == 3
+    run_budget = runner._run_budget(manifest)
+    assert run_budget.max_sql_executions == 40
+    assert run_budget.max_critic_loops == 3
+
+
 def test_failed_cell_isolated_and_recorded_with_frozen_manifest_identity(tmp_path):
     failed_once = {"value": False}
 

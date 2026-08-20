@@ -17,7 +17,7 @@ tool-less correction attempt for a strict-schema-valid response whose citations
 do not resolve, and R24 replaces four drifted provenance implementations with
 one lossless citation-resolution contract, and R25 names semantic citation
 failures and retains the canary as a deterministic regression. The complete R6
-preflight is now closed: 681 deterministic tests including three Docker
+preflight is now closed: 683 deterministic tests including three Docker
 integrations, Ruff, retained-artifact validation, all 60 dry-run cells, and both
 provider-backed architecture canaries passed at the final revision. The live
 gate also exposed and closed valid-JSON datetime parsing, an unconditional
@@ -30,6 +30,14 @@ operational calibration evidence and no later stratum or matrix cell ran.
 Decision 0015 fixes the three application boundaries it exposed, and the full
 R6 deterministic, Docker, Ruff, and provider-backed gates were rerun before a
 replacement manifest could be frozen.
+
+That replacement pilot retained a second blocked multi-agent cell. Its Critic
+correctly rejected a grain-invalid totals query introduced during the only
+available remediation after the initial pass consumed all 30 SQL executions.
+Decision 0016 leaves the evaluator unchanged and gives each benchmark cell 40
+SQL executions plus three Critic calls: one initial review and at most two
+bounded remediations. The limits apply equally to both architectures and must be
+remeasured by a new stratified pilot.
 
 **Experiment:** Historical Task 10 attempts retained; new manifest/pilot ready;
 paid matrix not executed; no analytical results published
@@ -105,7 +113,7 @@ erase that historical verification, but they reopen the final R6 gate.
 | R3 | Verified | Identity mismatch and source-tamper regressions |
 | R4 | Verified | Evaluator-error denominator and taxonomy regressions |
 | R5 | Verified | Explicit model, pricing gate, cumulative resume, and pilot semantics |
-| R6 | Verified / closed | After R20–R25 and decision 0015, 681 deterministic tests including Docker, Ruff, retained artifacts, the 60-cell dry run, and both provider-backed architecture canaries passed; every live integration defect was dispositioned before the final green run |
+| R6 | Verified / closed | After R20–R25 and decisions 0015–0016, 683 deterministic tests including Docker, Ruff, retained artifacts, the 60-cell dry run, and both provider-backed architecture canaries passed; every live integration defect was dispositioned before the final green run |
 | R7 | Verified | Capability/tool-mix and architecture-equivalence regressions |
 | R8 | Verified | Identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
 | R9 | Verified | Multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
@@ -1007,12 +1015,12 @@ both live canaries remain R25's work.
 ### Complete R6 preflight, closed after R20–R25
 
 ```text
-678 passed, 3 Docker-permission skips, 17 live tests deselected
+680 passed, 3 Docker-permission skips, 17 live tests deselected
 3 Docker-backed integrations passed with container access
-4 final live-preflight tests passed in 92.86 seconds
+4 final live-preflight tests passed in 104.16 seconds
 ```
 
-That is 681 deterministic passes when the separately authorized Docker tests
+That is 683 deterministic passes when the separately authorized Docker tests
 are included. Ruff lint reported `All checks passed!` and format reported 163
 files already formatted. Every declared preflight category was run as an
 explicit selection rather than being inferred from the whole-suite result:
@@ -1051,7 +1059,7 @@ successful execution or verified artifact. These changes advanced
 historical pilot can authorize the next matrix.
 
 After those failures were dispositioned, the final provider-backed suite passed
-four tests in 92.86 seconds. The multi-agent canary completed with validation
+four tests in 104.16 seconds. The multi-agent canary completed with validation
 `pass`, 18 requests, 84,300 tokens, 56.98 seconds, and known estimated cost
 `$0.00767636`; its successful role trace included Data Auditor, Analyst, Lead,
 and Critic. The single-agent canary completed with validation `pass`, 6
@@ -1258,7 +1266,7 @@ Before another paid attempt:
    citation-resolution contract, and a named provenance failure taxonomy with
    the 2026-08-20 canary retained as a deterministic regression. Their
    rationale is in decision records 0009 through 0013.
-3. The complete R6 preflight is closed at this revision — 681 deterministic
+3. The complete R6 preflight is closed at this revision — 683 deterministic
    tests including real Docker containers, Ruff, every declared category as an
    explicit selection, all 60 dry-run cells, every retained artifact, and both
    paid live architecture canaries under the R17 outcome gate. Every observed

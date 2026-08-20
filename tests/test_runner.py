@@ -240,6 +240,64 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
     assert "- Elapsed seconds: **" in report_text
 
 
+def test_three_critic_calls_allow_two_bounded_remediation_cycles(
+    tmp_path: Path,
+) -> None:
+    lead_calls = 0
+    critic_calls = 0
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def fake_lead(
+        context,
+        objective,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        return LeadResult(
+            objective="Explain profitability.",
+            answer=f"Candidate revision {lead_calls}.",
+        )
+
+    async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
+        nonlocal critic_calls
+        critic_calls += 1
+        context.consume_budget("critic_loops")
+        if critic_calls < 3:
+            return ValidationResult(
+                status=ValidationStatus.REVISE,
+                issues=[
+                    ValidationIssue(
+                        id=f"V{critic_calls}",
+                        severity=ValidationSeverity.MEDIUM,
+                        message="Apply one bounded correction.",
+                    )
+                ],
+            )
+        return ValidationResult(status=ValidationStatus.PASS)
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        budget=RunBudget(max_critic_loops=3),
+        auditor_runner=fake_auditor,
+        lead_runner=fake_lead,
+        critic_runner=fake_critic,
+    )
+
+    result = asyncio.run(runner.run("run-two-remediations", "Explain profitability."))
+
+    assert result.status is RunStatus.COMPLETED
+    assert lead_calls == 3
+    assert critic_calls == 3
+    assert result.ledger is not None
+    assert result.ledger.budget.critic_loops == 3
+
+
 def test_runner_mandatory_audit_does_not_consume_analytical_specialist_budget(
     tmp_path: Path,
 ) -> None:

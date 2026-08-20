@@ -22,6 +22,7 @@ credentials, or evaluator-only expected values.
 | [0013](0013-provenance-failure-taxonomy.md) | Semantic citation failures are a named operational outcome, not `other` | Accepted |
 | [0014](0014-final-r6-live-contract-stabilization.md) | Final live-schema, provenance, and objective-driven visualization contracts that close R6 | Accepted |
 | [0015](0015-evidence-safe-metric-remediation.md) | Evidence-bound specialist metric reuse and canonical metric-definition remediation | Accepted |
+| [0016](0016-benchmark-remediation-capacity.md) | Benchmark-specific SQL headroom and two bounded analytical remediation cycles | Accepted |
 
 The chronological failure history, present run status, operational commands,
 and remaining risks are in [Phase 1 lessons](../phase1-lessons.md).

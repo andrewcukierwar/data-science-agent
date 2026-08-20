@@ -618,9 +618,12 @@ def _default_budgets() -> BudgetConfiguration:
     return BudgetConfiguration(
         resource_limits={
             "specialist_invocations": 12,
-            "sql": 30,
+            # Keep bounded headroom for Critic-requested corrections after the
+            # initial canonical profitability analysis.
+            "sql": 40,
             "python": 20,
-            "critic_loops": 2,
+            # One initial review plus up to two remediation/re-review cycles.
+            "critic_loops": 3,
             "charts": 4,
         },
         turn_limits={
@@ -1639,9 +1642,9 @@ class BenchmarkRunner:
             max_specialist_invocations=resource_limits.get(
                 "specialist_invocations", 12
             ),
-            max_sql_executions=resource_limits.get("sql", 30),
+            max_sql_executions=resource_limits.get("sql", 40),
             max_python_executions=resource_limits.get("python", 20),
-            max_critic_loops=resource_limits.get("critic_loops", 2),
+            max_critic_loops=resource_limits.get("critic_loops", 3),
             max_charts=resource_limits.get("charts", 4),
         )
 

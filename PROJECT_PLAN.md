@@ -15,15 +15,17 @@ gets one bounded tool-less correction attempt, and one lossless
 citation-resolution contract is shared by every provenance boundary, and
 semantic citation failures carry a named operational taxonomy with the
 2026-08-20 canary retained as a deterministic regression. The final preflight
-passed 681 deterministic tests including three Docker integrations, Ruff, all
+passed 683 deterministic tests including three Docker integrations, Ruff, all
 60 declared dry-run cells, retained-artifact validation, and both
 provider-backed architecture canaries under the shared R17 outcome gate. The
 live run also found and closed valid-JSON datetime parsing, unconditional chart
 requirements, and provider-visible empty audit-provenance lists. A first
 post-R6 R19 pilot retained a blocked multi-agent cell and exposed stale
-same-scope metric substitution; decision 0015 closes that boundary and the
-renewed R6 suite is green. Task 10 is ready for a replacement frozen manifest
-and stratified cost pilot; the paid matrix has not been executed and no
+same-scope metric substitution; decision 0015 closes that boundary. Its
+replacement then exposed insufficient benchmark-only correction capacity:
+decision 0016 reserves ten SQL executions for correction and two analytical
+remediation cycles without changing evaluator rules. Task 10 requires a new
+clean-revision stratified pilot; the paid matrix has not been executed and no
 benchmark result is published.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
@@ -1509,7 +1511,7 @@ constraints are recorded in `docs/phase2-status.md`.
 | 7 | Complete | Bounded generalist architecture sharing runtime, provenance, tools, and report contracts without specialist delegation |
 | 8 | Complete | Immutable resumable matrix runner, paid opt-in, cost pilot gate, failure isolation, and offline rescoring |
 | 9 | Complete | Deterministic denominator-preserving aggregation, uncertainty, paired comparisons, cost/latency, and failure reporting |
-| 10 | Ready / not executed | Five failed pilot attempts remain retained and none entered the matrix; the latest exposed and closed evidence-unsafe metric remediation, so a replacement clean-revision R19 pilot must pass before any 60-cell execution |
+| 10 | Ready / not executed | Six failed pilot attempts remain retained and none entered the matrix; the latest exposed and closed insufficient benchmark correction capacity, so a replacement clean-revision R19 pilot must pass before any 60-cell execution |
 
 ### Phase 2 implementation order
 
@@ -1751,12 +1753,12 @@ R6 is the final pre-benchmark gate. Its complete preflight must be rerun after
 all later remediation, including R13–R19 and R20–R25; an earlier green test run
 does not close R6.
 
-Status: complete on 2026-08-20 after R13–R25 and the Task 10 metric-remediation
-repair in decision 0015. The renewed revision passed 678 non-live tests in the
-restricted run plus all three Docker-backed integrations (681 total), Ruff
+Status: complete on 2026-08-20 after R13–R25 and the Task 10 readiness repairs
+in decisions 0015 and 0016. The renewed revision passed 680 non-live tests in
+the restricted run plus all three Docker-backed integrations (683 total), Ruff
 lint/format, the focused adversarial suites, retained-artifact
 validation, and all 60 declared dry-run cells. The final provider-backed suite
-passed four tests in 92.86 seconds, including completed single-agent and
+passed four tests in 104.16 seconds, including completed single-agent and
 multi-agent canaries under the shared R17 outcome gate. The live preflight found
 and closed three last integration defects before passing: field-level legacy
 audit coercion replaced a model-level validator that made valid ISO datetimes
@@ -2638,13 +2640,14 @@ actually contain; an empty `AuditResult` passes the contract only because it
 claims nothing, which is how those fixtures stayed green while the handoff was
 broken.
 
-The renewed final R6 preflight passed at this revision: 681 deterministic tests
+The renewed final R6 preflight passed at this revision: 683 deterministic tests
 including three real Docker integrations, Ruff, every declared category as an
 explicit selection, all 60 dry-run cells with unique run IDs and workspaces,
 every retained `.runs/` artifact, and both paid live architecture canaries. The
-final live suite passed four tests in 92.86 seconds. Decision records
+final live suite passed four tests in 104.16 seconds. Decision records
 `docs/decisions/0013-provenance-failure-taxonomy.md` and
-`docs/decisions/0015-evidence-safe-metric-remediation.md` hold the rationale and
+`docs/decisions/0015-evidence-safe-metric-remediation.md`, with benchmark budget
+calibration in `docs/decisions/0016-benchmark-remediation-capacity.md`, hold the rationale and
 `tests/test_provenance_failure_taxonomy.py` holds the regressions.
 
 #### Task 10 — Execute and publish the Phase 2 benchmark
