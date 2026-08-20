@@ -1438,7 +1438,7 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 489 passed and 16 opt-in live tests
+full local verification completed with 501 passed and 16 opt-in live tests
 deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
@@ -1728,12 +1728,55 @@ R6 is the final pre-benchmark gate. Its complete preflight must be rerun after
 all later remediation, including R13–R19; an earlier green test run does not
 close R6.
 
-Status: implementation verified on 2026-08-19, but the final gate was reopened
-after the post-pilot review created R13–R19. The false model-visible
-clean/no-injection assertion was removed, injected-scenario document
-regressions were added, and the earlier preflight passed with 369 tests, Ruff,
-all declared adversarial fixtures, and 60 dry-run cells. That run is historical
-evidence and must be repeated after R13–R19.
+Status: the deterministic preflight was rerun in full at this revision after
+R13–R19. Two paid/manual items remain open, so the gate is not yet closed.
+
+Scenario-document integrity is now enforced in code rather than only in a test.
+The shared generated document is inherited unchanged by the clean baseline and
+by every scenario injected on top of it, so any sentence asserting injection
+status is true for at most one of them and is a false premise for the rest.
+`scenarios/invariants.py` therefore declares `BASELINE_ONLY_DOCUMENT_CLAIMS`
+and raises `document:injection-status-claim` from `check_dataset_invariants`,
+which every scenario suite runs through `generate_validated`. The regression in
+`tests/test_scenario_catalog.py` is parametrized from `discover_scenarios()`
+rather than a hard-coded list, so a newly registered scenario cannot skip it,
+and it also asserts the model-visible context contract. A negative fixture
+proves each declared claim fails validation. Reintroducing the exact historical
+sentence into the generator was verified to fail seven ecommerce-family
+scenarios and the baseline check; the three experiment scenarios use a separate
+document and are correctly unaffected.
+
+Rerun at this revision — passed:
+
+- full deterministic suite: 501 passed, 16 opt-in live tests deselected;
+- Ruff lint (`All checks passed!`) and format (148 files already formatted);
+- architecture-neutral evaluator fixtures (equivalence and tool-mix);
+- corrupted/mismatched-workspace and source-tamper refusals;
+- failed-evidence adversarial fixtures;
+- evaluator-exception isolation and denominator preservation;
+- interrupted-resume regressions across benchmark, Generalist, and ledger;
+- unknown-pricing and unknown-cost acknowledgement regressions;
+- scenario-document integrity regressions (all ten registered scenarios);
+- the R17 outcome gate, including its calibration against all four retained
+  Task 10 pilot workspaces;
+- Docker-backed integration tests, executing real containers;
+- dry-run of the complete declaration: 60 cells, 60 unique run IDs, 60 unique
+  workspace paths, 10 scenarios × 2 architectures × 3 repetitions, with the
+  R19 pilot set partitioning 30 cells per architecture;
+- every retained `.runs/` artifact still loads at this revision (10 manifests,
+  18 ledger states), and offline rescore and report still run against retained
+  benchmark evidence.
+
+Rerun at this revision — still open:
+
+- both opt-in live architecture canaries in
+  `tests/test_strict_output_canary_live.py`. They last passed on 2026-08-19,
+  before R14–R19 changed usage accounting, the Generalist attempt lifecycle,
+  interruption persistence, and the outcome gate they now assert against. They
+  are paid and must be run deliberately;
+- the benchmark-validity-focused Sol High code review, which is user-triggered.
+
+The earlier 369-test preflight remains historical evidence only.
 
 ### Phase 2 Follow-up Review Remediation: R7–R12
 

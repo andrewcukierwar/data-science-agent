@@ -1,5 +1,6 @@
 """Tests for versioned scenario discovery and generated-source invariants."""
 
+import inspect
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -8,11 +9,18 @@ import pandas as pd
 import pytest
 
 from scenarios import discover_scenarios, get_scenario
-from scenarios.catalog import ScenarioCatalog, ScenarioCatalogError
+from scenarios.catalog import (
+    ScenarioCatalog,
+    ScenarioCatalogError,
+    ScenarioRegistration,
+)
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
 from scenarios.generator import SyntheticEcommerceConfig, SyntheticEcommerceGenerator
 from scenarios.injection import generate_canonical_profitability_scenario
 from scenarios.invariants import (
+    BASELINE_ONLY_DOCUMENT_CLAIMS,
+    ScenarioInvariantError,
+    baseline_only_document_claims,
     check_metric_identities,
     validate_synthetic_ecommerce_baseline,
 )
@@ -101,28 +109,67 @@ def test_clean_baseline_is_independently_validated_and_source_bytes_are_stable(
     )
 
 
+def _generate_registered_scenario(registration: ScenarioRegistration) -> object:
+    """Generate one registered scenario at test scale, whatever its config type."""
+
+    parameters = inspect.signature(registration.generator).parameters
+    if "dataset_config" in parameters:
+        return registration.generate_validated(_small_config())
+    return registration.generate_validated()
+
+
 @pytest.mark.parametrize(
     "scenario_id",
-    (
-        "canonical-q2-profitability",
-        "retention-q2-deterioration",
-        "cogs-q2-margin-deterioration",
-        "discount-refund-q2-deterioration",
-        "missing-reporting-day",
-        "partial-latest-reporting-day",
-        "channel-mix-confounding",
-    ),
+    sorted(item.scenario_id for item in discover_scenarios()),
 )
 def test_injected_scenario_documents_do_not_retain_baseline_only_assertions(
     scenario_id: str,
 ) -> None:
-    """Scenario source documents must not claim that no injection occurred."""
+    """No registered scenario document may claim whether an injection occurred.
 
-    generated = get_scenario(scenario_id, "1.0").generate_validated(_small_config())
-    document = generated.dataset.business_definitions.lower()
+    The parametrization is derived from the catalog rather than hard-coded, so
+    a newly registered scenario cannot silently skip this check.
+    """
 
-    assert "clean baseline" not in document
-    assert "no business or data-quality scenario is injected" not in document
+    registration = get_scenario(scenario_id, "1.0")
+    generated = _generate_registered_scenario(registration)
+
+    assert baseline_only_document_claims(generated.dataset) == ()
+    assert not any(
+        claim in registration.model_context_contract().model_dump_json().lower()
+        for claim in BASELINE_ONLY_DOCUMENT_CLAIMS
+    )
+
+
+def test_every_declared_matrix_scenario_is_covered_by_the_document_regression() -> None:
+    """The document regression must cover the full declared benchmark matrix."""
+
+    assert len(discover_scenarios().registrations) == 10
+
+
+@pytest.mark.parametrize("claim", BASELINE_ONLY_DOCUMENT_CLAIMS)
+def test_reintroducing_a_baseline_only_claim_fails_scenario_validation(
+    claim: str,
+) -> None:
+    """A document that reasserts injection status must fail generation."""
+
+    registration = get_scenario("retention-q2-deterioration", "1.0")
+    generated = registration.generate(_small_config())
+    document = generated.dataset.business_definitions
+    regressed = replace(
+        generated.dataset,
+        business_definitions=f"{document}\n- This dataset {claim.upper()}.\n",
+    )
+
+    assert baseline_only_document_claims(regressed) == (claim,)
+    report = registration.invariant_suite.validate(regressed)
+    assert not report.passed
+    assert any(
+        violation.invariant_id == "document:injection-status-claim"
+        for violation in report.violations
+    )
+    with pytest.raises(ScenarioInvariantError, match="injection-status-claim"):
+        report.assert_valid()
 
 
 def test_common_invariants_reject_keys_dates_nulls_and_economic_identities() -> None:

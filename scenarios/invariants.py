@@ -151,6 +151,33 @@ def _violation(invariant_id: str, message: str) -> InvariantViolation:
     return InvariantViolation(invariant_id=invariant_id, message=message)
 
 
+# A single generated document is shared by the clean baseline and by every
+# scenario injected on top of it, so any sentence asserting injection status is
+# true for at most one of them. Such a sentence is model-visible, so a scenario
+# that inherits it hands the agent a false premise about its own source. The
+# document may describe metrics and data treatment; it must not claim whether a
+# scenario was injected.
+BASELINE_ONLY_DOCUMENT_CLAIMS: tuple[str, ...] = (
+    "clean baseline",
+    "no business or data-quality scenario is injected",
+    "no scenario is injected",
+    "no injection",
+    "no injected",
+    "not injected",
+    "free of injected",
+    "without injected",
+)
+
+
+def baseline_only_document_claims(source: object | TableMap) -> tuple[str, ...]:
+    """Return every baseline-only injection claim found in the source document."""
+
+    documentation = _documentation(source).lower()
+    return tuple(
+        claim for claim in BASELINE_ONLY_DOCUMENT_CLAIMS if claim in documentation
+    )
+
+
 def _columns_present(
     tables: TableMap,
     table: str,
@@ -178,6 +205,16 @@ def check_dataset_invariants(
     tables = _tables(source)
     documentation = _documentation(source).lower()
     violations: list[InvariantViolation] = []
+
+    for claim in baseline_only_document_claims(source):
+        violations.append(
+            _violation(
+                "document:injection-status-claim",
+                f"the model-visible source document asserts injection status "
+                f"({claim!r}); the shared document must not claim whether a "
+                f"scenario was injected",
+            )
+        )
 
     for invariant in spec.keys:
         invariant_id = f"key:{invariant.table}:{','.join(invariant.columns)}"
@@ -702,6 +739,7 @@ def validate_synthetic_ecommerce_baseline(source: object | TableMap) -> Invarian
 
 
 __all__ = [
+    "BASELINE_ONLY_DOCUMENT_CLAIMS",
     "DatasetInvariantSpec",
     "DateInvariant",
     "DateRelationInvariant",
@@ -714,6 +752,7 @@ __all__ = [
     "RowInvariant",
     "ScenarioInvariantError",
     "ScenarioInvariantSuite",
+    "baseline_only_document_claims",
     "check_dataset_invariants",
     "check_metric_identities",
     "check_observable_ground_truth",

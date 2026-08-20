@@ -3,9 +3,11 @@
 **Status date:** 2026-08-19
 **Implementation:** Tasks 1–9, R1–R12, and R13–R19 complete
 
-**Remediation:** R13–R19 are all implemented. The reopened R6 gate is the only
-remaining blocker: its complete preflight, including both opt-in live canaries,
-must be rerun at this revision before a new Task 10 manifest is frozen.
+**Remediation:** R13–R19 are all implemented, and the reopened R6 deterministic
+preflight was rerun in full at this revision. Two items keep the gate open: the
+two opt-in live architecture canaries, which are paid and last passed before
+R14–R19 changed lifecycle accounting, and the benchmark-validity Sol High code
+review, which is user-triggered. Neither can be run unattended.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -81,7 +83,7 @@ historical verification, but they reopen the final R6 gate.
 | R3 | Verified | Identity mismatch and source-tamper regressions |
 | R4 | Verified | Evaluator-error denominator and taxonomy regressions |
 | R5 | Verified | Explicit model, pricing gate, cumulative resume, and pilot semantics |
-| R6 | Reopened | Rerun the complete preflight after R13–R19; the earlier green run is historical evidence only |
+| R6 | Deterministic preflight rerun; gate open | Document integrity is now a code invariant with catalog-driven regressions; 501 tests, Ruff, all adversarial suites, Docker integrations, and 60 dry-run cells passed at this revision. Outstanding: both paid live canaries and the Sol High benchmark-validity review |
 | R7 | Verified | Capability/tool-mix and architecture-equivalence regressions |
 | R8 | Verified | Identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
 | R9 | Verified | Multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
@@ -103,13 +105,15 @@ criteria.
 | R14 — Persist usage and cost across failed model calls | P0 | Complete | Usage is recorded at the response boundary and reconciled once per run on both success and failure paths; parse, turn-limit, and lifecycle failures keep their tokens; unreconcilable usage is marked incomplete and its cost published as unavailable rather than `$0.00` |
 | R15 — Give the single-agent runner a complete attempt lifecycle | P1 | Complete | `GeneralistRunner` opens one attempt before agent execution and finishes it as completed, blocked, failed, or interrupted with matching timing, usage, cost availability, and error; resume appends without recounting; benchmark records built from the real runner expose non-null attempt identity and full history |
 | R16 — Retain interrupted benchmark cells and resume them safely | P1 | Complete | An interrupted cell is persisted as a cancelled/interrupted record before the manifest aborts, retaining workspace, attempt history, partial usage, cost availability, and latency; the workspace status is reconciled to `cancelled`; denominators count it as an observed operational failure; explicit resume retries only cancelled cells and appends a new attempt |
-| R17 — Make the preflight sensitive to benchmark outcomes | P1 | Complete (final R6 rerun pending R18–R19) | One shared outcome-sensitive smoke gate asserts completion, readable report persistence, accounted or explicitly unavailable usage, explicit cost, and a reconciled attempt history; live tests, both canaries, and deterministic failure fixtures all use it, and it rejects all four retained pilot workspaces |
+| R17 — Make the preflight sensitive to benchmark outcomes | P1 | Complete | One shared outcome-sensitive smoke gate asserts completion, readable report persistence, accounted or explicitly unavailable usage, explicit cost, and a reconciled attempt history; live tests, both canaries, and deterministic failure fixtures all use it, and it rejects all four retained pilot workspaces |
 | R18 — Preserve explicit blocked reasons and accurate failure taxonomy | P1 | Complete | Orchestration persists a typed `RunBlockReason` plus a readable detail for every non-completion; the benchmark maps it to an explicit category instead of hard-coding budget; blocked and cancelled runs stay operational observations rather than evaluator failures; the aggregate taxonomy reproduces per-record categories exactly |
 | R19 — Calibrate the paid pilot across architectures and workload classes | P2 | Complete | The manifest freezes a pilot set with at least one stratum per architecture; `run_pilot` measures every stratum and retains per-pilot observations; the estimate is a stratified sum with an explicit range and a named scaling method; the gate verifies every stratum and refuses missing, failed, mismatched, or unreconciled evidence; manifest-declaration and output-schema digests force a new manifest version on any model, budget, matrix, pilot-set, or schema change |
 
-Task 10 remains blocked until the complete R6 preflight—including Docker
-integrations, adversarial suites, both live architecture canaries, Ruff, and the
-60-cell dry-run—is rerun successfully at this revision.
+The deterministic half of that preflight—Ruff, the full suite, the adversarial
+suites, Docker integrations, and the 60-cell dry-run—was rerun successfully at
+this revision. Task 10 remains blocked on the two remaining R6 items: both
+opt-in live architecture canaries and the benchmark-validity Sol High code
+review.
 
 ## What is implemented
 
@@ -471,26 +475,58 @@ pilot. Unknown-cost acknowledgement binds every affected pilot record digest.
 
 ## Verification completed
 
-The latest full deterministic review run completed with:
+### Reopened R6 preflight, deterministic half, rerun at this revision
 
 ```text
-489 passed, 16 deselected
+501 passed, 16 deselected
 ```
 
-The deselected tests are opt-in live tests. Ruff lint and format checks also
-passed, and the complete 10 × 2 × 3 declaration produced 60 unique cells and
-workspace paths. Deterministic fake-run coverage includes resume, interruption,
-duplicate IDs, failed cells, immutable workspaces, paid-execution guards, pilot
-enforcement, and offline rescoring. The final preflight also ran the
-architecture-equivalence and tool-mix fixtures, corrupted/mismatched-workspace
-and failed-evidence adversarial suites, evaluator-exception and aggregation
-checks, interrupted-resume and unknown-pricing checks, and the scenario-document
-integrity regressions. Docker-backed integration tests passed with Docker access.
-That preflight was green before live pilot evidence existed. The subsequent
-post-pilot deep review found the R13–R19 release blockers in structured output,
-failure-path accounting, Generalist attempts, interruption persistence,
-outcome assertions, failure taxonomy, and pilot representativeness. The final
-R6 gate is therefore open again despite the earlier green run.
+The deselected tests are opt-in live tests. Ruff lint reported `All checks
+passed!` and format reported 148 files already formatted. Each declared
+preflight category was also run as an explicit selection rather than being
+inferred from the whole-suite result: architecture-neutral evaluator fixtures,
+corrupted/mismatched-workspace and source-tamper refusals, failed-evidence
+adversarial fixtures, evaluator-exception isolation, interrupted-resume across
+the benchmark runner and both orchestration runners, unknown-pricing and
+unknown-cost acknowledgement, and the scenario-document integrity regressions.
+The R17 outcome gate passed, including its calibration against all four
+retained Task 10 pilot workspaces. Docker-backed integration tests executed
+real containers. The complete 10 × 2 × 3 declaration produced 60 cells with 60
+unique run IDs and 60 unique workspace paths, and the R19 pilot set partitioned
+them 30 per architecture. Every retained `.runs/` artifact still loads at this
+revision — 10 benchmark manifests and 18 ledger states — and offline rescore
+and report still run against retained benchmark evidence.
+
+Two R6 items remain open because neither can be run unattended: the two paid
+opt-in live architecture canaries, and the benchmark-validity Sol High code
+review, which is user-triggered.
+
+### Scenario-document integrity is now a code invariant (R6)
+
+One generated document is shared by the clean baseline and by every scenario
+injected on top of it, so a sentence asserting injection status is true for at
+most one of them and is a false premise for every other. That is exactly how
+the original model-visible clean/no-injection claim survived: it was written
+once for the baseline and inherited unchanged by seven injected scenarios.
+
+`scenarios/invariants.py` now declares `BASELINE_ONLY_DOCUMENT_CLAIMS` and
+raises `document:injection-status-claim` from `check_dataset_invariants`, so
+every scenario suite enforces it during `generate_validated` rather than only
+in a test. The regression in `tests/test_scenario_catalog.py` is parametrized
+from `discover_scenarios()` instead of a hard-coded list — it previously
+covered seven of ten registered scenarios — and also checks the model-visible
+context contract. Reintroducing the exact historical sentence into the
+generator was verified to fail seven ecommerce-family scenarios plus the
+baseline check; the three experiment scenarios use a separate document and are
+correctly unaffected.
+
+### Earlier preflight, superseded
+
+An earlier preflight was green before live pilot evidence existed. The
+subsequent post-pilot deep review found the R13–R19 release blockers in
+structured output, failure-path accounting, Generalist attempts, interruption
+persistence, outcome assertions, failure taxonomy, and pilot
+representativeness. That run is historical evidence only.
 
 ### Live strict-output canaries (R13)
 
@@ -642,30 +678,36 @@ Before another paid attempt:
    `tests/test_failure_taxonomy.py`, and
    `tests/test_pilot_set_calibration.py`. No evaluator rule was altered to
    mask the retained failures.
-2. Run the complete reopened R6 preflight, including strict-schema checks,
-   failure-path accounting, lifecycle/taxonomy fixtures, Docker integrations,
-   Ruff, and all 60 dry-run cells.
+2. The deterministic half of the reopened R6 preflight has been rerun at this
+   revision — strict-schema checks, failure-path accounting, lifecycle and
+   taxonomy fixtures, scenario-document integrity, Docker integrations, Ruff,
+   and all 60 dry-run cells.
 3. Rerun the two bounded live strict-output canaries in
-   `tests/test_strict_output_canary_live.py` (one per architecture) after
-   R19 changes pilot calibration, and require completion, report
-   persistence, usage accounting, and attempt history. They passed for R13 on
-   2026-08-19, before the R14 accounting change.
-4. Recheck variable presence without printing the key and confirm Docker access.
-5. Select the compatible model and freeze a new manifest before any paid execution.
-6. Review the declared ten-scenario × two-architecture × three-repetition matrix,
+   `tests/test_strict_output_canary_live.py` (one per architecture), which
+   require completion, report persistence, usage accounting, and attempt
+   history through the R17 gate. They passed for R13 on 2026-08-19, before
+   R14–R19 changed usage accounting, the Generalist attempt lifecycle, and
+   interruption persistence, so that result no longer covers this revision.
+   These are paid runs.
+4. Run the benchmark-validity-focused Sol High code review. It is
+   user-triggered and cannot be launched from a session. Steps 3 and 4 are the
+   only remaining R6 items.
+5. Recheck variable presence without printing the key and confirm Docker access.
+6. Select the compatible model and freeze a new manifest before any paid execution.
+7. Review the declared ten-scenario × two-architecture × three-repetition matrix,
    budgets, evaluator versions, code revision, and output paths.
-7. Run and retain the R19 pilot set, including at least one cell per architecture.
-8. Decide whether the declared repetition count remains affordable. If it must
+8. Run and retain the R19 pilot set, including at least one cell per architecture.
+9. Decide whether the declared repetition count remains affordable. If it must
    change, create a new manifest/version and record the justification before the
    full run.
-9. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
-   overwrite workspaces.
-10. Evaluate every persisted workspace offline using the frozen evaluator rules.
-11. Inspect failures without changing rules mid-experiment. If code or evaluator
-   changes are required, version the benchmark and rerun the affected declared
-   matrix rather than silently patching scores.
-12. Generate and retain raw manifests, run records, evaluator results, pilot
+10. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
+    overwrite workspaces.
+11. Evaluate every persisted workspace offline using the frozen evaluator rules.
+12. Inspect failures without changing rules mid-experiment. If code or evaluator
+    changes are required, version the benchmark and rerun the affected declared
+    matrix rather than silently patching scores.
+13. Generate and retain raw manifests, run records, evaluator results, pilot
     report, and aggregate report.
-13. Publish real results and limitations, including denominators, failed runs,
+14. Publish real results and limitations, including denominators, failed runs,
     sample size, model specificity, evaluator limitations, uncertainty, cost,
     and latency—regardless of which architecture performs better.

@@ -40,7 +40,7 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **370 passed and 13 live tests
+deterministic verification completed with **501 passed and 16 live tests
 deselected**; Ruff lint and formatting checks passed, and the 10 × 2 × 3 matrix
 dry-run produced 60 unique cells.
 
@@ -120,11 +120,12 @@ R1–R12 are implemented and covered by architecture-equivalence, capability/too
 mix, failed-evidence, workspace identity, evaluator-error, lifecycle,
 aggregation-safe rescore, pilot/run-record binding, append-only attempt
 reconciliation, scenario-document integrity, and exclusive atomic offline-output
-fixtures. The final R6 preflight passed, including all Docker-backed integration
-tests and all 60 declared dry-run cells. The catalog evaluator version is now
-`1.1` for these scoring changes. That historical preflight does not close the
-new gate: the complete R6 preflight must be rerun at this revision before
-another Task 10 manifest is frozen.
+fixtures. The catalog evaluator version is now `1.1` for these scoring changes.
+The reopened R6 preflight has been rerun at this revision: the full suite, Ruff,
+every declared adversarial suite, the Docker-backed integration tests, and all
+60 declared dry-run cells pass. Two R6 items remain open before another Task 10
+manifest is frozen — the two paid opt-in live architecture canaries and the
+benchmark-validity Sol High code review — because neither runs unattended.
 
 Task 10 execution is currently blocked before the paid matrix. Four immutable
 attempts were retained under `.runs/phase2-task10-20260819/`: three attempts
