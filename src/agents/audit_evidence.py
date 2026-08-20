@@ -54,6 +54,10 @@ MAX_CATALOG_STATEMENT_CHARS = 400
 class AuditEvidenceError(EvidenceProvenanceError):
     """Raised when material audit claims lack canonical executed provenance."""
 
+    def __init__(self, message: str, invalid_fields: tuple[str, ...] = ()) -> None:
+        self.invalid_fields = invalid_fields
+        super().__init__(message)
+
 
 class AuditEvidenceEntry(BaseModel):
     """One audit claim exposed to the Lead with its canonical references."""
@@ -170,13 +174,16 @@ def validate_audit_provenance(
         return audit
     canonical_audit, unsupported = canonicalize_audit_result(audit, ledger)
     if unsupported:
-        details = ", ".join(
+        invalid_fields = tuple(
             f"{claim.claim_id}"
             + (f"[{claim.issue_id}]" if claim.issue_id else "")
             + ("" if claim.evidence_refs else " (no evidence_refs)")
             for claim in unsupported
         )
-        raise AuditEvidenceError("audit claims cite no executed evidence: " + details)
+        raise AuditEvidenceError(
+            "audit claims cite no executed evidence: " + ", ".join(invalid_fields),
+            invalid_fields,
+        )
     return canonical_audit
 
 

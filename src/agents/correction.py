@@ -90,17 +90,45 @@ def build_evidence_correction_catalog(
 ) -> EvidenceCorrectionCatalog:
     """Collect the citable references a correction attempt may choose from."""
 
-    references = sorted(executed_references(ledger))
-    bounded_references = tuple(references[:reference_limit])
-    findings = [
-        FindingEvidenceEntry(
-            finding_id=finding.id,
-            statement=finding.statement[:statement_chars],
-            evidence_refs=tuple(finding.evidence_refs),
-        )
-        for finding in ledger.findings
+    # The merged ledger finding list can overwrite repeated specialist-local
+    # IDs (for example several Analyst ``F1`` results). Correction needs the
+    # newest append-only specialist evidence first, especially evidence created
+    # by the remediation that immediately preceded this boundary.
+    findings: list[FindingEvidenceEntry] = []
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+    source_findings = [
+        finding
+        for record in reversed(ledger.specialist_results)
+        for finding in record.result.findings
     ]
+    source_findings.extend(reversed(ledger.findings))
+    for finding in source_findings:
+        key = (finding.id, finding.statement, tuple(finding.evidence_refs))
+        if key in seen:
+            continue
+        seen.add(key)
+        findings.append(
+            FindingEvidenceEntry(
+                finding_id=finding.id,
+                statement=finding.statement[:statement_chars],
+                evidence_refs=tuple(finding.evidence_refs),
+            )
+        )
     bounded_findings = tuple(findings[:finding_limit])
+    available_references = executed_references(ledger)
+    preferred_references = list(
+        dict.fromkeys(
+            reference
+            for finding in bounded_findings
+            for reference in finding.evidence_refs
+            if reference in available_references
+        )
+    )
+    references = [
+        *preferred_references,
+        *sorted(available_references.difference(preferred_references)),
+    ]
+    bounded_references = tuple(references[:reference_limit])
     return EvidenceCorrectionCatalog(
         executed_references=bounded_references,
         specialist_findings=bounded_findings,

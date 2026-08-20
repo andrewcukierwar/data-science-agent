@@ -45,12 +45,12 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **683 passed** when the three
-Docker-backed integrations are included (**680 passed, 3 Docker-permission
+deterministic verification completed with **687 passed** when the three
+Docker-backed integrations are included (**684 passed, 3 Docker-permission
 skips, and 17 live tests deselected** in the restricted run, followed by **3
 passed** with Docker access). Ruff lint and formatting checks passed, and the
 10 × 2 × 3 matrix dry-run produced 60 unique cells. The final provider-backed
-suite then passed **4 tests in 104.16 seconds**, including one completed canary
+suite then passed **4 tests in 80.92 seconds**, including one completed canary
 per architecture. R6 is closed; Task 10 is ready for a new frozen manifest and
 stratified cost pilot.
 
@@ -227,11 +227,11 @@ aggregation-safe rescore, pilot/run-record binding, append-only attempt
 reconciliation, scenario-document integrity, and exclusive atomic offline-output
 fixtures. The catalog evaluator version is now `1.2`, advanced for the R9
 aggregation changes and again for R21 audit-provenance scoring.
-The renewed final R6 preflight passed at this revision: 683 deterministic tests
+The renewed final R6 preflight passed at this revision: 687 deterministic tests
 including real Docker integrations, Ruff, every declared adversarial suite,
 all 60 declared dry-run cells, retained-artifact validation, and a
 benchmark-validity code review. The final provider-backed suite passed four
-tests in 104.16 seconds, including completed single-agent and multi-agent
+tests in 80.92 seconds, including completed single-agent and multi-agent
 canaries under the shared R17 gate. The final live review also closed strict
 JSON datetime parsing, objective-driven chart requirements, and non-empty
 provider-visible audit provenance. A subsequent R19 pilot retained a blocked

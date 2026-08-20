@@ -23,6 +23,7 @@ credentials, or evaluator-only expected values.
 | [0014](0014-final-r6-live-contract-stabilization.md) | Final live-schema, provenance, and objective-driven visualization contracts that close R6 | Accepted |
 | [0015](0015-evidence-safe-metric-remediation.md) | Evidence-bound specialist metric reuse and canonical metric-definition remediation | Accepted |
 | [0016](0016-benchmark-remediation-capacity.md) | Benchmark-specific SQL headroom and two bounded analytical remediation cycles | Accepted |
+| [0017](0017-complete-bounded-provenance-correction.md) | Newest-first correction evidence and one bounded audit-citation correction for both architectures | Accepted |
 
 The chronological failure history, present run status, operational commands,
 and remaining risks are in [Phase 1 lessons](../phase1-lessons.md).

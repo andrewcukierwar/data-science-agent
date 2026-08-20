@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from agents import Agent
-from agents.audit_evidence import persist_audit_result
+from agents.audit_evidence import AuditEvidenceError, persist_audit_result
+from agents.correction import run_bounded_evidence_correction
 from agents.model_usage import run_agent_with_usage
 from agents.output_contract import require_strict_output, strict_output_type
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
@@ -159,7 +160,20 @@ async def run_data_auditor(
         AuditResult,
         agent_name=selected_agent.name,
     )
-    return persist_audit_result(output, context)
+    try:
+        return persist_audit_result(output, context)
+    except AuditEvidenceError as error:
+        return await run_bounded_evidence_correction(
+            context,
+            output,
+            error,
+            output_type=AuditResult,
+            persist=lambda corrected: persist_audit_result(corrected, context),
+            agent_name=selected_agent.name,
+            model=str(selected_agent.model)
+            if selected_agent.model is not None
+            else None,
+        )
 
 
 run_auditor = run_data_auditor

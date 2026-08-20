@@ -27,18 +27,20 @@ from agents import (
     AgentRole,
     AgentRunConfig,
     AgentRunContext,
+    AuditEvidenceError,
     LeadEvidenceError,
     build_correction_prompt,
     build_evidence_correction_agent,
     build_evidence_correction_catalog,
     persist_audit_result,
+    run_data_auditor,
     run_generalist,
     run_lead,
 )
 from agents.model_usage import Runner
 from orchestration.ledger import AnalysisLedger
 from schemas.audit import AuditObservation, AuditResult, AuditStatus, TableAudit
-from schemas.findings import ConfidenceLevel, Finding
+from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.generalist import GeneralistResult
 from schemas.lead import LeadRecommendation, LeadResult
 from schemas.run_state import (
@@ -275,6 +277,39 @@ def test_correction_catalog_is_bounded(tmp_path: Path) -> None:
     assert catalog.truncated is True
 
 
+def test_correction_catalog_prioritizes_latest_append_only_specialist_evidence(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    for index in range(45):
+        context.ledger.record_specialist_result(
+            "analyst",
+            SpecialistResult(
+                objective=f"Correction cycle {index}.",
+                findings=[
+                    Finding(
+                        id="analyst:F1",
+                        statement=f"Latest measured value revision {index}.",
+                        metric="orders",
+                        value=float(index),
+                        evidence_refs=[_SQL_PATH],
+                        confidence=ConfidenceLevel.HIGH,
+                    )
+                ],
+            ),
+        )
+
+    catalog = build_evidence_correction_catalog(context.ledger)
+
+    assert len(catalog.specialist_findings) == 40
+    assert catalog.specialist_findings[0].statement.endswith("revision 44.")
+    assert all(
+        not item.statement.endswith("revision 0.")
+        for item in catalog.specialist_findings
+    )
+    assert catalog.executed_references[0] == _SQL_PATH
+
+
 def test_correction_catalog_carries_no_evaluator_or_internal_state(
     tmp_path: Path,
 ) -> None:
@@ -314,6 +349,74 @@ def test_invalid_citations_get_exactly_one_successful_correction(
     assert result.findings[0].evidence_refs == [_SQL_PATH]
     persisted = AnalysisLedger(context.ledger.state_path)
     assert persisted.hypotheses[0].evidence_refs == [_SQL_PATH]
+
+
+def test_multi_agent_audit_gets_the_same_bounded_citation_correction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context(tmp_path, role=AgentRole.DATA_AUDITOR)
+    invalid = AuditResult(
+        status=AuditStatus.COMPLETE,
+        tables=[
+            TableAudit(
+                table_name="orders",
+                row_count=2,
+                evidence_refs=[_SQL_PATH],
+            )
+        ],
+        limitations=[
+            AuditObservation(
+                statement="Only one relation is available.",
+                evidence_refs=[_BAD_REF],
+            )
+        ],
+        audited_at=_STAMP,
+    )
+    corrected = invalid.model_copy(
+        update={
+            "limitations": [
+                invalid.limitations[0].model_copy(update={"evidence_refs": [_SQL_PATH]})
+            ]
+        }
+    )
+    runner = _ScriptedRunner(invalid, corrected)
+    monkeypatch.setattr(Runner, "run", runner)
+
+    result = asyncio.run(run_data_auditor(context))
+
+    assert result.limitations[0].evidence_refs == [_SQL_PATH]
+    assert len(runner.calls) == 2
+    assert runner.agents[1].tools == []
+    assert [event.status for event in _agent_events(context)] == [
+        AgentEventStatus.FAILED,
+        AgentEventStatus.SUCCEEDED,
+    ]
+    assert "audit:limitation:0" in runner.calls[1][1]
+
+
+def test_multi_agent_audit_still_stops_after_one_invalid_correction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context(tmp_path, role=AgentRole.DATA_AUDITOR)
+    invalid = AuditResult(
+        status=AuditStatus.COMPLETE,
+        limitations=[
+            AuditObservation(
+                statement="Only one relation is available.",
+                evidence_refs=[_BAD_REF],
+            )
+        ],
+        audited_at=_STAMP,
+    )
+    runner = _ScriptedRunner(invalid, invalid)
+    monkeypatch.setattr(Runner, "run", runner)
+
+    with pytest.raises(AuditEvidenceError):
+        asyncio.run(run_data_auditor(context))
+
+    assert len(runner.calls) == 2
 
 
 def test_correction_reuses_existing_executions_and_spends_no_extra_budget(
@@ -543,6 +646,44 @@ def test_the_single_agent_baseline_gets_the_same_bounded_correction(
     ]
     assert events[1].agent_name.endswith("(evidence correction)")
     assert runner.agents[1].output_type.output_type is GeneralistResult
+
+
+def test_single_agent_audit_gets_the_same_bounded_citation_correction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context(tmp_path, role=AgentRole.GENERALIST)
+    valid = _generalist_result([_SQL_PATH])
+    invalid_audit = valid.audit.model_copy(
+        update={
+            "limitations": [
+                AuditObservation(
+                    statement="Only one relation is available.",
+                    evidence_refs=[_BAD_REF],
+                )
+            ]
+        }
+    )
+    invalid = valid.model_copy(update={"audit": invalid_audit})
+    corrected_audit = invalid_audit.model_copy(
+        update={
+            "limitations": [
+                invalid_audit.limitations[0].model_copy(
+                    update={"evidence_refs": [_SQL_PATH]}
+                )
+            ]
+        }
+    )
+    corrected = valid.model_copy(update={"audit": corrected_audit})
+    runner = _ScriptedRunner(invalid, corrected)
+    monkeypatch.setattr(Runner, "run", runner)
+
+    result = asyncio.run(run_generalist(context, "Explain the change."))
+
+    assert result.audit.limitations[0].evidence_refs == [_SQL_PATH]
+    assert len(runner.calls) == 2
+    assert runner.agents[1].tools == []
+    assert "audit:limitation:0" in runner.calls[1][1]
 
 
 def test_the_single_agent_baseline_also_terminates_after_one_attempt(
