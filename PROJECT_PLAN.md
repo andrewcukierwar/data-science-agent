@@ -2,10 +2,11 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 and R1–R12 are implemented. A
-post-pilot deep review opened R13–R19 and reopened the final R6 gate. Task 10
-was attempted but remains blocked before the paid matrix; no benchmark result
-is published.
+**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 and R1–R19 are implemented. The
+deterministic portion of the reopened R6 gate and its benchmark-validity review
+are complete. A fresh paid live canary for each architecture remains required.
+Task 10 was attempted but remains blocked before the paid matrix; no benchmark
+result is published.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1438,11 +1439,11 @@ or vice versa.
 ### Phase 2 implementation status as of 2026-08-19
 
 Tasks 1–9 below are implemented and covered by deterministic tests. The latest
-full local verification completed with 501 passed and 16 opt-in live tests
+full local verification completed with 508 passed and 16 opt-in live tests
 deselected; Ruff lint and formatting checks passed. This status describes the
 implementation, not an architecture-performance result.
 
-R1–R12 are implemented and verified with deterministic architecture-equivalence,
+R1–R19 are implemented and verified with deterministic architecture-equivalence,
 capability, evidence, workspace-identity, evaluator-error, aggregation,
 pilot-binding, attempt-reconciliation, scenario-document, and exclusive-output
 regressions. The final R6 preflight passed, including Docker-backed integration
@@ -1458,15 +1459,16 @@ R15 is complete: the single-agent runner opens, attributes, and closes typed
 attempts for every exit, so both architectures publish the same attempt
 protocol. R16 is complete: an interrupted cell is retained as a cancelled
 operational record with its partial accounting and can be resumed into a new
-append-only attempt. R17 is complete apart from the final R6 rerun: one shared
+append-only attempt. R17 is complete: one shared
 outcome-sensitive smoke gate is used by the live tests, the canaries, and
 deterministic failure fixtures, and it rejects all four retained pilots.
 R18 is complete: every non-completion persists a typed reason and detail, and
 only genuine budget exhaustion is categorized as budget. R19 is complete: the
 pilot is a declared per-architecture set with a stratified, ranged estimate
-bound to the frozen manifest. All of R13–R19 are implemented; the remaining
-gate is the complete R6 preflight rerun. That review reopens R6: its complete preflight must pass again after
-R13–R19 before another Task 10 manifest is frozen.
+bound to the frozen manifest. The post-R19 deterministic preflight and
+benchmark-validity review are complete. The only remaining R6 acceptance item
+is a fresh paid live canary for each architecture; both require provider
+credentials that are absent from the current environment.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
 rescores and aggregate reports are retained under
@@ -1486,7 +1488,7 @@ constraints are recorded in `docs/phase2-status.md`.
 | 7 | Complete | Bounded generalist architecture sharing runtime, provenance, tools, and report contracts without specialist delegation |
 | 8 | Complete | Immutable resumable matrix runner, paid opt-in, cost pilot gate, failure isolation, and offline rescoring |
 | 9 | Complete | Deterministic denominator-preserving aggregation, uncertainty, paired comparisons, cost/latency, and failure reporting |
-| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R13–R19 must close and R6 must be rerun before a new 60-cell matrix is started |
+| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R13–R19 and the deterministic R6 rerun are complete, but fresh paid live canaries must pass before a new 60-cell matrix is started |
 
 ### Phase 2 implementation order
 
@@ -1728,8 +1730,9 @@ R6 is the final pre-benchmark gate. Its complete preflight must be rerun after
 all later remediation, including R13–R19; an earlier green test run does not
 close R6.
 
-Status: the deterministic preflight was rerun in full at this revision after
-R13–R19. Two paid/manual items remain open, so the gate is not yet closed.
+Status: the deterministic preflight and benchmark-validity review were rerun at
+this revision after R13–R19. The gate remains open only because fresh paid live
+canaries cannot run without `OPENAI_API_KEY` and `OPENAI_DEFAULT_MODEL`.
 
 Scenario-document integrity is now enforced in code rather than only in a test.
 The shared generated document is inherited unchanged by the clean baseline and
@@ -1748,7 +1751,7 @@ document and are correctly unaffected.
 
 Rerun at this revision — passed:
 
-- full deterministic suite: 501 passed, 16 opt-in live tests deselected;
+- full deterministic suite: 508 passed, 16 opt-in live tests deselected;
 - Ruff lint (`All checks passed!`) and format (148 files already formatted);
 - architecture-neutral evaluator fixtures (equivalence and tool-mix);
 - corrupted/mismatched-workspace and source-tamper refusals;
@@ -1767,14 +1770,32 @@ Rerun at this revision — passed:
   18 ledger states), and offline rescore and report still run against retained
   benchmark evidence.
 
+The benchmark-validity review also found and closed residual risks that the
+earlier preflight did not exercise:
+
+- a failed pilot observation can no longer be retried within the same manifest
+  until a favorable result is selected;
+- pilot strata must form an exact, non-overlapping partition of every declared
+  architecture/scenario cell;
+- new manifests bind the exact Git revision and, for a dirty tree, a canonical
+  working-tree digest, and execution refuses a changed repository state;
+- mandatory blocked data audits retain the `data_quality` failure category in
+  both architectures;
+- interruption-like `BaseException` exits mark unreconciled usage incomplete;
+- incomplete usage cannot authorize a pilot report or be treated as known
+  zero cost; and
+- a non-completed pilot stratum stops later paid strata instead of spending
+  further before refusal.
+
 Rerun at this revision — still open:
 
 - both opt-in live architecture canaries in
   `tests/test_strict_output_canary_live.py`. They last passed on 2026-08-19,
   before R14–R19 changed usage accounting, the Generalist attempt lifecycle,
   interruption persistence, and the outcome gate they now assert against. They
-  are paid and must be run deliberately;
-- the benchmark-validity-focused Sol High code review, which is user-triggered.
+  are paid and must be run deliberately. The current environment has neither
+  required provider variable, so the canary command selected three tests and
+  skipped all three without making an API call.
 
 The earlier 369-test preflight remains historical evidence only.
 
@@ -2103,8 +2124,8 @@ Acceptance:
 
 #### R17 — Make the preflight sensitive to benchmark outcomes [P1] — Implemented
 
-Status: implemented, except the final R6 rerun, which cannot be completed until
-R18 and R19 land.
+Status: implemented. The post-R19 deterministic R6 rerun and validity review
+are complete; fresh provider-backed canaries remain an R6 release-gate item.
 
 `benchmark/preflight.py` holds one shared, outcome-sensitive smoke gate:
 completion and error state, a report that is persisted *and* readable on disk,
@@ -2130,9 +2151,9 @@ requires every one to fail, with the single-agent pilots additionally failing
 the usage and attempt-history checks that R14 and R15 fixed. Live specialist
 smoke tests now also assert recorded, complete usage.
 
-Remaining for closure: the full R6 rerun after R18–R19. Ruff, the Docker-backed
-integrations, the adversarial fixtures, and the 60-cell dry-run pass at this
-revision.
+Closure evidence: Ruff, the Docker-backed integrations, the adversarial
+fixtures, and the 60-cell dry-run pass at this revision. The provider-backed
+canaries that consume this gate still require a fresh paid run under R6.
 
 Replace regressions that assert permissive configuration or mere artifact
 presence with assertions on the outcomes Task 10 actually requires. The live

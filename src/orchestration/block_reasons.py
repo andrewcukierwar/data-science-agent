@@ -24,6 +24,10 @@ from orchestration.budgets import BudgetExhaustedError
 from schemas.run_state import RunBlockReason
 
 
+class BlockedAuditError(RuntimeError):
+    """Raised when a mandatory data audit cannot authorize analysis."""
+
+
 @dataclass(frozen=True, slots=True)
 class RunConstraint:
     """One explicit non-completion cause with its observable explanation."""
@@ -47,6 +51,8 @@ def classify_exception(error: BaseException) -> RunBlockReason:
 
     if isinstance(error, BudgetExhaustedError):
         return RunBlockReason.BUDGET_EXHAUSTED
+    if isinstance(error, BlockedAuditError):
+        return RunBlockReason.DATA_QUALITY
     if isinstance(error, AgentOutputContractError):
         return RunBlockReason.SCHEMA_FAILURE
     if isinstance(error, MaxTurnsExceeded):
@@ -109,6 +115,7 @@ def constraint_from_exception(
 
 
 __all__ = [
+    "BlockedAuditError",
     "RunConstraint",
     "classify_exception",
     "constraint_from_exception",

@@ -83,7 +83,7 @@ def _parser() -> argparse.ArgumentParser:
     _common_matrix_arguments(dry_run)
 
     pilot = subparsers.add_parser(
-        "pilot", help="Execute one cell as a cost-estimation pilot."
+        "pilot", help="Execute the declared stratified cost-pilot set."
     )
     pilot.add_argument("manifest", type=Path)
     pilot.add_argument("--workspace-base", type=Path, default=Path("workspaces"))

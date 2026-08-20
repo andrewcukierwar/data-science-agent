@@ -198,6 +198,7 @@ def _multi_agent_run(
     run_id: str,
     *,
     validation_status: ValidationStatus = ValidationStatus.PASS,
+    audit_status: AuditStatus = AuditStatus.COMPLETE,
     lead_follow_up: bool = False,
     lead_error: BaseException | None = None,
     critic_error: BaseException | None = None,
@@ -206,7 +207,7 @@ def _multi_agent_run(
     async def auditor(context, objective, *, agent=None):  # noqa: ANN001
         context.record_sdk_usage(_usage())
         return context.ledger.record_audit(
-            AuditResult(status=AuditStatus.COMPLETE, audited_at=_STAMP)
+            AuditResult(status=audit_status, audited_at=_STAMP)
         )
 
     async def lead(
@@ -380,6 +381,21 @@ def test_single_agent_interruption_is_categorized_as_interrupted(
 
 
 # --- multi-agent block paths ------------------------------------------------
+
+
+def test_multi_agent_blocked_audit_is_categorized_as_data_quality(
+    tmp_path: Path,
+) -> None:
+    result = _multi_agent_run(
+        tmp_path,
+        "run-taxonomy-multi-audit",
+        audit_status=AuditStatus.BLOCKED,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.block_reason is RunBlockReason.DATA_QUALITY
+    assert result.ledger.state.block_reason is RunBlockReason.DATA_QUALITY
+    assert result.block_detail
 
 
 def test_multi_agent_validation_revision_is_not_a_budget_failure(

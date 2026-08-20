@@ -25,7 +25,11 @@ from agents.runtime import (
     AgentRunContext,
     normalize_agent_turn_limits,
 )
-from orchestration.block_reasons import RunConstraint, constraint_from_exception
+from orchestration.block_reasons import (
+    BlockedAuditError,
+    RunConstraint,
+    constraint_from_exception,
+)
 from orchestration.budgets import BudgetExhaustedError, BudgetResource
 from orchestration.ledger import AnalysisLedger
 from orchestration.pricing import resolve_model_pricing
@@ -212,7 +216,7 @@ class AnalysisRunner:
             # persists it; it makes the application lifecycle invariant clear.
             ledger.record_audit(audit)
             if audit.status is AuditStatus.BLOCKED:
-                raise RuntimeError("mandatory data audit was blocked")
+                raise BlockedAuditError("mandatory data audit was blocked")
 
             lead_context, lead_agent = self._agent_context(
                 run_workspace,

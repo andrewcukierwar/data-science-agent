@@ -21,6 +21,7 @@ from benchmark.runner import (
     output_schema_fingerprint,
 )
 from evaluation.contracts import (
+    CodeRevision,
     CostAvailability,
     EvaluationCheck,
     EvaluationCheckStatus,
@@ -70,7 +71,13 @@ def _evaluated(cell):
     )
 
 
-def _completed(cell, *, cost_usd: float | None = 0.001, elapsed: float = 2.0):
+def _completed(
+    cell,
+    *,
+    cost_usd: float | None = 0.001,
+    elapsed: float = 2.0,
+    usage_complete: bool = True,
+):
     """A completed cell whose cost and latency vary by architecture."""
 
     usage = ModelUsage(
@@ -108,7 +115,7 @@ def _completed(cell, *, cost_usd: float | None = 0.001, elapsed: float = 2.0):
         elapsed_seconds=elapsed,
         usage=usage,
         cost_breakdown=breakdown,
-        usage_complete=True,
+        usage_complete=usage_complete,
     )
     return BenchmarkCellResult(
         lifecycle=LifecycleOutcome(status=LifecycleStatus.COMPLETED),
@@ -240,6 +247,67 @@ def test_workload_strata_can_be_declared_explicitly(tmp_path: Path) -> None:
     assert by_id["single:no-effect"].observations[0].scenario_id == SCENARIO_IDS[1]
 
 
+def test_pilot_strata_cannot_overlap_or_omit_declared_workloads(
+    tmp_path: Path,
+) -> None:
+    runner = _runner(tmp_path)
+    manifest = load_manifest(_plan(runner, tmp_path))
+    overlapping = PilotSetDeclaration(
+        strata=(
+            PilotStratumDeclaration(
+                stratum_id="single:all",
+                architecture="single-agent",
+                planned_cells=2,
+            ),
+            PilotStratumDeclaration(
+                stratum_id="single:effect-overlap",
+                architecture="single-agent",
+                scenario_ids=(SCENARIO_IDS[0],),
+                planned_cells=1,
+            ),
+            PilotStratumDeclaration(
+                stratum_id="multi:no-effect-only",
+                architecture="multi-agent",
+                scenario_ids=(SCENARIO_IDS[1],),
+                planned_cells=1,
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="partition every.*exactly once"):
+        manifest.model_copy(update={"pilot_set": overlapping}).model_validate(
+            manifest.model_copy(update={"pilot_set": overlapping}).model_dump(
+                mode="json"
+            )
+        )
+
+
+def test_pilot_stratum_planned_cells_are_derived_from_its_scope(
+    tmp_path: Path,
+) -> None:
+    runner = _runner(tmp_path)
+    manifest = load_manifest(_plan(runner, tmp_path))
+    misstated = PilotSetDeclaration(
+        strata=(
+            PilotStratumDeclaration(
+                stratum_id="single:all",
+                architecture="single-agent",
+                planned_cells=1,
+            ),
+            PilotStratumDeclaration(
+                stratum_id="multi:all",
+                architecture="multi-agent",
+                planned_cells=3,
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="planned_cells must equal"):
+        manifest.model_copy(update={"pilot_set": misstated}).model_validate(
+            manifest.model_copy(update={"pilot_set": misstated}).model_dump(mode="json")
+        )
+
+
 # --- stratified estimate ----------------------------------------------------
 
 
@@ -306,6 +374,17 @@ def test_unknown_cost_in_one_stratum_makes_the_matrix_estimate_unavailable(
     assert report.estimated_full_matrix_cost_usd is None
     assert report.estimated_full_matrix_cost_low_usd is None
     assert report.unknown_cost_record_digests
+
+
+def test_incomplete_usage_cannot_be_used_as_pilot_evidence(tmp_path: Path) -> None:
+    def execute(cell, _workspace):
+        return _completed(cell, cost_usd=None, usage_complete=False)
+
+    runner = _runner(tmp_path, execute)
+    manifest_path = _plan(runner, tmp_path)
+
+    with pytest.raises(BenchmarkError, match="pilot usage is incomplete"):
+        runner.run_pilot(manifest_path, pilot_path=tmp_path / "pilot.json")
 
 
 # --- the full-run gate ------------------------------------------------------
@@ -404,6 +483,40 @@ def test_full_run_gate_refuses_a_failed_pilot_cell(tmp_path: Path) -> None:
     with pytest.raises(BenchmarkError, match="did not complete"):
         runner.run_pilot(manifest_path, pilot_path=tmp_path / "pilot.json")
 
+    # A second invocation must not skip the failed observation and select a
+    # later cell from the same stratum until one happens to succeed.
+    with pytest.raises(BenchmarkError, match="instead of replacing failed"):
+        runner.run_pilot(manifest_path, pilot_path=tmp_path / "pilot-retry.json")
+
+
+def test_partial_pilot_publication_reuses_completed_cells(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    manifest_path = _plan(runner, tmp_path)
+    manifest = load_manifest(manifest_path)
+    first_stratum = manifest.pilot_set.strata[0]
+    first_cell, requires_execution = runner._pilot_cell_for_stratum(  # noqa: SLF001
+        manifest,
+        first_stratum,
+    )
+    assert requires_execution is True
+    first = runner.execute(
+        manifest_path,
+        resume=True,
+        require_pilot=False,
+        max_cells=1,
+        only_run_ids=(first_cell.run_id,),
+    )
+    assert first.executed_run_ids == (first_cell.run_id,)
+
+    summary, report = runner.run_pilot(
+        manifest_path,
+        pilot_path=tmp_path / "pilot-after-partial.json",
+    )
+
+    assert first_cell.run_id in {item.run_id for item in report.observations}
+    assert first_cell.run_id not in summary.executed_run_ids
+    assert len(report.observations) == 2
+
 
 # --- manifest binding -------------------------------------------------------
 
@@ -430,6 +543,25 @@ def test_changing_turn_budgets_changes_the_declaration_digest(
     )
 
     assert canonical_manifest_declaration_digest(rebudgeted) != before
+
+
+def test_manifest_execution_is_bound_to_the_exact_code_revision(
+    tmp_path: Path,
+) -> None:
+    runner = _runner(tmp_path)
+    manifest_path = _plan(runner, tmp_path)
+    manifest = load_manifest(manifest_path)
+
+    assert manifest.code_revision == runner.code_revision
+    assert manifest.code_revision is not None
+    runner.code_revision = CodeRevision(
+        revision=manifest.code_revision.revision,
+        dirty=True,
+        working_tree_digest="0" * 64,
+    )
+
+    with pytest.raises(BenchmarkError, match="repository state differs"):
+        runner.execute(manifest_path, resume=True, require_pilot=False)
 
 
 def test_changing_the_pilot_set_invalidates_the_pilot(tmp_path: Path) -> None:

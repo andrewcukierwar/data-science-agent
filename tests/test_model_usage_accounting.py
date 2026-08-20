@@ -513,6 +513,32 @@ def test_unreconcilable_failure_marks_usage_incomplete(
     _assert_totals_match_attempts(ledger)
 
 
+def test_unreconcilable_interruption_marks_usage_incomplete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A BaseException cannot leave an in-flight provider call looking complete."""
+
+    context = _context(tmp_path, AgentRole.ANALYST, "run-usage-interrupted")
+    monkeypatch.setattr(
+        "agents.model_usage.Runner.run",
+        _fake_runner(
+            [_response_usage()],
+            raises=KeyboardInterrupt(),
+            hooked_responses=1,
+            attach_run_data=False,
+        ),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(run_analyst(context, "Compare the periods."))
+
+    assert context.ledger.usage.requests == 1
+    assert context.ledger.usage_complete is False
+    assert context.ledger.attempt_history[-1].usage_complete is False
+    assert context.ledger.state.usage_incompleteness_note is not None
+
+
 def test_incomplete_usage_cannot_publish_a_known_zero_cost(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

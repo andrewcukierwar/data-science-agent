@@ -10,7 +10,11 @@ from pathlib import Path
 from agents.critic import persist_validation_result
 from agents.generalist import persist_generalist_result, run_generalist
 from agents.runtime import AgentRole
-from orchestration.block_reasons import RunConstraint, constraint_from_exception
+from orchestration.block_reasons import (
+    BlockedAuditError,
+    RunConstraint,
+    constraint_from_exception,
+)
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
 from schemas.audit import AuditResult, AuditStatus
@@ -26,10 +30,6 @@ from schemas.run_state import (
 )
 from schemas.validation import ValidationResult, ValidationStatus
 from tools.workspace import Workspace
-
-
-class BlockedAuditError(RuntimeError):
-    """Raised when the generalist's mandatory data audit is blocked."""
 
 
 @dataclass(slots=True)
@@ -225,17 +225,7 @@ class GeneralistRunner(AnalysisRunner):
             )
         except Exception as error:
             message = f"{type(error).__name__}: {error}"
-            constraint = (
-                RunConstraint(
-                    reason=RunBlockReason.DATA_QUALITY,
-                    detail=(
-                        "The mandatory data audit was blocked by data-quality "
-                        f"conditions: {error}"
-                    ),
-                )
-                if isinstance(error, BlockedAuditError)
-                else constraint_from_exception(error, context="The analysis")
-            )
+            constraint = constraint_from_exception(error, context="The analysis")
             if ledger is not None:
                 if active_agent is not None and not active_agent_recorded:
                     agent_name, agent_objective = active_agent

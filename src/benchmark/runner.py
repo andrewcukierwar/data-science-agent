@@ -432,6 +432,12 @@ def _require_reconciled_observation(
 ) -> None:
     """Refuse a pilot observation that no longer matches its run record."""
 
+    if not record.usage.complete:
+        raise BenchmarkError(
+            f"pilot usage is incomplete for {record.run_id}; the cost gate "
+            "requires reconciled provider usage"
+        )
+
     mismatches = [
         name
         for name, observed, recorded in (
@@ -530,11 +536,26 @@ def _default_run_id(
 
 
 def _capture_code_revision() -> CodeRevision | None:
-    """Capture local code identity without requiring a repository or network."""
+    """Capture the exact local repository state without network access.
+
+    A commit plus a dirty boolean is not an identity: two different uncommitted
+    patches share both values. Hash the binary diff and every untracked,
+    non-ignored file so resuming after any working-tree change is refused.
+    """
 
     try:
+        root_result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if root_result.returncode != 0:
+            return None
+        repository_root = Path(root_result.stdout.strip())
         revision_result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
+            cwd=repository_root,
             capture_output=True,
             text=True,
             check=False,
@@ -545,14 +566,48 @@ def _capture_code_revision() -> CodeRevision | None:
         if not revision:
             return None
         dirty_result = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain=v1", "-z"],
+            cwd=repository_root,
             capture_output=True,
-            text=True,
             check=False,
         )
+        if dirty_result.returncode != 0:
+            return None
+        dirty = bool(dirty_result.stdout)
+        working_tree_digest: str | None = None
+        if dirty:
+            content = sha256()
+            diff_result = subprocess.run(
+                ["git", "diff", "--binary", "HEAD"],
+                cwd=repository_root,
+                capture_output=True,
+                check=False,
+            )
+            if diff_result.returncode != 0:
+                return None
+            content.update(diff_result.stdout)
+            untracked_result = subprocess.run(
+                ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+                cwd=repository_root,
+                capture_output=True,
+                check=False,
+            )
+            if untracked_result.returncode != 0:
+                return None
+            for encoded_path in sorted(
+                path for path in untracked_result.stdout.split(b"\0") if path
+            ):
+                content.update(b"\0path\0")
+                content.update(encoded_path)
+                candidate = repository_root / os.fsdecode(encoded_path)
+                if candidate.is_file():
+                    content.update(b"\0content\0")
+                    content.update(candidate.read_bytes())
+            working_tree_digest = content.hexdigest()
         return CodeRevision(
             revision=revision,
-            dirty=bool(dirty_result.stdout.strip()),
+            dirty=dirty,
+            working_tree_digest=working_tree_digest,
         )
     except OSError:
         return None
@@ -718,6 +773,10 @@ class BenchmarkRunner:
     ) -> BenchmarkManifest:
         """Create a frozen matrix declaration without generating data or agents."""
 
+        if self.code_revision is None:
+            raise BenchmarkError(
+                "benchmark planning requires a resolvable repository revision"
+            )
         if repetitions < 3 and not repetition_justification:
             raise BenchmarkError(
                 "the first declared benchmark requires at least three repetitions; "
@@ -800,6 +859,7 @@ class BenchmarkRunner:
             repetitions=repetitions,
             model=model,
             model_provider=model_provider,
+            code_revision=self.code_revision,
             run_configuration=RunConfiguration(
                 execution_mode=execution_mode,
                 tool_contract_version=TOOL_CONTRACT_VERSION,
@@ -851,6 +911,16 @@ class BenchmarkRunner:
                 "manifest already contains run records; pass resume=True to continue"
             )
         manifest = load_manifest(path)
+        if manifest.code_revision is None:
+            raise BenchmarkError(
+                "benchmark manifest is not bound to a code revision; freeze a "
+                "new manifest before execution"
+            )
+        if self.code_revision != manifest.code_revision:
+            raise BenchmarkError(
+                "repository state differs from the code revision frozen in the "
+                "manifest; freeze a new manifest version before execution"
+            )
         if manifest.status is ManifestStatus.COMPLETE:
             return BenchmarkExecutionSummary(
                 manifest=manifest,
@@ -1033,34 +1103,61 @@ class BenchmarkRunner:
             )
 
         summary: BenchmarkExecutionSummary | None = None
-        executed: list[str] = []
+        selected_run_ids: list[str] = []
+        reused_run_ids: list[str] = []
         for stratum in pilot_set.strata:
             manifest = load_manifest(path)
-            target = self._next_pilot_cell(manifest, stratum)
-            if target is None:
-                raise BenchmarkError(
-                    f"pilot stratum {stratum.stratum_id} has no remaining "
-                    "declared cell to measure"
-                )
-            summary = self.execute(
-                path,
-                resume=True,
-                allow_paid=allow_paid,
-                environment=environment,
-                require_pilot=False,
-                max_cells=1,
-                only_run_ids=(target.run_id,),
+            target, requires_execution = self._pilot_cell_for_stratum(
+                manifest,
+                stratum,
             )
-            if target.run_id not in summary.executed_run_ids:
-                raise BenchmarkError(
-                    f"pilot stratum {stratum.stratum_id} did not execute its "
-                    f"declared cell {target.run_id}"
+            if requires_execution:
+                summary = self.execute(
+                    path,
+                    resume=True,
+                    allow_paid=allow_paid,
+                    environment=environment,
+                    require_pilot=False,
+                    max_cells=1,
+                    only_run_ids=(target.run_id,),
                 )
-            executed.append(target.run_id)
+                if target.run_id not in summary.executed_run_ids:
+                    raise BenchmarkError(
+                        f"pilot stratum {stratum.stratum_id} did not execute its "
+                        f"declared cell {target.run_id}"
+                    )
+                observed = next(
+                    record
+                    for record in summary.manifest.run_records
+                    if record.run_id == target.run_id
+                )
+                if observed.lifecycle.status is not LifecycleStatus.COMPLETED:
+                    raise BenchmarkError(
+                        f"pilot cell {target.run_id} did not complete "
+                        f"({observed.lifecycle.status.value}); no later pilot "
+                        "strata were executed"
+                    )
+            else:
+                reused_run_ids.append(target.run_id)
+            selected_run_ids.append(target.run_id)
 
-        assert summary is not None
         manifest = load_manifest(path)
-        report = self._build_pilot_set_report(manifest, pilot_set, executed)
+        if summary is None:
+            # A prior process may have completed every declared pilot cell and
+            # stopped before atomically publishing the report. Rebuild the
+            # derived report from those exact immutable records without
+            # selecting replacement cells.
+            summary = BenchmarkExecutionSummary(
+                manifest=manifest,
+                executed_run_ids=(),
+                skipped_run_ids=tuple(reused_run_ids),
+                failed_run_ids=(),
+            )
+        report = self._build_pilot_set_report(
+            manifest,
+            pilot_set,
+            selected_run_ids,
+        )
         self._persist_text_exclusive(
             pilot_file,
             dump_stable_json(report.model_dump(mode="json")),
@@ -1080,24 +1177,56 @@ class BenchmarkRunner:
             return False
         return not stratum.scenario_ids or scenario_id in stratum.scenario_ids
 
-    def _next_pilot_cell(
+    def _pilot_cell_for_stratum(
         self,
         manifest: BenchmarkManifest,
         stratum: PilotStratumDeclaration,
-    ) -> BenchmarkCell | None:
-        """Return the first unrecorded declared cell inside a stratum."""
+    ) -> tuple[BenchmarkCell, bool]:
+        """Select one stable pilot cell, refusing success-based replacement.
 
-        recorded = {record.run_id for record in manifest.run_records}
-        for cell in self._cells(manifest):
-            if cell.run_id in recorded:
-                continue
+        A failed or blocked pilot is benchmark evidence, not permission to try
+        the next cell until one succeeds. A cancelled pilot may resume its same
+        immutable cell, and a completed cell may be reused if publication was
+        interrupted after execution.
+        """
+
+        candidates = [
+            cell
+            for cell in self._cells(manifest)
             if self._stratum_matches(
                 stratum,
                 architecture=cell.architecture,
                 scenario_id=cell.scenario.scenario_id,
-            ):
-                return cell
-        return None
+            )
+        ]
+        if not candidates:
+            raise BenchmarkError(
+                f"pilot stratum {stratum.stratum_id} has no declared cell"
+            )
+        records = {record.run_id: record for record in manifest.run_records}
+        observed = [
+            (cell, records[cell.run_id])
+            for cell in candidates
+            if cell.run_id in records
+        ]
+        if len(observed) > 1:
+            raise BenchmarkError(
+                f"pilot stratum {stratum.stratum_id} already contains multiple "
+                "observed cells; freeze a new manifest instead of selecting "
+                "among prior outcomes"
+            )
+        if observed:
+            cell, record = observed[0]
+            if record.lifecycle.status is LifecycleStatus.COMPLETED:
+                return cell, False
+            if record.lifecycle.status is LifecycleStatus.CANCELLED:
+                return cell, True
+            raise BenchmarkError(
+                f"pilot cell {cell.run_id} did not complete "
+                f"({record.lifecycle.status.value}); freeze a new manifest "
+                "instead of replacing failed pilot evidence"
+            )
+        return candidates[0], True
 
     def _build_pilot_set_report(
         self,
@@ -1127,6 +1256,11 @@ class BenchmarkRunner:
                         f"pilot cell {run_id} did not complete "
                         f"({record.lifecycle.status.value}); resolve it before "
                         "publishing a cost pilot"
+                    )
+                if not record.usage.complete:
+                    raise BenchmarkError(
+                        f"pilot usage is incomplete for {run_id}; freeze a new "
+                        "manifest after usage accounting is repaired"
                     )
                 digest = canonical_run_record_digest(record)
                 if record.cost.estimated_cost_usd is None:
@@ -1310,7 +1444,7 @@ class BenchmarkRunner:
             seed=reference.seed,
             source_files=reference.source_files,
             code_revision=(
-                self.code_revision if code_revision is None else code_revision
+                manifest.code_revision if code_revision is None else code_revision
             ),
         )
 
@@ -1637,7 +1771,7 @@ class BenchmarkRunner:
             model_provider=manifest.model_provider,
             run_configuration=manifest.run_configuration,
             budgets=manifest.budgets,
-            code_revision=self.code_revision,
+            code_revision=manifest.code_revision,
             attempt_id=getattr(state, "attempt_id", None),
             seed=cell.scenario.metadata.seed,
             workspace_path=str(cell.workspace_path),

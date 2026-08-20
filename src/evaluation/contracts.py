@@ -365,6 +365,16 @@ class CodeRevision(ContractModel):
 
     revision: NonEmptyString
     dirty: bool = False
+    working_tree_digest: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def clean_revision_has_no_working_tree_digest(self) -> CodeRevision:
+        if not self.dirty and self.working_tree_digest is not None:
+            raise ValueError("a clean code revision cannot have a working-tree digest")
+        return self
 
 
 class SourceFileIdentity(ContractModel):
@@ -955,6 +965,10 @@ class BenchmarkManifest(ContractModel):
     repetitions: int = Field(ge=1)
     model: NonEmptyString
     model_provider: NonEmptyString
+    # New declarations freeze the exact repository state. Retained manifests
+    # without this field remain readable for offline diagnostics and rescore,
+    # but the benchmark runner refuses to execute them.
+    code_revision: CodeRevision | None = None
     unknown_cost_acknowledged: bool = False
     unknown_cost_pilot_id: NonEmptyString | None = None
     unknown_cost_pilot_record_digest: str | None = Field(
@@ -1018,6 +1032,11 @@ class BenchmarkManifest(ContractModel):
                 "declared architecture"
             )
         scenario_ids = {item.scenario_id for item in self.scenario_references}
+        coverage = {
+            (architecture, scenario_id): 0
+            for architecture in self.architectures
+            for scenario_id in scenario_ids
+        }
         for stratum in self.pilot_set.strata:
             unknown = set(stratum.scenario_ids) - scenario_ids
             if unknown:
@@ -1025,6 +1044,25 @@ class BenchmarkManifest(ContractModel):
                     f"pilot stratum {stratum.stratum_id} references scenarios "
                     "outside the declared matrix"
                 )
+            matched = set(stratum.scenario_ids) or scenario_ids
+            expected_stratum_cells = len(matched) * self.repetitions
+            if stratum.planned_cells != expected_stratum_cells:
+                raise ValueError(
+                    f"pilot stratum {stratum.stratum_id} planned_cells must equal "
+                    f"its {expected_stratum_cells} declared matrix cells"
+                )
+            for scenario_id in matched:
+                coverage[(stratum.architecture, scenario_id)] += 1
+        invalid_coverage = [
+            f"{architecture}/{scenario_id}={count}"
+            for (architecture, scenario_id), count in sorted(coverage.items())
+            if count != 1
+        ]
+        if invalid_coverage:
+            raise ValueError(
+                "pilot strata must partition every architecture/scenario cell "
+                "exactly once: " + ", ".join(invalid_coverage)
+            )
         expected_cells = (
             len(self.scenario_references) * len(self.architectures) * self.repetitions
         )
@@ -1085,6 +1123,11 @@ class BenchmarkManifest(ContractModel):
                 or record.model_provider != self.model_provider
             ):
                 raise ValueError("run model identity differs from manifest")
+            if (
+                self.code_revision is not None
+                and record.code_revision != self.code_revision
+            ):
+                raise ValueError("run code revision differs from manifest")
             if record.run_configuration != self.run_configuration:
                 raise ValueError("run configuration differs from manifest")
             if record.budgets != self.budgets:

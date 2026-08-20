@@ -3,11 +3,11 @@
 **Status date:** 2026-08-19
 **Implementation:** Tasks 1–9, R1–R12, and R13–R19 complete
 
-**Remediation:** R13–R19 are all implemented, and the reopened R6 deterministic
-preflight was rerun in full at this revision. Two items keep the gate open: the
-two opt-in live architecture canaries, which are paid and last passed before
-R14–R19 changed lifecycle accounting, and the benchmark-validity Sol High code
-review, which is user-triggered. Neither can be run unattended.
+**Remediation:** R13–R19 are all implemented. The reopened R6 deterministic
+preflight and benchmark-validity review were rerun at this revision. Only the
+two opt-in live architecture canaries keep the gate open: they are paid, last
+passed before R14–R19 changed lifecycle accounting, and cannot run because this
+environment lacks the required provider key and model selection.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -83,7 +83,7 @@ historical verification, but they reopen the final R6 gate.
 | R3 | Verified | Identity mismatch and source-tamper regressions |
 | R4 | Verified | Evaluator-error denominator and taxonomy regressions |
 | R5 | Verified | Explicit model, pricing gate, cumulative resume, and pilot semantics |
-| R6 | Deterministic preflight rerun; gate open | Document integrity is now a code invariant with catalog-driven regressions; 501 tests, Ruff, all adversarial suites, Docker integrations, and 60 dry-run cells passed at this revision. Outstanding: both paid live canaries and the Sol High benchmark-validity review |
+| R6 | Deterministic preflight and validity review complete; live gate open | Document integrity is a code invariant; 508 tests, Ruff, all adversarial suites, Docker integrations, 60 dry-run cells, retained-artifact checks, and the benchmark-validity review passed. Outstanding: one fresh paid live canary per architecture |
 | R7 | Verified | Capability/tool-mix and architecture-equivalence regressions |
 | R8 | Verified | Identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
 | R9 | Verified | Multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
@@ -91,13 +91,12 @@ historical verification, but they reopen the final R6 gate.
 | R11 | Verified | Append-only attempt, event-attribution, reconciliation, and interrupted-resume regressions |
 | R12 | Verified | Same-path/alias, existing-output, evaluator-failure, and exclusive-publication regressions |
 
-## Phase 2 Post-Pilot Remediation: R13–R19 (all closed; R6 rerun outstanding)
+## Phase 2 Post-Pilot Remediation: R13–R19 (all closed)
 
 The 2026-08-19 deep review traced the paid-pilot failures through the retained
 workspaces and identified seven additional tasks. All seven are now closed.
-The reopened R6 preflight must be rerun at this revision before a new Task 10
-manifest is frozen. `PROJECT_PLAN.md` contains their complete acceptance
-criteria.
+The reopened R6 deterministic preflight and validity review have been rerun at
+this revision. `PROJECT_PLAN.md` contains the complete acceptance criteria.
 
 | Remediation | Priority | Status | Required closure |
 | --- | --- | --- | --- |
@@ -110,10 +109,10 @@ criteria.
 | R19 — Calibrate the paid pilot across architectures and workload classes | P2 | Complete | The manifest freezes a pilot set with at least one stratum per architecture; `run_pilot` measures every stratum and retains per-pilot observations; the estimate is a stratified sum with an explicit range and a named scaling method; the gate verifies every stratum and refuses missing, failed, mismatched, or unreconciled evidence; manifest-declaration and output-schema digests force a new manifest version on any model, budget, matrix, pilot-set, or schema change |
 
 The deterministic half of that preflight—Ruff, the full suite, the adversarial
-suites, Docker integrations, and the 60-cell dry-run—was rerun successfully at
-this revision. Task 10 remains blocked on the two remaining R6 items: both
-opt-in live architecture canaries and the benchmark-validity Sol High code
-review.
+suites, Docker integrations, retained-artifact rescoring, and the 60-cell
+dry-run—was rerun successfully at this revision. The benchmark-validity review
+is also complete. Task 10 remains blocked only on fresh opt-in live canaries for
+both architectures.
 
 ## What is implemented
 
@@ -401,10 +400,10 @@ requires every one to fail. The failures reproduce the documented modes exactly
 pilots additionally fail `usage:accounted` and `attempts:recorded`, the losses
 R14 and R15 fixed.
 
-R17's remaining acceptance item is the full R6 rerun. At this revision Ruff,
+R17's deterministic acceptance evidence is complete. At this revision Ruff,
 the Docker-backed integration tests, the adversarial fixtures, and the 60-cell
 dry-run all pass; the two opt-in live canaries have not been rerun since R14–R19
-changed lifecycle accounting.
+changed lifecycle accounting and remain the final R6 release-gate evidence.
 
 ### 12. Explicit block reasons and accurate failure taxonomy (R18)
 
@@ -475,10 +474,10 @@ pilot. Unknown-cost acknowledgement binds every affected pilot record digest.
 
 ## Verification completed
 
-### Reopened R6 preflight, deterministic half, rerun at this revision
+### Reopened R6 preflight and validity review, rerun at this revision
 
 ```text
-501 passed, 16 deselected
+508 passed, 16 deselected
 ```
 
 The deselected tests are opt-in live tests. Ruff lint reported `All checks
@@ -497,9 +496,17 @@ them 30 per architecture. Every retained `.runs/` artifact still loads at this
 revision — 10 benchmark manifests and 18 ledger states — and offline rescore
 and report still run against retained benchmark evidence.
 
-Two R6 items remain open because neither can be run unattended: the two paid
-opt-in live architecture canaries, and the benchmark-validity Sol High code
-review, which is user-triggered.
+The benchmark-validity review found and closed seven residual paths: pilot
+retry after failure, overlapping or incomplete pilot partitions, manifests not
+bound to the exact working tree, incorrect multi-agent blocked-audit taxonomy,
+interrupt exits that could leave usage marked complete, incomplete usage being
+accepted as pilot evidence, and continued pilot spending after a failed
+stratum. Seven new regressions cover these cases.
+
+One R6 item remains open: the paid opt-in live canaries, one per architecture.
+The command selected three live tests at this revision, including its coverage
+assertion, but all three skipped because `OPENAI_API_KEY` and
+`OPENAI_DEFAULT_MODEL` are absent. No API call or paid run occurred.
 
 ### Scenario-document integrity is now a code invariant (R6)
 
@@ -597,7 +604,7 @@ The publishable observations are limited to the following:
 | Task success | 0 completed/evaluable pilot records | Not estimable; no success rate claimed |
 | Numerical accuracy | 0 analytical scores | Not estimable |
 | Unsupported claims | 0 evaluated reports | Not estimable |
-| Operational reliability | 3 persisted pilot records failed; v2 workspace retained an interrupted attempt that its manifest omitted | Calibration evidence only; R16 must restore the missing operational record |
+| Operational reliability | 3 persisted pilot records failed; v2 workspace retained an interrupted attempt that its manifest omitted | Historical calibration evidence only; R16 now restores this class of missing operational record |
 | Cost | v1 persisted `$0.00372068` but omitted the failed Lead response; v2 workspace retained `$0.0360329`; single-agent failed-call usage was lost | Accounting is incomplete; no valid pilot or full-run cost estimate |
 | Latency | 120.38 s (v1), 71.98 s (v3), 61.79 s (gpt55) | Failed-pilot elapsed times only |
 | Architecture comparison | No matched completed pair | Not estimable |
@@ -605,9 +612,10 @@ The publishable observations are limited to the following:
 The repeated invalid-JSON outcome across models and architectures points to the
 permissive output-schema integration, not simple API availability or one model
 identity. No evaluator rule or score was changed to make an attempt pass, and
-no result was selected because it favored either architecture. R13–R19 must be
-implemented and the reopened R6 gate must pass before a new manifest and pilot
-set are frozen under the same offline-evaluation rules.
+no result was selected because it favored either architecture. R13–R19, the
+deterministic R6 rerun, and the validity review are now complete; fresh live
+canaries must pass before a new manifest and pilot set are frozen under the same
+offline-evaluation rules.
 
 ## Diagnosed local execution issues
 
@@ -678,10 +686,11 @@ Before another paid attempt:
    `tests/test_failure_taxonomy.py`, and
    `tests/test_pilot_set_calibration.py`. No evaluator rule was altered to
    mask the retained failures.
-2. The deterministic half of the reopened R6 preflight has been rerun at this
-   revision — strict-schema checks, failure-path accounting, lifecycle and
-   taxonomy fixtures, scenario-document integrity, Docker integrations, Ruff,
-   and all 60 dry-run cells.
+2. The deterministic half of the reopened R6 preflight and the
+   benchmark-validity review have been rerun at this revision — strict-schema
+   checks, failure-path accounting, lifecycle and taxonomy fixtures,
+   scenario-document integrity, Docker integrations, Ruff, retained-artifact
+   rescoring, all 60 dry-run cells, and seven new validity regressions.
 3. Rerun the two bounded live strict-output canaries in
    `tests/test_strict_output_canary_live.py` (one per architecture), which
    require completion, report persistence, usage accounting, and attempt
@@ -689,25 +698,22 @@ Before another paid attempt:
    R14–R19 changed usage accounting, the Generalist attempt lifecycle, and
    interruption persistence, so that result no longer covers this revision.
    These are paid runs.
-4. Run the benchmark-validity-focused Sol High code review. It is
-   user-triggered and cannot be launched from a session. Steps 3 and 4 are the
-   only remaining R6 items.
-5. Recheck variable presence without printing the key and confirm Docker access.
-6. Select the compatible model and freeze a new manifest before any paid execution.
-7. Review the declared ten-scenario × two-architecture × three-repetition matrix,
+4. Recheck variable presence without printing the key and confirm Docker access.
+5. Select the compatible model and freeze a new manifest before any paid execution.
+6. Review the declared ten-scenario × two-architecture × three-repetition matrix,
    budgets, evaluator versions, code revision, and output paths.
-8. Run and retain the R19 pilot set, including at least one cell per architecture.
-9. Decide whether the declared repetition count remains affordable. If it must
+7. Run and retain the R19 pilot set, including at least one cell per architecture.
+8. Decide whether the declared repetition count remains affordable. If it must
    change, create a new manifest/version and record the justification before the
    full run.
-10. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
+9. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
     overwrite workspaces.
-11. Evaluate every persisted workspace offline using the frozen evaluator rules.
-12. Inspect failures without changing rules mid-experiment. If code or evaluator
+10. Evaluate every persisted workspace offline using the frozen evaluator rules.
+11. Inspect failures without changing rules mid-experiment. If code or evaluator
     changes are required, version the benchmark and rerun the affected declared
     matrix rather than silently patching scores.
-13. Generate and retain raw manifests, run records, evaluator results, pilot
+12. Generate and retain raw manifests, run records, evaluator results, pilot
     report, and aggregate report.
-14. Publish real results and limitations, including denominators, failed runs,
+13. Publish real results and limitations, including denominators, failed runs,
     sample size, model specificity, evaluator limitations, uncertainty, cost,
     and latency—regardless of which architecture performs better.

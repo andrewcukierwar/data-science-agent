@@ -139,7 +139,7 @@ async def run_agent_with_usage(
                 max_turns=max_turns,
                 hooks=hooks or ModelUsageHooks(),
             )
-        except Exception as error:
+        except BaseException as error:
             recorder.reconcile(
                 _cumulative_usage(error),
                 source=f"{getattr(agent, 'name', 'agent')} run",

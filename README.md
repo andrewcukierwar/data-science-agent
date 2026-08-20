@@ -11,10 +11,9 @@ architecture canaries), R14 (failure-safe usage and cost accounting), R15
 (single-agent attempt lifecycle), R16 (retained and resumable interrupted
 cells), R17 (outcome-sensitive preflight gate), R18 (explicit block reasons and
 accurate failure taxonomy), and R19 (stratified pilot-set calibration) are all
-complete; only the reopened R6 preflight rerun remains
-open. The paid matrix remains blocked, the
-final R6 gate is open again,
-and no complete benchmark result is claimed. See
+complete. The deterministic R6 rerun and benchmark-validity review are also
+complete; only fresh paid live canaries remain open. The paid matrix remains
+blocked, the final R6 gate is open, and no complete benchmark result is claimed. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, retained run artifacts, and the blocked live-run report.
 
@@ -40,7 +39,7 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **501 passed and 16 live tests
+deterministic verification completed with **508 passed and 16 live tests
 deselected**; Ruff lint and formatting checks passed, and the 10 × 2 × 3 matrix
 dry-run produced 60 unique cells.
 
@@ -59,8 +58,7 @@ failure-safe usage and cost accounting (R14, complete), complete single-agent
 attempt lifecycle (R15, complete), interrupted-cell retention and resume (R16,
 complete), outcome-sensitive preflight tests (R17, complete), accurate
 blocked-run taxonomy (R18, complete), and representative pilot calibration
-(R19, complete) across
-architectures/workload classes (R19).
+across architectures/workload classes (R19, complete).
 
 R13 replaces every open-ended dimension map with a typed `MetricDimension`
 list, so all six production agent output types compile through the Agents SDK
@@ -97,8 +95,8 @@ completion, a readable persisted report, usage that is nonzero or explicitly
 unavailable, explicit cost, and a reconciled attempt history with no attempt
 left running. The live smoke tests, both live canaries, and deterministic
 failure fixtures all use the same gate, and it rejects all four retained Task 10
-pilot workspaces. Its remaining acceptance item is the full R6 rerun, which
-waits on R19.
+pilot workspaces. The deterministic post-R19 R6 rerun now passes; the shared
+gate still awaits fresh provider-backed canary evidence.
 
 R18 persists a typed block reason and a readable detail for every
 non-completion, so the benchmark reads the originating condition instead of
@@ -121,11 +119,13 @@ mix, failed-evidence, workspace identity, evaluator-error, lifecycle,
 aggregation-safe rescore, pilot/run-record binding, append-only attempt
 reconciliation, scenario-document integrity, and exclusive atomic offline-output
 fixtures. The catalog evaluator version is now `1.1` for these scoring changes.
-The reopened R6 preflight has been rerun at this revision: the full suite, Ruff,
-every declared adversarial suite, the Docker-backed integration tests, and all
-60 declared dry-run cells pass. Two R6 items remain open before another Task 10
-manifest is frozen — the two paid opt-in live architecture canaries and the
-benchmark-validity Sol High code review — because neither runs unattended.
+The reopened R6 preflight has been rerun at this revision: the 508-test
+deterministic suite, Ruff, every declared adversarial suite, the Docker-backed
+integration tests, all 60 declared dry-run cells, and a benchmark-validity code
+review pass. That review closed pilot selection, pilot-partition, repository
+identity, failure-taxonomy, and incomplete-accounting gaps. Only the two paid
+opt-in live architecture canaries remain before another Task 10 manifest is
+frozen; this environment does not provide their required API key and model.
 
 Task 10 execution is currently blocked before the paid matrix. Four immutable
 attempts were retained under `.runs/phase2-task10-20260819/`: three attempts
@@ -140,7 +140,7 @@ pilot reports, workspaces, offline-rescored manifests, and aggregate reports
 are retained.
 Because no pilot completed, the full 60-cell matrix was not started. Existing
 canonical MVP workspaces predate the declared Phase 2 matrix and are not
-substitutes for its results. The reopened R6 gate must pass, and then a new
+substitutes for its results. Fresh R6 live canaries must pass, and then a new
 manifest version and pilot set must be frozen.
 
 ### Task 10 execution record (blocked)
