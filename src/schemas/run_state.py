@@ -13,6 +13,7 @@ from schemas.hypotheses import (  # noqa: F401
     Hypothesis,
     HypothesisStatus,
     NonEmptyString,
+    hypothesis_requires_evidence,
 )
 from schemas.metrics import MetricComparison
 from schemas.statistics import StatisticalAssessment

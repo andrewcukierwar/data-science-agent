@@ -47,6 +47,7 @@ from schemas.run_state import (
     ArtifactKind,
     RunStatus,
     ToolEventStatus,
+    hypothesis_requires_evidence,
 )
 from schemas.statistics import StatisticalAssessment, StatisticalExpectation
 from schemas.validation import ValidationStatus
@@ -970,8 +971,11 @@ def evaluate_provenance(
                 f"finding {finding.id} cites executed evidence",
             )
         )
+    # One shared rule with the state tool and final Lead validation: an open
+    # hypothesis may carry no evidence; a resolved one must cite executed
+    # evidence.
     for hypothesis in state.hypotheses:
-        if hypothesis.status.value != "open":
+        if hypothesis_requires_evidence(hypothesis.status):
             checks.append(
                 _check(
                     f"{check_prefix}:hypothesis:{hypothesis.id}",
@@ -982,6 +986,27 @@ def evaluate_provenance(
                     f"resolved hypothesis {hypothesis.id} cites executed evidence",
                 )
             )
+    # The append-only history records the transitions themselves. A resolution
+    # that was later revised still had to be supported when it was made, so an
+    # unsupported version cannot be hidden by overwriting the current one.
+    unsupported_history = tuple(
+        dict.fromkeys(
+            f"{index}:{version.id}"
+            for index, version in enumerate(state.hypothesis_history)
+            if hypothesis_requires_evidence(version.status)
+            and not any(reference in refs for reference in version.evidence_refs)
+        )
+    )
+    checks.append(
+        _check(
+            f"{check_prefix}:hypothesis_history",
+            not unsupported_history,
+            "every resolved hypothesis transition cites executed evidence"
+            if not unsupported_history
+            else "resolved hypothesis transitions cite no executed evidence: "
+            + ", ".join(unsupported_history),
+        )
+    )
     for comparison in state.metric_comparisons:
         checks.append(
             _check(

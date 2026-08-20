@@ -66,6 +66,7 @@ from schemas.run_state import (
     SpecialistResultRecord,
     ToolEvent,
     ToolEventStatus,
+    hypothesis_requires_evidence,
 )
 from schemas.statistics import (
     CausalInterpretation,
@@ -114,6 +115,7 @@ __all__ = [
     "GeneralistResult",
     "Hypothesis",
     "HypothesisStatus",
+    "hypothesis_requires_evidence",
     "IssueSeverity",
     "MissingnessObservation",
     "LeadRecommendation",

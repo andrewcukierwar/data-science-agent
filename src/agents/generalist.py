@@ -77,6 +77,15 @@ Required behavior:
 5. Distinguish observed association from causal proof. State plausible
    non-drivers, unsupported-claim limits, assumptions, confidence intervals or
    effect sizes, and practical significance when the question is experimental.
+   Leave a hypothesis open while you are still testing it; an open hypothesis
+   needs no evidence_refs and you must never invent one. Set status to
+   supported, rejected, or inconclusive only together with exact evidence_refs
+   naming the executed evidence that decided it — a successful tool-event ID, a
+   saved query/script path, or a verified artifact. This applies to every
+   resolved hypothesis, including qualitative and data-quality ones resolved
+   from your own audit: cite the executed check behind the audit claim, not the
+   audit. record_hypothesis refuses a resolution whose references do not
+   resolve and returns the references that are available.
 6. Before finalizing, perform a self-critique against the evidence, metric
    definitions, task completeness, provenance, and unsupported claims. Return
    REVISE when a material issue remains and explain it in the typed validation.

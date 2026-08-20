@@ -1,7 +1,7 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-20
-**Implementation:** Tasks 1–9, R1–R19, R20, and R21 complete; R22–R25 open
+**Implementation:** Tasks 1–9, R1–R19, R20, R21, and R22 complete; R23–R25 open
 
 **Remediation:** R13–R19 are all implemented. The reopened R6 deterministic
 preflight and benchmark-validity review were rerun at this revision. Fresh paid
@@ -11,8 +11,9 @@ defects. R20 and R21 are now implemented: audit contract 2.0 carries typed
 evidence-bearing claims, one persistence boundary refuses unsupported completed
 audits, the Lead receives a bounded typed audit evidence catalog, and offline
 scoring enforces the same provenance boundary at catalog evaluator version 1.2.
-R22–R25 remain open and R6 remains open until they close and its complete
-preflight is rerun.
+R22 adds one shared hypothesis-evidence rule, enforced when the transition is
+requested rather than after the final model response. R23–R25 remain open and
+R6 remains open until they close and its complete preflight is rerun.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -119,7 +120,7 @@ dry-run—was rerun successfully at this revision. The benchmark-validity review
 is also complete. The failed multi-agent canary subsequently opened R20–R25, so
 Task 10 is blocked until those tasks and a fresh complete R6 preflight close.
 
-## Phase 2 Live-Canary Provenance Remediation: R20–R21 closed, R22–R25 open
+## Phase 2 Live-Canary Provenance Remediation: R20–R22 closed, R23–R25 open
 
 The 2026-08-20 provider-backed R6 run passed the single-agent canary but failed
 the multi-agent canary after valid strict output. The Data Auditor's successful
@@ -133,7 +134,7 @@ acceptance criteria.
 | --- | --- | --- | --- |
 | R20 — Preserve typed audit provenance across architecture boundaries | P0 | Complete | Audit contract 2.0 gives table profiles, warnings, issues, and limitations typed `evidence_refs`; `persist_audit_result` canonicalizes them and refuses a non-blocked audit with missing, failed, ambiguous, or fabricated provenance; the Lead receives a bounded typed `AuditEvidenceCatalog` instead of raw audit JSON; persisted state is versioned `1.1` and the output-schema fingerprint forces a new manifest |
 | R21 — Enforce audit provenance in capability and offline scoring | P0 | Complete | `resolve_audit_claims` applies the executed-evidence boundary offline; the data-audit capability needs supported material claims, not a completed status; every required issue ID needs its own `required_provenance` check; a clean audit must show an executed check; catalog evaluator version advanced to `1.2` |
-| R22 — Align hypothesis evidence contracts and validate state transitions | P1 | Open | Exact evidence required for every resolved hypothesis; invalid transitions refused before ledger/history mutation; resume-safe regressions |
+| R22 — Align hypothesis evidence contracts and validate state transitions | P1 | Complete | `hypothesis_requires_evidence` is the one shared predicate for the contract, state tool, final Lead validation, and offline evaluation; `record_hypothesis` refuses an unsupported resolution before touching the ledger and returns an actionable typed error; open hypotheses stay usable; the append-only history is checked offline |
 | R23 — Add bounded correction for semantic provenance failures | P1 | Open | At most one explicit Lead correction using existing canonical evidence; no silent rewrite or specialist/tool rerun; usage and outcomes retained |
 | R24 — Make citation resolution lossless and consistent | P1 | Open | Unresolved citations remain visible; every material citation resolves; runtime, Critic, evaluator, and rescore agree on mixed/aliased references |
 | R25 — Classify provenance failures and close the live regression gap | P2 | Open | Named provenance taxonomy; production-shaped deterministic audit-to-Lead fixture; complete post-R25 R6 rerun and both live canaries pass |
@@ -602,6 +603,56 @@ fixtures derive their evaluator version from the catalog so a future advance
 needs one edit, not seven. `tests/test_audit_provenance_scoring.py` holds the
 30 regressions.
 
+### 16. One hypothesis-evidence rule, checked at the transition (R22)
+
+Five places wrote or read hypothesis evidence and none of them stated the same
+rule. The instructions said only to resolve a hypothesis "when the returned
+evidence supports that disposition"; the `Hypothesis` contract said nothing at
+all; `record_hypothesis` accepted any transition; final Lead validation
+rejected unsupported resolutions, but only after the whole run had finished;
+and offline evaluation applied its own inline status comparison. An invalid
+resolution was therefore persisted into the ledger and its append-only history,
+the model never learned it was invalid, and a resumed run could inherit it.
+
+`schemas.hypotheses.hypothesis_requires_evidence` is now the single predicate
+all four code paths call, so they cannot drift on which transitions need
+provenance. The rule is one sentence: an open hypothesis may carry no evidence;
+every supported, rejected, or inconclusive hypothesis must cite canonical
+executed evidence.
+
+The contract states it where the model can see it. Pydantic validators never
+appear in a JSON schema, so the rule lives in the `status` and `evidence_refs`
+field descriptions, which the strict output schema carries to the provider. The
+Lead and Generalist instructions state it explicitly, including for qualitative
+and data-quality hypotheses resolved from the audit — those cite the audit
+claim's catalog references, never the audit itself.
+
+`record_hypothesis` validates before the ledger is touched. A refused
+resolution leaves the current hypothesis, the append-only history, the
+`rejected_hypotheses` index, and the persisted file byte-identical, so a
+resumed run reads the pre-transition state. The refusal is a typed
+`invalid_hypothesis_transition` tool error carrying the hypothesis ID, the
+requested status, which references failed to resolve, which resolved, a bounded
+list of references that are actually available, and a remedy telling the model
+to keep the hypothesis open rather than invent one. An accepted resolution is
+persisted with its canonical references, so the intermediate state, the final
+Lead result, and offline scoring read the same thing.
+
+Open hypotheses stay usable and are left untouched: their references are not
+canonicalized, because quietly dropping a reference the model still intends to
+use would be the same silent rewrite this contract exists to prevent.
+
+Offline evaluation now also checks the append-only history, not just the
+current hypothesis list. Revising a claim must not erase that it was once
+asserted without support, and the check catches unsupported transitions in
+workspaces the current runtime never produced.
+
+Because the `Hypothesis` field descriptions are part of the strict output
+schema, `output_schema_fingerprint()` moved again — from
+`de94152e…` to `4870a7fc…` — which correctly forces a new benchmark manifest
+before paid execution. `tests/test_hypothesis_transitions.py` holds the 51
+regressions.
+
 ## Verification completed
 
 ### Reopened R6 preflight and validity review, rerun at this revision
@@ -708,6 +759,35 @@ rather than working around:
   compatibility preserves its statements without inventing provenance for them.
 
 This is deterministic verification of R21 only. The complete R6 preflight and
+both live canaries remain R25's work.
+
+### Deterministic verification at the R22 revision
+
+```text
+616 passed, 16 deselected
+```
+
+Ruff lint reported `All checks passed!` and format reported 154 files already
+formatted. `tests/test_hypothesis_transitions.py` adds 51 regressions: the
+shared predicate for all four statuses; the rule's presence in the model-visible
+schema and in both agents' instructions; open hypotheses recorded without
+evidence and with their references left untouched; every resolved status
+(supported, rejected, inconclusive) crossed with direct event, direct path,
+canonical alias, and local alias references; the same three statuses crossed
+with empty, fabricated, failed-event, failed-path, missing-file, and
+unknown-alias references; ambiguous aliases; the refusal leaving state, history,
+the rejected index, and the persisted file unchanged; resume reading the
+pre-transition state from disk; the actionable refusal payload and its bounded
+suggestion list; a qualitative audit hypothesis resolved from the evidence
+catalog; final Lead validation; and offline evaluation of both current
+hypotheses and the append-only history.
+
+Retained artifacts are unaffected — 10 manifests, 4 reports, and 18 ledger
+states still load, and the retained Phase-1 canonical workspace still reports
+the same 7 failures it had after R21, because its hypotheses and history all
+resolve.
+
+This is deterministic verification of R22 only. The complete R6 preflight and
 both live canaries remain R25's work.
 
 ### Scenario-document integrity is now a code invariant (R6)
@@ -896,16 +976,19 @@ Before another paid attempt:
    checks, failure-path accounting, lifecycle and taxonomy fixtures,
    scenario-document integrity, Docker integrations, Ruff, retained-artifact
    rescoring, all 60 dry-run cells, and seven new validity regressions.
-3. R20 and R21 are implemented — audit contract 2.0, one validating
+3. R20, R21, and R22 are implemented — audit contract 2.0, one validating
    persistence boundary, the Lead's bounded `AuditEvidenceCatalog`,
    persisted-state version `1.1`, offline enforcement of the same provenance
-   boundary, and catalog evaluator version `1.2` — with their regressions in
-   `tests/test_audit_provenance.py` and
-   `tests/test_audit_provenance_scoring.py` and their rationale in decision
-   record 0009. Implement R22–R25 in order, preserving R2/R7 and continuing to
-   version failure taxonomy and output fingerprints deliberately. The
-   audit-contract and evaluator-version changes already invalidate any existing
-   pilot estimate, so a new manifest version is required regardless.
+   boundary at catalog evaluator version `1.2`, and one shared
+   hypothesis-evidence rule enforced at the transition — with their regressions
+   in `tests/test_audit_provenance.py`,
+   `tests/test_audit_provenance_scoring.py`, and
+   `tests/test_hypothesis_transitions.py`, and their rationale in decision
+   records 0009 and 0010. Implement R23–R25 in order, preserving R2/R7 and
+   continuing to version failure taxonomy and output fingerprints deliberately.
+   The audit-contract, hypothesis-contract, and evaluator-version changes
+   already invalidate any existing pilot estimate, so a new manifest version is
+   required regardless.
 4. Rerun the complete R6 preflight from the new revision: full deterministic
    suite, Ruff, Docker integrations, architecture-equivalence and adversarial
    provenance fixtures, retained-artifact checks, 60-cell dry-run, and both

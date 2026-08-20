@@ -18,6 +18,11 @@ from agents.audit_evidence import (
     persist_audit_result,
 )
 from agents.evidence import executed_references, has_source_lineage
+from agents.hypothesis_state import (
+    HypothesisEvidenceError,
+    hypothesis_has_executed_evidence,
+    validate_hypothesis_transition,
+)
 from agents.model_usage import ModelUsageHooks, run_agent_with_usage
 from agents.output_contract import (
     STRUCTURED_DIMENSION_GUIDANCE,
@@ -81,8 +86,17 @@ Required investigation behavior:
 1. Inspect the workspace and read relevant business definitions before committing to
    a metric or explanation.
 2. Use update_investigation_plan and record_hypothesis to persist an explicit plan
-   and hypothesis tree. Update hypothesis status to supported, rejected, or
-   inconclusive only when the returned evidence supports that disposition.
+   and hypothesis tree. Leave a hypothesis open while you are still testing it;
+   an open hypothesis needs no evidence_refs and you must never invent one to
+   satisfy the field. Set status to supported, rejected, or inconclusive only
+   together with exact evidence_refs naming the executed evidence that decided
+   it — a successful tool-event ID, a saved query/script path, or a verified
+   artifact. This applies to every resolved hypothesis, including qualitative
+   and data-quality ones resolved from the data audit: cite the audit claim's
+   evidence_refs from DATA_AUDIT_EVIDENCE_CATALOG_JSON, never the audit itself.
+   record_hypothesis refuses a resolution whose references do not resolve and
+   returns the references that are available; keep the hypothesis open or cite
+   one of those instead of retrying the same claim.
 3. The application has already completed and persisted the mandatory Data Audit
    before you start. Use the supplied audit as the data-quality and relationship
    baseline; do not delegate another broad audit. The audit itself is internal
@@ -181,14 +195,33 @@ def record_hypothesis(
     ctx: RunContextWrapper[AgentRunContext],
     hypothesis: Hypothesis,
 ) -> ToolOutputText:
-    """Create or update one explicit hypothesis in the run ledger."""
+    """Create or update one explicit hypothesis in the run ledger.
+
+    A hypothesis may stay open with no evidence. Resolving one to supported,
+    rejected, or inconclusive requires exact executed evidence references, and
+    an unsupported resolution is refused here rather than persisted and failed
+    at the end of the run.
+    """
 
     tool_name = "record_hypothesis"
     try:
         context = _context(ctx)
         context.require_permission(tool_name)
-        saved = context.ledger.upsert_hypothesis(hypothesis)
+        # Validate before the ledger is touched, so a refused transition leaves
+        # the current hypothesis and the append-only history unchanged and a
+        # resumed run cannot inherit it.
+        validated = validate_hypothesis_transition(hypothesis, context.ledger)
+        saved = context.ledger.upsert_hypothesis(validated)
         return _sdk_response(ToolResponse.ok(tool_name, saved.model_dump(mode="json")))
+    except HypothesisEvidenceError as error:
+        return _sdk_response(
+            ToolResponse.failed(
+                tool_name,
+                "invalid_hypothesis_transition",
+                str(error),
+                data=error.as_tool_data(),
+            )
+        )
     except (PermissionDeniedError, ValueError, OSError, KeyError) as error:
         return _sdk_response(ToolResponse.failed(tool_name, "state_error", str(error)))
 
@@ -755,13 +788,12 @@ def validate_lead_result(
             reference in executed_refs for reference in recommendation.evidence_refs
         )
     ]
+    # The same predicate the state tool and offline evaluation use, so the
+    # three boundaries cannot drift on which transitions need provenance.
     invalid_hypotheses = [
         hypothesis.id
         for hypothesis in result.hypotheses
-        if hypothesis.status.value != "open"
-        and not any(
-            reference in executed_refs for reference in hypothesis.evidence_refs
-        )
+        if not hypothesis_has_executed_evidence(hypothesis, ledger)
     ]
     invalid_metric_comparisons = [
         comparison.metric_key

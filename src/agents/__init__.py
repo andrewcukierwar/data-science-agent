@@ -85,6 +85,12 @@ from agents.generalist import (  # noqa: E402
     persist_generalist_result,
     run_generalist,
 )
+from agents.hypothesis_state import (  # noqa: E402
+    HypothesisEvidenceError,
+    canonical_hypothesis_evidence,
+    hypothesis_has_executed_evidence,
+    validate_hypothesis_transition,
+)
 from agents.lead import (  # noqa: E402
     LEAD_INSTRUCTIONS,
     LEAD_OBJECTIVE,
@@ -139,6 +145,10 @@ from agents.tools import (  # noqa: E402
 
 __all__ = [
     "AUDIT_EVIDENCE_CATALOG_VERSION",
+    "HypothesisEvidenceError",
+    "canonical_hypothesis_evidence",
+    "hypothesis_has_executed_evidence",
+    "validate_hypothesis_transition",
     "AuditClaim",
     "AuditClaimKind",
     "AuditEvidenceCatalog",
