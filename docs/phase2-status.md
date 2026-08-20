@@ -1,7 +1,7 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-20
-**Implementation:** Tasks 1–9, R1–R19, and R20–R23 complete; R24–R25 open
+**Implementation:** Tasks 1–9, R1–R19, and R20–R24 complete; R25 open
 
 **Remediation:** R13–R19 are all implemented. The reopened R6 deterministic
 preflight and benchmark-validity review were rerun at this revision. Fresh paid
@@ -14,8 +14,9 @@ scoring enforces the same provenance boundary at catalog evaluator version 1.2.
 R22 adds one shared hypothesis-evidence rule, enforced when the transition is
 requested rather than after the final model response, and R23 adds one bounded,
 tool-less correction attempt for a strict-schema-valid response whose citations
-do not resolve. R24–R25 remain open and R6 remains open until they close and its
-complete preflight is rerun.
+do not resolve, and R24 replaces four drifted provenance implementations with
+one lossless citation-resolution contract. R25 remains open and R6 remains open
+until it closes and its complete preflight is rerun.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -122,7 +123,7 @@ dry-run—was rerun successfully at this revision. The benchmark-validity review
 is also complete. The failed multi-agent canary subsequently opened R20–R25, so
 Task 10 is blocked until those tasks and a fresh complete R6 preflight close.
 
-## Phase 2 Live-Canary Provenance Remediation: R20–R23 closed, R24–R25 open
+## Phase 2 Live-Canary Provenance Remediation: R20–R24 closed, R25 open
 
 The 2026-08-20 provider-backed R6 run passed the single-agent canary but failed
 the multi-agent canary after valid strict output. The Data Auditor's successful
@@ -138,7 +139,7 @@ acceptance criteria.
 | R21 — Enforce audit provenance in capability and offline scoring | P0 | Complete | `resolve_audit_claims` applies the executed-evidence boundary offline; the data-audit capability needs supported material claims, not a completed status; every required issue ID needs its own `required_provenance` check; a clean audit must show an executed check; catalog evaluator version advanced to `1.2` |
 | R22 — Align hypothesis evidence contracts and validate state transitions | P1 | Complete | `hypothesis_requires_evidence` is the one shared predicate for the contract, state tool, final Lead validation, and offline evaluation; `record_hypothesis` refuses an unsupported resolution before touching the ledger and returns an actionable typed error; open hypotheses stay usable; the append-only history is checked offline |
 | R23 — Add bounded correction for semantic provenance failures | P1 | Complete | `evidence_correction_attempts` is validated `ge=0, le=1`; the correction agent has no tools and one turn; the request names the invalid field IDs and a bounded citable-evidence catalog; the corrected response passes the identical persistence boundary; both calls, their usage, and their outcomes bind to the active attempt; a second invalid response terminates. Both architectures get the same allowance |
-| R24 — Make citation resolution lossless and consistent | P1 | Open | Unresolved citations remain visible; every material citation resolves; runtime, Critic, evaluator, and rescore agree on mixed/aliased references |
+| R24 — Make citation resolution lossless and consistent | P1 | Complete | `resolve_citations` returns resolved and unresolved explicitly and `canonical_references` drops nothing; a claim is supported only when every citation resolves; `material_claims` is one shared definition; the Lead's private resolver is deleted and the Critic now checks resolution; qualitative-finding and source-lineage rules apply offline too |
 | R25 — Classify provenance failures and close the live regression gap | P2 | Open | Named provenance taxonomy; production-shaped deterministic audit-to-Lead fixture; complete post-R25 R6 rerun and both live canaries pass |
 
 R20–R25 must preserve R2 and R7: the solution may carry and validate provenance
@@ -707,6 +708,44 @@ output-schema fingerprint is unchanged from R22. Decision record
 [0011](decisions/0011-bounded-evidence-correction.md) holds the rationale and
 `tests/test_evidence_correction.py` holds the 17 regressions.
 
+### 18. One lossless citation-resolution contract (R24)
+
+Provenance was judged by four implementations that had drifted apart. The Lead
+kept a private copy of the resolver shadowing the shared one. The Critic checked
+source lineage but never checked that a citation resolved at all. The runtime
+asked whether *any* cited reference resolved while offline scoring asked whether
+*all* of them did, so a workspace could pass at runtime and fail the evaluator
+that scores the benchmark. The runtime exempted qualitative findings; offline
+scoring did not. Offline scoring never applied the source-lineage rule the
+runtime enforced.
+
+Canonicalization was also lossy. A claim citing `[real_query,
+completed_data_audit]` was rewritten to `[real_query]` and then passed an "any
+resolves" test — one real query laundered an invented citation beside it, and
+the invented one disappeared from the persisted record.
+
+`agents/evidence.py` now owns the single contract. `resolve_citations` returns a
+`CitationResolution` carrying what was cited, what resolved, and what did not;
+`canonical_references` replaces resolved citations with the exact executed
+references they stand for and preserves unresolved ones verbatim. A material
+claim is supported only when every citation resolves — the `any(...)` test is
+gone from every boundary. `material_claims` is the one definition of which
+claims are held to the rule, and a regression asserts all four modules import
+the identical function objects rather than equivalent copies.
+
+Two rules the runtime already applied now also apply offline, because otherwise
+the boundaries demonstrably disagree on the same persisted workspace:
+qualitative findings must resolve like quantitative ones, and quantitative
+claims must satisfy `has_source_lineage`. Open hypotheses stay exempt at both
+boundaries and keep their citations untouched, per R22.
+
+The runtime gate is therefore stricter than before. Aligning downward was not an
+option — that would weaken provenance validation, which is the defect being
+fixed — and R23's bounded correction exists to make the stricter gate
+recoverable. Decision record
+[0012](decisions/0012-single-citation-resolution-contract.md) holds the
+rationale and `tests/test_citation_resolution.py` holds the 25 regressions.
+
 ## Verification completed
 
 ### Reopened R6 preflight and validity review, rerun at this revision
@@ -872,6 +911,38 @@ load — and the output-schema fingerprint is unchanged, because R23 altered run
 configuration rather than any output contract.
 
 This is deterministic verification of R23 only. The complete R6 preflight and
+both live canaries remain R25's work.
+
+### Deterministic verification at the R24 revision
+
+```text
+658 passed, 16 deselected
+```
+
+Ruff lint reported `All checks passed!` and format reported 159 files already
+formatted. `tests/test_citation_resolution.py` adds 25 regressions, the core of
+which is a thirteen-shape matrix asserting that runtime validation, Critic
+validation, and offline evaluation reach the *same* verdict on the same
+workspace: direct event, direct path, canonical alias, and unique local alias
+all supported; mixed valid/failed, mixed valid/fabricated, mixed
+valid/ambiguous-alias, mixed valid/cyclic-alias, failed-only, fabricated-only,
+ambiguous-alias-only, cyclic-alias-only, and unrelated-success-only all
+unsupported. Every case runs against a workspace that does hold a successful
+execution, so an unsupported verdict is never explained by an absence of
+evidence. The suite also pins that unresolved citations survive
+canonicalization, that aliases canonicalize deterministically without changing
+any other field of the claim, that all four modules import the identical
+resolver objects, and that hard-coded VALUES-only SQL now fails at runtime and
+offline alike.
+
+Two fixtures had to become production-shaped: the Task 6 calibration workspace
+and the multi-agent lifecycle fixture previously executed SQL that read no
+approved input relation, which the new offline lineage check correctly rejects.
+The retained Phase-1 canonical workspace is unaffected — still the same 7
+failures it had after R21 — and 10 manifests, 4 reports, and 18 ledger states
+still load. The 60-cell dry-run is unchanged.
+
+This is deterministic verification of R24 only. The complete R6 preflight and
 both live canaries remain R25's work.
 
 ### Scenario-document integrity is now a code invariant (R6)
@@ -1060,16 +1131,18 @@ Before another paid attempt:
    checks, failure-path accounting, lifecycle and taxonomy fixtures,
    scenario-document integrity, Docker integrations, Ruff, retained-artifact
    rescoring, all 60 dry-run cells, and seven new validity regressions.
-3. R20–R23 are implemented — audit contract 2.0, one validating persistence
+3. R20–R24 are implemented — audit contract 2.0, one validating persistence
    boundary, the Lead's bounded `AuditEvidenceCatalog`, persisted-state version
    `1.1`, offline enforcement of the same provenance boundary at catalog
    evaluator version `1.2`, one shared hypothesis-evidence rule enforced at the
    transition, and one bounded tool-less correction attempt available to both
-   architectures — with their regressions in
+   architectures, and one lossless citation-resolution contract shared by
+   every provenance boundary — with their regressions in
    `tests/test_audit_provenance.py`, `tests/test_audit_provenance_scoring.py`,
-   `tests/test_hypothesis_transitions.py`, and
-   `tests/test_evidence_correction.py`, and their rationale in decision records
-   0009, 0010, and 0011. Implement R24–R25 in order, preserving R2/R7 and
+   `tests/test_hypothesis_transitions.py`,
+   `tests/test_evidence_correction.py`, and
+   `tests/test_citation_resolution.py`, and their rationale in decision records
+   0009 through 0012. Implement R25 next, preserving R2/R7 and
    continuing to version failure taxonomy and output fingerprints deliberately.
    The audit-contract, hypothesis-contract, evaluator-version, and
    correction-allowance changes already invalidate any existing pilot estimate,

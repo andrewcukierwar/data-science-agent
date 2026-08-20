@@ -6,7 +6,12 @@ from math import isclose
 from pathlib import Path
 
 from agents import Agent
-from agents.evidence import evidence_events, has_source_lineage
+from agents.evidence import (
+    evidence_events,
+    has_source_lineage,
+    material_claims,
+    resolve_material_claims,
+)
 from agents.model_usage import run_agent_with_usage
 from agents.output_contract import require_strict_output, strict_output_type
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
@@ -593,6 +598,65 @@ def validate_structured_metric_comparisons(
     )
 
 
+def validate_candidate_citations(
+    candidate: CriticCandidate,
+    ledger: AnalysisLedger,
+) -> ValidationResult | None:
+    """Reject a candidate citing anything that does not resolve.
+
+    The Critic resolves citations through the same shared contract the runtime
+    and the offline evaluator use, so it cannot pass a candidate that offline
+    scoring would later fail. A single reference that fails to resolve is
+    enough: a valid citation sitting beside a fabricated one does not launder
+    it.
+    """
+
+    resolutions = {
+        item.claim_id: item.resolution
+        for item in resolve_material_claims(
+            material_claims(
+                findings=candidate.findings,
+                hypotheses=candidate.hypotheses,
+                metric_comparisons=candidate.metric_comparisons,
+            ),
+            ledger,
+        )
+    }
+    unsupported = {
+        claim_id: resolution
+        for claim_id, resolution in resolutions.items()
+        if not resolution.is_supported
+    }
+    if not unsupported:
+        return None
+    return ValidationResult(
+        status=ValidationStatus.REVISE,
+        issues=[
+            ValidationIssue(
+                id="V-EVIDENCE-UNRESOLVED-CITATION",
+                severity=ValidationSeverity.HIGH,
+                category="evidence_provenance",
+                message=(
+                    "Cited evidence does not resolve to a successful execution "
+                    "or a verified artifact: "
+                    + "; ".join(
+                        f"{claim_id} -> "
+                        + (", ".join(resolution.unresolved) or "no references cited")
+                        for claim_id, resolution in unsupported.items()
+                    )
+                ),
+                recommendation=(
+                    "Replace each unresolved reference with the exact tool-event "
+                    "ID, saved query/script path, or verified artifact that "
+                    "established the claim, or remove the claim."
+                ),
+            )
+        ],
+        checked_finding_ids=[finding.id for finding in candidate.findings],
+        summary="One or more cited references do not resolve to executed evidence.",
+    )
+
+
 def validate_candidate_evidence_provenance(
     candidate: CriticCandidate,
     ledger: AnalysisLedger,
@@ -835,6 +899,13 @@ async def run_critic(
             context.ledger,
             allow_issue_updates=True,
         )
+    citation_validation = validate_candidate_citations(candidate, context.ledger)
+    if citation_validation is not None:
+        return persist_validation_result(
+            citation_validation,
+            context.ledger,
+            allow_issue_updates=True,
+        )
     provenance_validation = validate_candidate_evidence_provenance(
         candidate,
         context.ledger,
@@ -873,6 +944,7 @@ __all__ = [
     "CRITIC_OBJECTIVE",
     "CriticPersistenceError",
     "candidate_completeness_validation",
+    "validate_candidate_citations",
     "validate_structured_metric_comparisons",
     "VALIDATOR_INSTRUCTIONS",
     "VALIDATOR_OBJECTIVE",

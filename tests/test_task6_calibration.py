@@ -183,14 +183,28 @@ def _persist_fixture(
     )
     rules = registration.evaluator_rules()
     run_id = f"calibration-{scenario_id}"
-    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(run_id)
+    # A production-shaped fixture reads an approved input relation. Provenance
+    # is not only "an execution happened": the executed SQL has to visibly
+    # derive from the approved sources, at runtime and offline alike.
+    inputs_source = tmp_path / f"inputs-{scenario_id}"
+    inputs_source.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"order_id": ["O1", "O2"], "net_revenue": [10.0, 12.0]}).to_parquet(
+        inputs_source / "orders.parquet"
+    )
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(
+        run_id,
+        inputs_source=inputs_source,
+    )
 
     query_path = workspace.root / _EVIDENCE
     script_path = workspace.root / _PYTHON_EVIDENCE
     chart_path = workspace.outputs / "charts" / "calibration.png"
     report_path = workspace.outputs / "calibration-report.md"
-    query_path.write_text("SELECT 1;\n", encoding="utf-8")
-    script_path.write_text("print('calibration')\n", encoding="utf-8")
+    query_path.write_text("SELECT count(*) AS orders FROM orders;\n", encoding="utf-8")
+    script_path.write_text(
+        "import pandas as pd\npd.read_parquet('/workspace/inputs/orders.parquet')\n",
+        encoding="utf-8",
+    )
     chart_path.write_bytes(b"deterministic calibration chart")
     report_path.write_text(
         _correct_report(scenario_id, report_suffix), encoding="utf-8"

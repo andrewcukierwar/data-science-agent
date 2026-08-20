@@ -17,7 +17,7 @@ from __future__ import annotations
 from agents.evidence import (
     executed_references,
     finding_reference_aliases,
-    resolve_evidence_reference,
+    resolve_citations,
 )
 from orchestration.ledger import AnalysisLedger
 from schemas.run_state import Hypothesis, HypothesisStatus, hypothesis_requires_evidence
@@ -82,21 +82,12 @@ def canonical_hypothesis_evidence(
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Split a hypothesis's citations into canonical and unresolved references."""
 
-    executed_refs = executed_references(ledger)
-    aliases = finding_reference_aliases(ledger)
-    resolved: list[str] = []
-    unresolved: list[str] = []
-    for reference in hypothesis.evidence_refs:
-        canonical = resolve_evidence_reference(
-            reference,
-            executed_refs=executed_refs,
-            aliases=aliases,
-        )
-        if canonical:
-            resolved.extend(canonical)
-        else:
-            unresolved.append(reference)
-    return tuple(dict.fromkeys(resolved)), tuple(dict.fromkeys(unresolved))
+    resolution = resolve_citations(
+        hypothesis.evidence_refs,
+        executed_refs=executed_references(ledger),
+        aliases=finding_reference_aliases(ledger),
+    )
+    return resolution.resolved, resolution.unresolved
 
 
 def hypothesis_has_executed_evidence(
@@ -107,8 +98,8 @@ def hypothesis_has_executed_evidence(
 
     if not hypothesis_requires_evidence(hypothesis.status):
         return True
-    resolved, _ = canonical_hypothesis_evidence(hypothesis, ledger)
-    return bool(resolved)
+    resolved, unresolved = canonical_hypothesis_evidence(hypothesis, ledger)
+    return bool(resolved) and not unresolved
 
 
 def validate_hypothesis_transition(
@@ -127,7 +118,7 @@ def validate_hypothesis_transition(
     if not hypothesis_requires_evidence(hypothesis.status):
         return hypothesis
     resolved, unresolved = canonical_hypothesis_evidence(hypothesis, ledger)
-    if not resolved:
+    if unresolved or not resolved:
         raise HypothesisEvidenceError(
             hypothesis,
             unresolved_refs=unresolved,

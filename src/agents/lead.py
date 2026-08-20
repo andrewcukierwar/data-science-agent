@@ -18,10 +18,17 @@ from agents.audit_evidence import (
     persist_audit_result,
 )
 from agents.correction import run_bounded_evidence_correction
-from agents.evidence import executed_references, has_source_lineage
+from agents.evidence import (
+    executed_references,
+    finding_reference_aliases,
+    has_source_lineage,
+    material_claims,
+    resolve_citations,
+    resolve_material_claims,
+    unsupported_claim_ids,
+)
 from agents.hypothesis_state import (
     HypothesisEvidenceError,
-    hypothesis_has_executed_evidence,
     validate_hypothesis_transition,
 )
 from agents.model_usage import ModelUsageHooks, run_agent_with_usage
@@ -54,7 +61,7 @@ from schemas.metrics import (
     normalize_metric_comparison,
     normalize_metric_key,
 )
-from schemas.run_state import Hypothesis
+from schemas.run_state import Hypothesis, hypothesis_requires_evidence
 
 LEAD_OBJECTIVE = (
     "Own the analytical objective, coordinate bounded specialist investigations, "
@@ -495,75 +502,6 @@ def build_lead_agent(
 create_lead_agent = build_lead_agent
 
 
-def _executed_references(ledger: AnalysisLedger) -> set[str]:
-    """Return only evidence references backed by successful execution/artifacts."""
-
-    return executed_references(ledger)
-
-
-def _finding_reference_aliases(ledger: AnalysisLedger) -> dict[str, list[Finding]]:
-    """Index persisted specialist findings by canonical and unique local IDs."""
-
-    aliases: dict[str, list[Finding]] = {}
-    for finding in ledger.findings:
-        aliases.setdefault(finding.id, []).append(finding)
-        if ":" in finding.id:
-            local_id = finding.id.rsplit(":", maxsplit=1)[1]
-            aliases.setdefault(local_id, []).append(finding)
-    return aliases
-
-
-def _resolve_evidence_reference(
-    reference: str,
-    *,
-    executed_refs: set[str],
-    aliases: dict[str, list[Finding]],
-    resolving: set[str] | None = None,
-) -> list[str]:
-    """Resolve a direct or uniquely aliased specialist finding reference."""
-
-    if reference in executed_refs:
-        return [reference]
-    candidates = aliases.get(reference, [])
-    if len(candidates) != 1:
-        return []
-    resolving = set() if resolving is None else resolving
-    if reference in resolving:
-        return []
-    resolving.add(reference)
-    resolved: list[str] = []
-    for nested_reference in candidates[0].evidence_refs:
-        resolved.extend(
-            _resolve_evidence_reference(
-                nested_reference,
-                executed_refs=executed_refs,
-                aliases=aliases,
-                resolving=resolving,
-            )
-        )
-    return list(dict.fromkeys(resolved))
-
-
-def _canonicalize_evidence_refs(
-    references: list[str],
-    *,
-    executed_refs: set[str],
-    aliases: dict[str, list[Finding]],
-) -> list[str]:
-    """Replace intermediate finding IDs with exact executed evidence refs."""
-
-    resolved: list[str] = []
-    for reference in references:
-        resolved.extend(
-            _resolve_evidence_reference(
-                reference,
-                executed_refs=executed_refs,
-                aliases=aliases,
-            )
-        )
-    return list(dict.fromkeys(resolved))
-
-
 def _reuse_specialist_metric_comparisons(
     comparisons: list[MetricComparison],
     ledger: AnalysisLedger,
@@ -696,72 +634,56 @@ def validate_lead_result(
     prior_result: LeadResult | None = None,
     allow_definition_change: bool = False,
 ) -> LeadResult:
-    """Require Lead outputs to cite exact executed evidence references."""
+    """Require every Lead citation to resolve to exact executed evidence.
 
-    executed_refs = _executed_references(ledger)
-    aliases = _finding_reference_aliases(ledger)
-    canonical_findings = [
-        finding.model_copy(
-            update={
-                "evidence_refs": _canonicalize_evidence_refs(
-                    finding.evidence_refs,
-                    executed_refs=executed_refs,
-                    aliases=aliases,
-                )
-                or finding.evidence_refs
-            }
+    Canonicalization is lossless: a citation that resolves is replaced by the
+    exact executed reference it stands for, and one that does not is preserved
+    so the failure stays visible. A claim is supported only when every one of
+    its citations resolves — the same rule the Critic and the offline evaluator
+    apply to the same persisted workspace.
+    """
+
+    executed_refs = executed_references(ledger)
+    aliases = finding_reference_aliases(ledger)
+
+    def canonical(references: list[str]) -> list[str]:
+        return list(
+            resolve_citations(
+                references,
+                executed_refs=executed_refs,
+                aliases=aliases,
+            ).canonical_references
         )
+
+    canonical_findings = [
+        finding.model_copy(update={"evidence_refs": canonical(finding.evidence_refs)})
         for finding in result.findings
     ]
     canonical_recommendations = [
         recommendation.model_copy(
-            update={
-                "evidence_refs": _canonicalize_evidence_refs(
-                    recommendation.evidence_refs,
-                    executed_refs=executed_refs,
-                    aliases=aliases,
-                )
-                or recommendation.evidence_refs
-            }
+            update={"evidence_refs": canonical(recommendation.evidence_refs)}
         )
         for recommendation in result.recommendations
     ]
+    # An open hypothesis keeps its citations verbatim: it is still being tested,
+    # and rewriting a reference it has not yet earned would change its meaning.
     canonical_hypotheses = [
         hypothesis.model_copy(
-            update={
-                "evidence_refs": _canonicalize_evidence_refs(
-                    hypothesis.evidence_refs,
-                    executed_refs=executed_refs,
-                    aliases=aliases,
-                )
-                or hypothesis.evidence_refs
-            }
+            update={"evidence_refs": canonical(hypothesis.evidence_refs)}
         )
+        if hypothesis_requires_evidence(hypothesis.status)
+        else hypothesis
         for hypothesis in result.hypotheses
     ]
     canonical_metric_comparisons = [
         comparison.model_copy(
-            update={
-                "evidence_refs": _canonicalize_evidence_refs(
-                    comparison.evidence_refs,
-                    executed_refs=executed_refs,
-                    aliases=aliases,
-                )
-                or comparison.evidence_refs
-            }
+            update={"evidence_refs": canonical(comparison.evidence_refs)}
         )
         for comparison in result.metric_comparisons
     ]
     canonical_statistical_assessments = [
         assessment.model_copy(
-            update={
-                "evidence_refs": _canonicalize_evidence_refs(
-                    assessment.evidence_refs,
-                    executed_refs=executed_refs,
-                    aliases=aliases,
-                )
-                or assessment.evidence_refs
-            }
+            update={"evidence_refs": canonical(assessment.evidence_refs)}
         )
         for assessment in result.statistical_assessments
     ]
@@ -786,36 +708,18 @@ def validate_lead_result(
             "statistical_assessments": canonical_statistical_assessments,
         }
     )
-    invalid_findings = [
-        finding.id
-        for finding in result.findings
-        if (finding.metric is not None or finding.value is not None)
-        and not any(reference in executed_refs for reference in finding.evidence_refs)
-    ]
-    invalid_recommendations = [
-        recommendation.id
-        for recommendation in result.recommendations
-        if not any(
-            reference in executed_refs for reference in recommendation.evidence_refs
+    unsupported = unsupported_claim_ids(
+        resolve_material_claims(
+            material_claims(
+                findings=result.findings,
+                recommendations=result.recommendations,
+                hypotheses=result.hypotheses,
+                metric_comparisons=result.metric_comparisons,
+                statistical_assessments=result.statistical_assessments,
+            ),
+            ledger,
         )
-    ]
-    # The same predicate the state tool and offline evaluation use, so the
-    # three boundaries cannot drift on which transitions need provenance.
-    invalid_hypotheses = [
-        hypothesis.id
-        for hypothesis in result.hypotheses
-        if not hypothesis_has_executed_evidence(hypothesis, ledger)
-    ]
-    invalid_metric_comparisons = [
-        comparison.metric_key
-        for comparison in result.metric_comparisons
-        if not any(reference in executed_refs for reference in comparison.evidence_refs)
-    ]
-    invalid_statistical_assessments = [
-        assessment.metric_key
-        for assessment in result.statistical_assessments
-        if not any(reference in executed_refs for reference in assessment.evidence_refs)
-    ]
+    )
     invalid_lineage = [
         finding.id
         for finding in result.findings
@@ -832,25 +736,8 @@ def validate_lead_result(
         for assessment in result.statistical_assessments
         if not has_source_lineage(ledger, assessment.evidence_refs)
     )
-    if (
-        invalid_findings
-        or invalid_recommendations
-        or invalid_hypotheses
-        or invalid_metric_comparisons
-        or invalid_statistical_assessments
-        or invalid_lineage
-    ):
-        details = [
-            *[f"finding:{item}" for item in invalid_findings],
-            *[f"recommendation:{item}" for item in invalid_recommendations],
-            *[f"hypothesis:{item}" for item in invalid_hypotheses],
-            *[f"metric_comparison:{item}" for item in invalid_metric_comparisons],
-            *[
-                f"statistical_assessment:{item}"
-                for item in invalid_statistical_assessments
-            ],
-            *[f"source_lineage:{item}" for item in invalid_lineage],
-        ]
+    details = [*unsupported, *[f"source_lineage:{item}" for item in invalid_lineage]]
+    if details:
         raise LeadEvidenceError(
             "lead outputs cite no executed evidence: " + ", ".join(details),
             tuple(details),

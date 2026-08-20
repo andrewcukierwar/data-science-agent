@@ -2,20 +2,22 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-20 — Phase 2 Tasks 1–9, R1–R19, and R20–R23 are
+**Revision:** 2026-08-20 — Phase 2 Tasks 1–9, R1–R19, and R20–R24 are
 implemented.
 The deterministic portion of the reopened R6 gate and its benchmark-validity
 review are complete. Fresh paid canaries were run: the single-agent architecture
 passed, while the multi-agent architecture failed its executed-evidence gate.
-The resulting audit/Lead provenance gaps are tracked as R20–R25. R20–R23 are
+The resulting audit/Lead provenance gaps are tracked as R20–R25. R20–R24 are
 now closed: audit contract 2.0 makes every material audit claim
 evidence-bearing, one persistence boundary refuses an unsupported completed
 audit, the Lead receives a bounded typed audit evidence catalog, offline scoring
 enforces the same provenance boundary at catalog evaluator version 1.2, one
 shared hypothesis-evidence rule is enforced when the state transition is
 requested, and a strict-schema-valid response whose citations do not resolve
-gets one bounded tool-less correction attempt. R24–R25 remain open. Task 10
-remains blocked before the paid matrix; no benchmark result is published.
+gets one bounded tool-less correction attempt, and one lossless
+citation-resolution contract is shared by every provenance boundary. R25 remains
+open. Task 10 remains blocked before the paid matrix; no benchmark result is
+published.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1478,9 +1480,9 @@ bound to the frozen manifest. The post-R19 deterministic preflight and
 benchmark-validity review are complete. Fresh paid canaries ran on 2026-08-20:
 the single-agent architecture passed, while the multi-agent architecture failed
 because Lead hypothesis `H2` cited `completed_data_audit` rather than executed
-evidence. A focused review opened R20–R25. R20–R23
-are implemented; R24–R25 remain open, and R6 must be rerun after all of them and
-therefore remains open.
+evidence. A focused review opened R20–R25. R20–R24
+are implemented; R25 remains open, and R6 must be rerun after it and therefore
+remains open.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
 rescores and aggregate reports are retained under
@@ -1500,7 +1502,7 @@ constraints are recorded in `docs/phase2-status.md`.
 | 7 | Complete | Bounded generalist architecture sharing runtime, provenance, tools, and report contracts without specialist delegation |
 | 8 | Complete | Immutable resumable matrix runner, paid opt-in, cost pilot gate, failure isolation, and offline rescoring |
 | 9 | Complete | Deterministic denominator-preserving aggregation, uncertainty, paired comparisons, cost/latency, and failure reporting |
-| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R24–R25 and a fresh final R6 preflight must close before a new 60-cell matrix is started |
+| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R25 and a fresh final R6 preflight must close before a new 60-cell matrix is started |
 
 ### Phase 2 implementation order
 
@@ -1747,8 +1749,9 @@ this revision after R13–R19. The fresh paid single-agent canary passed on
 2026-08-20, but the multi-agent canary failed the production evidence gate. R20
 and R21 have since closed the audit-provenance half of that failure at runtime
 and offline, R22 closed the hypothesis-transition half, and R23 added the one
-bounded correction attempt. R24–R25 must close before the complete R6 preflight
-and both live canaries are rerun, so R6 remains open.
+bounded correction attempt, and R24 unified citation resolution. R25 must close
+before the complete R6 preflight and both live canaries are rerun, so R6 remains
+open.
 
 Scenario-document integrity is now enforced in code rather than only in a test.
 The shared generated document is inherited unchanged by the clean baseline and
@@ -2304,8 +2307,8 @@ references, and resolved hypothesis `H2` using the invented reference
 
 R20–R25 close the cross-agent provenance contract rather than weakening that
 gate or retrying until a favorable model output appears. All six tasks must be
-implemented before another complete R6 preflight or Task 10 manifest. R20–R23
-are implemented; R24–R25 remain open.
+implemented before another complete R6 preflight or Task 10 manifest. R20–R24
+are implemented; R25 remains open.
 
 #### R20 — Preserve typed audit provenance across architecture boundaries [P0] — Implemented
 
@@ -2525,7 +2528,7 @@ declaration digest. Decision record
 `docs/decisions/0011-bounded-evidence-correction.md` holds the rationale and
 `tests/test_evidence_correction.py` holds the regressions.
 
-#### R24 — Make citation resolution lossless and consistent [P1]
+#### R24 — Make citation resolution lossless and consistent [P1] — Implemented
 
 Use one citation-resolution contract at runtime, Critic validation, offline
 evaluation, and rescoring. Never discard an unresolved citation merely because
@@ -2544,6 +2547,30 @@ Acceptance:
   deterministically without changing claim meaning;
 - runtime validation and offline rescoring produce the same provenance result
   for the same persisted workspace.
+
+Implemented. `agents/evidence.py` owns the single contract; the Lead's private
+copy of the resolver is deleted, and a regression asserts runtime, Critic, and
+offline evaluation import identical function objects rather than equivalent
+copies. `resolve_citations` returns a `CitationResolution` carrying what was
+cited, what resolved, and what did not, and `canonical_references` preserves
+unresolved citations verbatim, so a fabricated reference can no longer disappear
+because a real one sat beside it.
+
+A material claim is supported only when every citation resolves; the
+`any(valid_reference)` test is gone from every boundary. `material_claims` is
+the one definition of which claims are held to the rule, with open hypotheses
+deliberately excluded and their citations left untouched per R22. The Critic,
+which previously checked only source lineage, now rejects an unresolved citation
+through the same contract.
+
+Two rules the runtime already applied now also apply offline, because otherwise
+the boundaries disagree on the same persisted workspace: qualitative findings
+must resolve like quantitative ones, and quantitative claims must satisfy
+`has_source_lineage`. The runtime gate is consequently stricter; aligning
+downward would have weakened provenance validation, and R23's bounded correction
+exists to make the stricter gate recoverable. Decision record
+`docs/decisions/0012-single-citation-resolution-contract.md` holds the rationale
+and `tests/test_citation_resolution.py` holds the regressions.
 
 #### R25 — Classify provenance failures and close the live regression gap [P2]
 

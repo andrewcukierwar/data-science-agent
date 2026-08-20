@@ -15,7 +15,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from math import isclose, isfinite
 
-from agents.evidence import executed_references
+from agents.evidence import (
+    executed_references,
+    has_source_lineage,
+    material_claims,
+    resolve_citations,
+    resolve_material_claims,
+)
 from evaluation.contracts import EvaluationCheck, EvaluationCheckStatus
 from orchestration.ledger import AnalysisLedger
 from scenarios.definitions.models import GroundTruthMetric
@@ -448,9 +454,11 @@ def resolve_audit_claims(
     return tuple(
         ResolvedAuditClaim(
             claim=claim,
-            supported=any(
-                reference in executed_refs for reference in claim.evidence_refs
-            ),
+            supported=resolve_citations(
+                claim.evidence_refs,
+                executed_refs=executed_refs,
+                aliases={},
+            ).is_supported,
         )
         for claim in audit_claims(audit)
     )
@@ -962,40 +970,65 @@ def evaluate_provenance(
             )
 
     refs = _evidence_refs(workspace)
-    for finding in state.findings:
+    ledger = AnalysisLedger(workspace)
+    # The same claim enumeration and the same resolution the runtime uses, so a
+    # persisted workspace cannot be supported at one boundary and unsupported at
+    # the other.
+    assessments = _statistical_assessments(state)
+    resolutions = {
+        item.claim_id: item.resolution
+        for item in resolve_material_claims(
+            material_claims(
+                findings=state.findings,
+                hypotheses=state.hypotheses,
+                metric_comparisons=state.metric_comparisons,
+                statistical_assessments=assessments,
+            ),
+            ledger,
+        )
+    }
+
+    def _claim_check(check_id: str, claim_id: str, message: str) -> None:
+        resolution = resolutions[claim_id]
         checks.append(
             _check(
-                f"{check_prefix}:finding:{finding.id}",
-                bool(finding.evidence_refs)
-                and all(reference in refs for reference in finding.evidence_refs),
-                f"finding {finding.id} cites executed evidence",
+                f"{check_prefix}:{check_id}",
+                resolution.is_supported,
+                message
+                if resolution.is_supported
+                else f"{message}; unresolved: "
+                + (", ".join(resolution.unresolved) or "no references cited"),
             )
         )
-    # One shared rule with the state tool and final Lead validation: an open
-    # hypothesis may carry no evidence; a resolved one must cite executed
-    # evidence.
+
+    for finding in state.findings:
+        _claim_check(
+            f"finding:{finding.id}",
+            f"finding:{finding.id}",
+            f"finding {finding.id} cites executed evidence",
+        )
+    # An open hypothesis may carry no evidence and is not enumerated as a
+    # material claim; a resolved one must cite executed evidence.
     for hypothesis in state.hypotheses:
         if hypothesis_requires_evidence(hypothesis.status):
-            checks.append(
-                _check(
-                    f"{check_prefix}:hypothesis:{hypothesis.id}",
-                    bool(hypothesis.evidence_refs)
-                    and any(
-                        reference in refs for reference in hypothesis.evidence_refs
-                    ),
-                    f"resolved hypothesis {hypothesis.id} cites executed evidence",
-                )
+            _claim_check(
+                f"hypothesis:{hypothesis.id}",
+                f"hypothesis:{hypothesis.id}",
+                f"resolved hypothesis {hypothesis.id} cites executed evidence",
             )
     # The append-only history records the transitions themselves. A resolution
     # that was later revised still had to be supported when it was made, so an
     # unsupported version cannot be hidden by overwriting the current one.
-    unsupported_history = tuple(
-        dict.fromkeys(
-            f"{index}:{version.id}"
+    history_resolutions = resolve_material_claims(
+        tuple(
+            (f"{index}:{version.id}", tuple(version.evidence_refs))
             for index, version in enumerate(state.hypothesis_history)
             if hypothesis_requires_evidence(version.status)
-            and not any(reference in refs for reference in version.evidence_refs)
-        )
+        ),
+        ledger,
+    )
+    unsupported_history = tuple(
+        item.claim_id for item in history_resolutions if not item.supported
     )
     checks.append(
         _check(
@@ -1008,23 +1041,46 @@ def evaluate_provenance(
         )
     )
     for comparison in state.metric_comparisons:
-        checks.append(
-            _check(
-                f"{check_prefix}:metric:{comparison.metric_key}",
-                bool(comparison.evidence_refs)
-                and all(reference in refs for reference in comparison.evidence_refs),
-                f"metric {comparison.metric_key} cites executed evidence",
-            )
+        _claim_check(
+            f"metric:{comparison.metric_key}",
+            f"metric_comparison:{comparison.metric_key}",
+            f"metric {comparison.metric_key} cites executed evidence",
         )
-    for assessment in _statistical_assessments(state):
-        checks.append(
-            _check(
-                f"{check_prefix}:statistical_assessment:{assessment.metric_key}",
-                bool(assessment.evidence_refs)
-                and all(reference in refs for reference in assessment.evidence_refs),
-                "statistical assessment cites executed evidence",
-            )
+    for assessment in assessments:
+        _claim_check(
+            f"statistical_assessment:{assessment.metric_key}",
+            f"statistical_assessment:{assessment.metric_key}",
+            "statistical assessment cites executed evidence",
         )
+    # Runtime rejects a quantitative claim whose only inspectable SQL is
+    # hard-coded data. Offline scoring applies the identical rule to the same
+    # claim set, so the two boundaries agree on the same persisted workspace.
+    unsupported_lineage = [
+        f"finding:{finding.id}"
+        for finding in state.findings
+        if (finding.metric is not None or finding.value is not None)
+        and not has_source_lineage(ledger, list(finding.evidence_refs))
+    ]
+    unsupported_lineage.extend(
+        f"metric_comparison:{comparison.metric_key}"
+        for comparison in state.metric_comparisons
+        if not has_source_lineage(ledger, list(comparison.evidence_refs))
+    )
+    unsupported_lineage.extend(
+        f"statistical_assessment:{assessment.metric_key}"
+        for assessment in assessments
+        if not has_source_lineage(ledger, list(assessment.evidence_refs))
+    )
+    checks.append(
+        _check(
+            f"{check_prefix}:source_lineage",
+            not unsupported_lineage,
+            "quantitative claims derive from approved input relations"
+            if not unsupported_lineage
+            else "quantitative claims do not visibly derive from approved input "
+            "relations: " + ", ".join(dict.fromkeys(unsupported_lineage)),
+        )
+    )
 
     if state.final_report is None:
         checks.append(

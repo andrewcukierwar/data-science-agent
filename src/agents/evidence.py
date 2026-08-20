@@ -1,13 +1,30 @@
-"""Shared resolution of executed evidence references."""
+"""The one citation-resolution contract used everywhere provenance is judged.
+
+Runtime validation, Critic validation, offline evaluation, and offline
+rescoring all resolve citations through this module, so a claim cannot be
+supported at one boundary and unsupported at another.
+
+Two rules make resolution lossless:
+
+* resolving a claim's citations returns the resolved and the unresolved
+  references explicitly. Nothing is dropped, so a fabricated or failed
+  reference cannot disappear from a claim on its way through the system;
+* a material claim is supported only when *every* reference it cites
+  resolves. An "any reference resolves" test would let one real query
+  launder an invented citation sitting beside it.
+"""
 
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import Finding
+from schemas.hypotheses import hypothesis_requires_evidence
 from schemas.run_state import ToolEventStatus
 
 
@@ -174,24 +191,146 @@ def resolve_evidence_reference(
     return list(dict.fromkeys(resolved))
 
 
-def canonicalize_evidence_refs(
-    references: list[str],
+@dataclass(frozen=True, slots=True)
+class CitationResolution:
+    """The complete outcome of resolving one claim's citations.
+
+    ``unresolved`` is the reason this type exists. Returning only the resolved
+    references would silently discard a failed, fabricated, or ambiguous
+    citation whenever a valid one happened to sit beside it.
+    """
+
+    references: tuple[str, ...]
+    resolved: tuple[str, ...]
+    unresolved: tuple[str, ...]
+
+    @property
+    def is_supported(self) -> bool:
+        """Whether every cited reference resolved to executed evidence."""
+
+        return bool(self.references) and not self.unresolved
+
+    @property
+    def canonical_references(self) -> tuple[str, ...]:
+        """Canonical references with nothing dropped.
+
+        Resolved citations are replaced by the exact executed references they
+        stand for; unresolved ones are preserved verbatim so the claim still
+        shows what it tried to cite.
+        """
+
+        return tuple(dict.fromkeys((*self.resolved, *self.unresolved)))
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimCitations:
+    """One material claim and the outcome of resolving its citations."""
+
+    claim_id: str
+    resolution: CitationResolution
+
+    @property
+    def supported(self) -> bool:
+        return self.resolution.is_supported
+
+
+def resolve_citations(
+    references: Sequence[str],
     *,
     executed_refs: set[str],
     aliases: dict[str, list[Finding]],
-) -> list[str]:
-    """Replace intermediate finding IDs with exact executed evidence refs."""
+) -> CitationResolution:
+    """Resolve one claim's citations, reporting what did and did not resolve."""
 
+    cited = tuple(dict.fromkeys(references))
     resolved: list[str] = []
-    for reference in references:
-        resolved.extend(
-            resolve_evidence_reference(
-                reference,
+    unresolved: list[str] = []
+    for reference in cited:
+        canonical = resolve_evidence_reference(
+            reference,
+            executed_refs=executed_refs,
+            aliases=aliases,
+        )
+        if canonical:
+            resolved.extend(canonical)
+        else:
+            unresolved.append(reference)
+    return CitationResolution(
+        references=cited,
+        resolved=tuple(dict.fromkeys(resolved)),
+        unresolved=tuple(unresolved),
+    )
+
+
+def _claim(claim_id: str, references: Iterable[str]) -> tuple[str, tuple[str, ...]]:
+    return claim_id, tuple(references)
+
+
+def material_claims(
+    *,
+    findings: Iterable[object] = (),
+    recommendations: Iterable[object] = (),
+    hypotheses: Iterable[object] = (),
+    metric_comparisons: Iterable[object] = (),
+    statistical_assessments: Iterable[object] = (),
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Enumerate every claim whose citations must resolve, with stable IDs.
+
+    One definition of "material", shared by runtime validation and offline
+    evaluation, so the two boundaries cannot disagree about which claims are
+    held to the provenance contract. An open hypothesis is deliberately absent:
+    it is still being tested and is allowed to carry no evidence at all.
+    """
+
+    claims: list[tuple[str, tuple[str, ...]]] = []
+    claims.extend(_claim(f"finding:{item.id}", item.evidence_refs) for item in findings)
+    claims.extend(
+        _claim(f"recommendation:{item.id}", item.evidence_refs)
+        for item in recommendations
+    )
+    claims.extend(
+        _claim(f"hypothesis:{item.id}", item.evidence_refs)
+        for item in hypotheses
+        if hypothesis_requires_evidence(item.status)
+    )
+    claims.extend(
+        _claim(f"metric_comparison:{item.metric_key}", item.evidence_refs)
+        for item in metric_comparisons
+    )
+    claims.extend(
+        _claim(f"statistical_assessment:{item.metric_key}", item.evidence_refs)
+        for item in statistical_assessments
+    )
+    return tuple(claims)
+
+
+def resolve_material_claims(
+    claims: Iterable[tuple[str, tuple[str, ...]]],
+    ledger: AnalysisLedger,
+) -> tuple[ClaimCitations, ...]:
+    """Resolve every material claim against one snapshot of executed evidence."""
+
+    executed_refs = executed_references(ledger)
+    aliases = finding_reference_aliases(ledger)
+    return tuple(
+        ClaimCitations(
+            claim_id=claim_id,
+            resolution=resolve_citations(
+                references,
                 executed_refs=executed_refs,
                 aliases=aliases,
-            )
+            ),
         )
-    return list(dict.fromkeys(resolved))
+        for claim_id, references in claims
+    )
+
+
+def unsupported_claim_ids(
+    claims: Iterable[ClaimCitations],
+) -> tuple[str, ...]:
+    """Return the IDs of claims that cite anything which does not resolve."""
+
+    return tuple(item.claim_id for item in claims if not item.supported)
 
 
 def _approved_relation_names(ledger: AnalysisLedger) -> set[str]:

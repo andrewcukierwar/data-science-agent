@@ -87,6 +87,7 @@ from agents.critic import (  # noqa: E402
     persist_validation_result,
     run_critic,
     run_validator,
+    validate_candidate_citations,
 )
 from agents.generalist import (  # noqa: E402
     GENERALIST_INSTRUCTIONS,
@@ -205,6 +206,7 @@ __all__ = [
     "GENERALIST_OBJECTIVE",
     "CriticPersistenceError",
     "candidate_completeness_validation",
+    "validate_candidate_citations",
     "VALIDATOR_INSTRUCTIONS",
     "VALIDATOR_OBJECTIVE",
     "DocumentContents",

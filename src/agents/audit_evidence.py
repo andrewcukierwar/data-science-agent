@@ -26,9 +26,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from agents.evidence import (
-    canonicalize_evidence_refs,
     executed_references,
     finding_reference_aliases,
+    resolve_citations,
 )
 from agents.runtime import AgentRunContext
 from orchestration.ledger import AnalysisLedger
@@ -39,7 +39,6 @@ from schemas.audit import (
     AuditStatus,
     audit_claims,
 )
-from schemas.findings import Finding
 
 AUDIT_EVIDENCE_CATALOG_VERSION = "1.0"
 
@@ -88,23 +87,6 @@ class AuditEvidenceCatalog(BaseModel):
     citable_references: tuple[str, ...] = Field(default_factory=tuple)
 
 
-def _canonical_refs(
-    references: tuple[str, ...],
-    *,
-    executed_refs: set[str],
-    aliases: dict[str, list[Finding]],
-) -> tuple[str, ...]:
-    """Resolve supplied references to exact executed evidence references."""
-
-    return tuple(
-        canonicalize_evidence_refs(
-            list(references),
-            executed_refs=executed_refs,
-            aliases=aliases,
-        )
-    )
-
-
 def canonicalize_audit_result(
     audit: AuditResult,
     ledger: AnalysisLedger,
@@ -121,16 +103,14 @@ def canonicalize_audit_result(
     aliases = finding_reference_aliases(ledger)
 
     def resolve(references: list[str]) -> tuple[list[str], bool]:
-        canonical = list(
-            _canonical_refs(
-                tuple(references),
-                executed_refs=executed_refs,
-                aliases=aliases,
-            )
+        # One reference that resolves does not launder another that does not,
+        # so a claim is supported only when every citation resolves.
+        resolution = resolve_citations(
+            references,
+            executed_refs=executed_refs,
+            aliases=aliases,
         )
-        if canonical:
-            return canonical, True
-        return list(references), False
+        return list(resolution.canonical_references), resolution.is_supported
 
     unsupported: list[AuditClaim] = []
     claims_by_id = {claim.claim_id: claim for claim in audit_claims(audit)}

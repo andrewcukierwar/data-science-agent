@@ -8,9 +8,9 @@ from typing import Final
 
 from agents import Agent
 from agents.evidence import (
-    canonicalize_evidence_refs,
     executed_references,
     finding_reference_aliases,
+    resolve_citations,
 )
 from agents.model_usage import run_agent_with_usage
 from agents.output_contract import (
@@ -211,57 +211,41 @@ def validate_analyst_result(
 
     executed_refs = executed_references(ledger)
     aliases = finding_reference_aliases(ledger)
-    result = result.model_copy(
-        update={
-            "findings": [
-                finding.model_copy(
-                    update={
-                        "evidence_refs": canonicalize_evidence_refs(
-                            finding.evidence_refs,
-                            executed_refs=executed_refs,
-                            aliases=aliases,
-                        )
-                        or finding.evidence_refs
-                    }
-                )
-                for finding in result.findings
-            ],
-            "metric_comparisons": [
-                normalize_metric_comparison(
-                    comparison.model_copy(
-                        update={
-                            "evidence_refs": canonicalize_evidence_refs(
-                                comparison.evidence_refs,
-                                executed_refs=executed_refs,
-                                aliases=aliases,
-                            )
-                            or comparison.evidence_refs
-                        }
-                    )
-                )
-                for comparison in deduplicate_metric_comparisons(
-                    result.metric_comparisons
-                )
-            ],
-        }
-    )
+
+    def canonical(references: list[str]) -> tuple[list[str], bool]:
+        resolution = resolve_citations(
+            references,
+            executed_refs=executed_refs,
+            aliases=aliases,
+        )
+        return list(resolution.canonical_references), resolution.is_supported
 
     invalid_refs: list[str] = []
+    findings = []
     for finding in result.findings:
-        is_quantitative = finding.metric is not None or finding.value is not None
-        if is_quantitative and not any(
-            reference in executed_refs for reference in finding.evidence_refs
-        ):
+        references, supported = canonical(finding.evidence_refs)
+        if not supported:
             invalid_refs.append(finding.id)
+        findings.append(finding.model_copy(update={"evidence_refs": references}))
+    invalid_comparisons: list[str] = []
+    comparisons = []
+    for comparison in deduplicate_metric_comparisons(result.metric_comparisons):
+        references, supported = canonical(comparison.evidence_refs)
+        if not supported:
+            invalid_comparisons.append(comparison.metric_key)
+        comparisons.append(
+            normalize_metric_comparison(
+                comparison.model_copy(update={"evidence_refs": references})
+            )
+        )
+    result = result.model_copy(
+        update={"findings": findings, "metric_comparisons": comparisons}
+    )
+
     if invalid_refs:
         raise AnalystEvidenceError(
             "material findings cite no executed evidence: " + ", ".join(invalid_refs)
         )
-    invalid_comparisons = [
-        comparison.metric_key
-        for comparison in result.metric_comparisons
-        if not any(reference in executed_refs for reference in comparison.evidence_refs)
-    ]
     if invalid_comparisons:
         raise AnalystEvidenceError(
             "metric comparisons cite no executed evidence: "

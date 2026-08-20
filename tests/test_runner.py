@@ -1,6 +1,7 @@
 """Deterministic lifecycle tests for the application-level AnalysisRunner."""
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,8 @@ from schemas.run_state import (
     RunBlockReason,
     RunBudget,
     RunStatus,
+    ToolEvent,
+    ToolEventStatus,
 )
 from schemas.validation import (
     ValidationIssue,
@@ -60,6 +63,19 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
         assert context.agent_role is AgentRole.DATA_AUDITOR
         assert context.ledger.state.status is RunStatus.RUNNING
         events.append("audit")
+        # A real auditor establishes its facts with an approved tool call, and
+        # the Lead cites that execution rather than the audit itself.
+        stamp = datetime.now(UTC)
+        context.ledger.append_tool_event(
+            ToolEvent(
+                id="audit-evidence",
+                tool_name="inspect_relations",
+                status=ToolEventStatus.SUCCEEDED,
+                started_at=stamp,
+                completed_at=stamp,
+                arguments={"include_row_counts": True},
+            )
+        )
         context.record_sdk_usage(_usage())
         return audit
 
