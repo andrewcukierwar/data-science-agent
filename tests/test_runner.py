@@ -7,7 +7,11 @@ from types import SimpleNamespace
 from agents import MaxTurnsExceeded
 from agents.runtime import AgentRole
 from orchestration.ledger import AnalysisLedger
-from orchestration.runner import AnalysisRunner, _critic_allows_metric_definition_change
+from orchestration.runner import (
+    MAX_LEAD_COMPLETION_PASSES,
+    AnalysisRunner,
+    _critic_allows_metric_definition_change,
+)
 from schemas.audit import AuditResult, AuditStatus
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.lead import LeadResult
@@ -853,9 +857,18 @@ def test_runner_re_reviews_even_when_analytical_specialist_budget_is_exhausted(
     assert result.ledger.budget.critic_loops == 2
 
 
-def test_runner_goes_directly_from_remediation_to_critic_review(
+def test_runner_completes_a_remediated_candidate_before_spending_a_critic_loop(
     tmp_path: Path,
 ) -> None:
+    """A remediated candidate must not burn a Critic loop on a free gate.
+
+    ``run_critic`` consumes a critic loop and then short-circuits on the
+    deterministic completeness gates, so a remediation that re-raises
+    ``follow_up_analysis`` used to spend the remaining Critic budget without
+    ever obtaining a model review. One bounded completion pass resolves it
+    first, and remediation still gets no extra follow-up continuation cycle.
+    """
+
     events: list[str] = []
     lead_calls = 0
     critic_calls = 0
@@ -886,14 +899,21 @@ def test_runner_goes_directly_from_remediation_to_critic_review(
                 answer="The main driver is identified.",
                 follow_up_analysis=False,
             )
+        if lead_calls == 2:
+            return LeadResult(
+                objective="Explain profitability.",
+                answer="The targeted remediation was attempted.",
+                open_questions=["The remaining question is for Critic review."],
+                follow_up_analysis=True,
+                follow_up_rationale=(
+                    "The remaining question is material but now needs validation."
+                ),
+            )
         return LeadResult(
             objective="Explain profitability.",
-            answer="The targeted remediation was attempted.",
-            open_questions=["The remaining question is for Critic review."],
-            follow_up_analysis=True,
-            follow_up_rationale=(
-                "The remaining question is material but now needs validation."
-            ),
+            answer="The remediation and its bounded follow-up are complete.",
+            open_questions=["The available data cannot resolve the upstream cause."],
+            follow_up_analysis=False,
         )
 
     async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
@@ -903,7 +923,7 @@ def test_runner_goes_directly_from_remediation_to_critic_review(
         context.consume_budget("critic_loops")
         if critic_calls == 1:
             return ValidationResult(status=ValidationStatus.REVISE, issues=[issue])
-        assert candidate.follow_up_analysis is True
+        assert candidate.follow_up_analysis is False
         return ValidationResult(status=ValidationStatus.PASS)
 
     runner = AnalysisRunner(
@@ -916,11 +936,78 @@ def test_runner_goes_directly_from_remediation_to_critic_review(
     result = asyncio.run(runner.run("run-direct-review", "Explain profitability."))
 
     assert result.status is RunStatus.COMPLETED
-    assert events == ["audit", "lead", "critic", "lead", "critic"]
-    assert lead_calls == 2
+    assert events == ["audit", "lead", "critic", "lead", "lead", "critic"]
+    assert lead_calls == 3
     assert critic_calls == 2
     assert result.lead_result is not None
-    assert result.lead_result.follow_up_analysis is True
+    assert result.lead_result.follow_up_analysis is False
+
+
+def test_runner_bounds_completion_passes_and_still_reaches_the_critic(
+    tmp_path: Path,
+) -> None:
+    """A Lead that never clears the gate cannot loop on completion passes."""
+
+    lead_calls = 0
+    critic_calls = 0
+    reviewed_follow_up: list[bool] = []
+    issue = ValidationIssue(
+        id="V-BOUNDED-COMPLETION",
+        severity=ValidationSeverity.MEDIUM,
+        message="Complete the targeted follow-up.",
+    )
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def fake_lead(
+        context,
+        objective,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        if lead_calls == 1:
+            return LeadResult(
+                objective="Explain profitability.",
+                answer="The main driver is identified.",
+                follow_up_analysis=False,
+            )
+        return LeadResult(
+            objective="Explain profitability.",
+            answer="The candidate still requests further follow-up.",
+            open_questions=["The upstream question remains open."],
+            follow_up_analysis=True,
+            follow_up_rationale="The upstream question is still material.",
+        )
+
+    async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
+        nonlocal critic_calls
+        critic_calls += 1
+        reviewed_follow_up.append(candidate.follow_up_analysis)
+        context.consume_budget("critic_loops")
+        if critic_calls == 1:
+            return ValidationResult(status=ValidationStatus.REVISE, issues=[issue])
+        return ValidationResult(status=ValidationStatus.PASS)
+
+    runner = AnalysisRunner(
+        workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+        budget=RunBudget(max_critic_loops=2),
+        auditor_runner=fake_auditor,
+        lead_runner=fake_lead,
+        critic_runner=fake_critic,
+    )
+    result = asyncio.run(runner.run("run-bounded-completion", "Explain profitability."))
+
+    assert result.status is RunStatus.COMPLETED
+    # One initial Lead call, one remediation, then at most
+    # MAX_LEAD_COMPLETION_PASSES completion passes before the Critic runs again.
+    assert lead_calls == 2 + MAX_LEAD_COMPLETION_PASSES
+    assert critic_calls == 2
+    assert reviewed_follow_up == [False, True]
 
 
 def test_runner_observes_lead_turn_limit_failure_and_marks_run_failed(

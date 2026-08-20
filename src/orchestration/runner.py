@@ -58,6 +58,7 @@ AuditorRunner = Callable[..., Awaitable[AuditResult]]
 LeadRunner = Callable[..., Awaitable[LeadResult]]
 CriticRunner = Callable[..., Awaitable[ValidationResult]]
 MAX_LEAD_FOLLOW_UP_CYCLES = 2
+MAX_LEAD_COMPLETION_PASSES = 2
 
 
 def _critic_allows_metric_definition_change(
@@ -356,40 +357,7 @@ class AnalysisRunner:
                 constrained = True
                 constraint = follow_up_constraint
 
-            completion_validation = None
-            if follow_up_constraint is None:
-                completion_candidate = self._candidate(
-                    objective,
-                    lead_result,
-                    require_visualization=self._objective_requests_visualization(
-                        objective
-                    ),
-                )
-                completion_validation = candidate_completeness_validation(
-                    completion_candidate,
-                    context=lead_context,
-                )
-            if completion_validation is not None:
-                completion_prompt = self._completion_prompt(
-                    objective,
-                    lead_result,
-                    completion_validation,
-                )
-                try:
-                    lead_result, completion_constraint = await run_lead_candidate(
-                        completion_prompt,
-                        allow_follow_up=False,
-                        prior_result=lead_result,
-                    )
-                    if completion_constraint is not None:
-                        constrained = True
-                        constraint = completion_constraint
-                except Exception as error:
-                    constrained = True
-                    constraint = constraint_from_exception(
-                        error,
-                        context="Lead completion pass",
-                    )
+            completion_allowed = follow_up_constraint is None
 
             critic_context, critic_agent = self._agent_context(
                 run_workspace,
@@ -397,6 +365,7 @@ class AnalysisRunner:
                 AgentRole.CRITIC,
             )
             critic_attempts = 0
+            completion_passes = 0
             available_critic_loops = (
                 ledger.budget.max_critic_loops - ledger.budget.critic_loops
             )
@@ -409,6 +378,45 @@ class AnalysisRunner:
                         objective
                     ),
                 )
+                # Deterministic completeness costs nothing to evaluate, but
+                # ``run_critic`` consumes a critic loop before short-circuiting
+                # on it. Remediation runs without follow-up continuation, so a
+                # candidate that re-raises one of these gates would otherwise
+                # spend the whole Critic budget without ever obtaining a model
+                # review. Resolve it with a bounded completion pass instead.
+                if (
+                    completion_allowed
+                    and completion_passes < MAX_LEAD_COMPLETION_PASSES
+                ):
+                    completion_validation = candidate_completeness_validation(
+                        candidate,
+                        context=lead_context,
+                    )
+                    if completion_validation is not None:
+                        completion_passes += 1
+                        try:
+                            (
+                                lead_result,
+                                completion_constraint,
+                            ) = await run_lead_candidate(
+                                self._completion_prompt(
+                                    objective,
+                                    lead_result,
+                                    completion_validation,
+                                ),
+                                allow_follow_up=False,
+                                prior_result=lead_result,
+                            )
+                            if completion_constraint is not None:
+                                constrained = True
+                                constraint = completion_constraint
+                            continue
+                        except Exception as error:
+                            constrained = True
+                            constraint = constraint_from_exception(
+                                error,
+                                context="Lead completion pass",
+                            )
                 active_agent = (critic_agent.name, AgentRole.CRITIC, objective)
                 active_agent_recorded = False
                 try:
@@ -893,7 +901,11 @@ class AnalysisRunner:
             "Critic explicitly identifies the metric definition as incorrect. If "
             "you compute a different valid estimand, retain it as a distinct "
             "comparison with its own definition_context. Reuse exact specialist "
-            "MetricComparison objects rather than reconstructing values from prose.\n\n"
+            "MetricComparison objects rather than reconstructing values from prose. "
+            "This is a bounded remediation with no further continuation cycle: "
+            "complete any materially useful follow-up inside this call and return "
+            "follow_up_analysis=false, recording a question the available data "
+            "cannot answer as an open question or caveat instead.\n\n"
             f"ORIGINAL_OBJECTIVE:\n{objective}\n\n"
             "BUSINESS_CONTEXT:\n"
             f"{business_context or 'Read the approved business definitions.'}\n\n"
