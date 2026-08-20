@@ -1,7 +1,7 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-20
-**Implementation:** Tasks 1–9, R1–R19, R20, R21, and R22 complete; R23–R25 open
+**Implementation:** Tasks 1–9, R1–R19, and R20–R23 complete; R24–R25 open
 
 **Remediation:** R13–R19 are all implemented. The reopened R6 deterministic
 preflight and benchmark-validity review were rerun at this revision. Fresh paid
@@ -12,8 +12,10 @@ evidence-bearing claims, one persistence boundary refuses unsupported completed
 audits, the Lead receives a bounded typed audit evidence catalog, and offline
 scoring enforces the same provenance boundary at catalog evaluator version 1.2.
 R22 adds one shared hypothesis-evidence rule, enforced when the transition is
-requested rather than after the final model response. R23–R25 remain open and
-R6 remains open until they close and its complete preflight is rerun.
+requested rather than after the final model response, and R23 adds one bounded,
+tool-less correction attempt for a strict-schema-valid response whose citations
+do not resolve. R24–R25 remain open and R6 remains open until they close and its
+complete preflight is rerun.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -120,7 +122,7 @@ dry-run—was rerun successfully at this revision. The benchmark-validity review
 is also complete. The failed multi-agent canary subsequently opened R20–R25, so
 Task 10 is blocked until those tasks and a fresh complete R6 preflight close.
 
-## Phase 2 Live-Canary Provenance Remediation: R20–R22 closed, R23–R25 open
+## Phase 2 Live-Canary Provenance Remediation: R20–R23 closed, R24–R25 open
 
 The 2026-08-20 provider-backed R6 run passed the single-agent canary but failed
 the multi-agent canary after valid strict output. The Data Auditor's successful
@@ -135,7 +137,7 @@ acceptance criteria.
 | R20 — Preserve typed audit provenance across architecture boundaries | P0 | Complete | Audit contract 2.0 gives table profiles, warnings, issues, and limitations typed `evidence_refs`; `persist_audit_result` canonicalizes them and refuses a non-blocked audit with missing, failed, ambiguous, or fabricated provenance; the Lead receives a bounded typed `AuditEvidenceCatalog` instead of raw audit JSON; persisted state is versioned `1.1` and the output-schema fingerprint forces a new manifest |
 | R21 — Enforce audit provenance in capability and offline scoring | P0 | Complete | `resolve_audit_claims` applies the executed-evidence boundary offline; the data-audit capability needs supported material claims, not a completed status; every required issue ID needs its own `required_provenance` check; a clean audit must show an executed check; catalog evaluator version advanced to `1.2` |
 | R22 — Align hypothesis evidence contracts and validate state transitions | P1 | Complete | `hypothesis_requires_evidence` is the one shared predicate for the contract, state tool, final Lead validation, and offline evaluation; `record_hypothesis` refuses an unsupported resolution before touching the ledger and returns an actionable typed error; open hypotheses stay usable; the append-only history is checked offline |
-| R23 — Add bounded correction for semantic provenance failures | P1 | Open | At most one explicit Lead correction using existing canonical evidence; no silent rewrite or specialist/tool rerun; usage and outcomes retained |
+| R23 — Add bounded correction for semantic provenance failures | P1 | Complete | `evidence_correction_attempts` is validated `ge=0, le=1`; the correction agent has no tools and one turn; the request names the invalid field IDs and a bounded citable-evidence catalog; the corrected response passes the identical persistence boundary; both calls, their usage, and their outcomes bind to the active attempt; a second invalid response terminates. Both architectures get the same allowance |
 | R24 — Make citation resolution lossless and consistent | P1 | Open | Unresolved citations remain visible; every material citation resolves; runtime, Critic, evaluator, and rescore agree on mixed/aliased references |
 | R25 — Classify provenance failures and close the live regression gap | P2 | Open | Named provenance taxonomy; production-shaped deterministic audit-to-Lead fixture; complete post-R25 R6 rerun and both live canaries pass |
 
@@ -653,6 +655,58 @@ schema, `output_schema_fingerprint()` moved again — from
 before paid execution. `tests/test_hypothesis_transitions.py` holds the 51
 regressions.
 
+### 17. One bounded correction for a semantic provenance failure (R23)
+
+The failed canary returned well-formed JSON whose only defect was one citation.
+That is not a malformed model response; it is a valid document making an
+unsupported claim, and terminating the whole run over it produced no analytical
+observation at the cost of every token the run had already spent. Rerunning from
+the start would have been worse — resampling until a favourable output appears
+is exactly what the provenance gate exists to prevent.
+
+A strict-schema-valid response whose citations do not resolve now gets one
+correction attempt, and the bound is structural rather than conventional:
+`AgentRunConfig.evidence_correction_attempts` is validated `ge=0, le=1`, and the
+correction agent runs with `max_turns=1`.
+
+That agent has no tools at all — no SQL, no Python, no specialist delegation, no
+Critic. It reuses the run's existing executions and spends no additional
+resource budget; the deterministic regression asserts every budget counter and
+the tool-event count are unchanged across a corrected run. Its only capability
+is to re-emit the same typed result.
+
+The request is specific rather than a blind retry. `LeadEvidenceError` now
+carries typed `invalid_fields`, and the prompt contains those field IDs, the
+validator's message, the previous output verbatim, and a bounded
+`EvidenceCorrectionCatalog`: executed tool-event IDs and query/script paths,
+persisted specialist findings with their canonical references, and the audit
+evidence catalog from R20. Every entry derives from the run's own executed
+evidence — no scenario ground truth, no evaluator rules, no orchestration
+internals.
+
+The application never edits a citation. The corrected response goes through the
+identical validating persistence boundary that rejected the first one; if it
+fails again, that failure is raised and the run ends. Both model calls stay
+observable: the first response's rejection is a failed agent event carrying the
+validation message, the correction is its own event with real start and
+completion times, both bind to the active attempt, and usage from both
+accumulates through the normal response-boundary accounting.
+
+Two deliberate scope decisions are worth stating. First, the single-agent
+baseline gets the same allowance through `run_generalist`. R23's wording names
+the Lead, but giving one architecture a second attempt at valid provenance would
+hand it an advantage the benchmark would then measure as an architecture
+difference. Second, `AuditEvidenceError` stays terminal and is not corrected:
+the audit is a preflight the rest of the run builds on, and R20 already refuses
+to persist it unsupported.
+
+The configured allowance is frozen into the manifest's
+`run_configuration.parameters`, so it is covered by the declaration digest and
+changing it forces a new manifest version. No output schema changed, so the
+output-schema fingerprint is unchanged from R22. Decision record
+[0011](decisions/0011-bounded-evidence-correction.md) holds the rationale and
+`tests/test_evidence_correction.py` holds the 17 regressions.
+
 ## Verification completed
 
 ### Reopened R6 preflight and validity review, rerun at this revision
@@ -788,6 +842,36 @@ the same 7 failures it had after R21, because its hypotheses and history all
 resolve.
 
 This is deterministic verification of R22 only. The complete R6 preflight and
+both live canaries remain R25's work.
+
+### Deterministic verification at the R23 revision
+
+```text
+633 passed, 16 deselected
+```
+
+Ruff lint reported `All checks passed!` and format reported 157 files already
+formatted. `tests/test_evidence_correction.py` adds 17 regressions: the
+allowance is one and cannot be configured higher; the correction agent has no
+tools, no handoffs, and one turn; the prompt names the invalid field IDs and
+carries the executed references, specialist findings, and audit claims; the
+catalog is bounded and exposes no evaluator or internal state; a corrected
+response succeeds after exactly two calls with no budget or tool-event change;
+both calls and their usage are recorded against the active attempt; a second
+invalid response raises the provenance error with nothing persisted; a zero
+allowance skips correction entirely; a valid first response spends no extra
+call; the correction is held to the same boundary, including a failed-execution
+reference; the single-agent baseline behaves identically in both the succeeding
+and terminating directions; and the whole thing works through the real
+`AnalysisRunner` lifecycle, which re-validates the candidate a second time.
+
+The 60-cell dry-run still produces 60 unique cells and now freezes
+`evidence_correction_attempts: 1` in the manifest declaration. Retained
+artifacts are unaffected — 10 manifests, 4 reports, and 18 ledger states still
+load — and the output-schema fingerprint is unchanged, because R23 altered run
+configuration rather than any output contract.
+
+This is deterministic verification of R23 only. The complete R6 preflight and
 both live canaries remain R25's work.
 
 ### Scenario-document integrity is now a code invariant (R6)
@@ -976,19 +1060,20 @@ Before another paid attempt:
    checks, failure-path accounting, lifecycle and taxonomy fixtures,
    scenario-document integrity, Docker integrations, Ruff, retained-artifact
    rescoring, all 60 dry-run cells, and seven new validity regressions.
-3. R20, R21, and R22 are implemented — audit contract 2.0, one validating
-   persistence boundary, the Lead's bounded `AuditEvidenceCatalog`,
-   persisted-state version `1.1`, offline enforcement of the same provenance
-   boundary at catalog evaluator version `1.2`, and one shared
-   hypothesis-evidence rule enforced at the transition — with their regressions
-   in `tests/test_audit_provenance.py`,
-   `tests/test_audit_provenance_scoring.py`, and
-   `tests/test_hypothesis_transitions.py`, and their rationale in decision
-   records 0009 and 0010. Implement R23–R25 in order, preserving R2/R7 and
+3. R20–R23 are implemented — audit contract 2.0, one validating persistence
+   boundary, the Lead's bounded `AuditEvidenceCatalog`, persisted-state version
+   `1.1`, offline enforcement of the same provenance boundary at catalog
+   evaluator version `1.2`, one shared hypothesis-evidence rule enforced at the
+   transition, and one bounded tool-less correction attempt available to both
+   architectures — with their regressions in
+   `tests/test_audit_provenance.py`, `tests/test_audit_provenance_scoring.py`,
+   `tests/test_hypothesis_transitions.py`, and
+   `tests/test_evidence_correction.py`, and their rationale in decision records
+   0009, 0010, and 0011. Implement R24–R25 in order, preserving R2/R7 and
    continuing to version failure taxonomy and output fingerprints deliberately.
-   The audit-contract, hypothesis-contract, and evaluator-version changes
-   already invalidate any existing pilot estimate, so a new manifest version is
-   required regardless.
+   The audit-contract, hypothesis-contract, evaluator-version, and
+   correction-allowance changes already invalidate any existing pilot estimate,
+   so a new manifest version is required regardless.
 4. Rerun the complete R6 preflight from the new revision: full deterministic
    suite, Ruff, Docker integrations, architecture-equivalence and adversarial
    provenance fixtures, retained-artifact checks, 60-cell dry-run, and both

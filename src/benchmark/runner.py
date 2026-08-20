@@ -24,6 +24,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from agents.runtime import DEFAULT_EVIDENCE_CORRECTION_ATTEMPTS
 from benchmark.aggregation import AGGREGATION_VERSION, aggregate_manifest
 from evaluation.contracts import (
     BenchmarkManifest,
@@ -845,6 +846,10 @@ class BenchmarkRunner:
             "benchmark_runner_version": BENCHMARK_RUNNER_VERSION,
             "cost_pilot_required": True,
             "workspace_base_dir": str(self.workspace_base_dir),
+            # The bounded evidence-correction allowance changes how many model
+            # calls a cell can make, so it is frozen in the declaration digest
+            # and changing it requires a new manifest version.
+            "evidence_correction_attempts": DEFAULT_EVIDENCE_CORRECTION_ATTEMPTS,
             "cell_run_ids": cell_ids,
         }
         if repetition_justification:

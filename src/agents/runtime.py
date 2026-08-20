@@ -140,6 +140,15 @@ def allowed_tools_for_role(role: AgentRole | str) -> frozenset[str]:
     return _TOOL_PERMISSIONS[AgentRole(role)]
 
 
+# A strict-schema-valid candidate whose citations do not resolve may receive one
+# explicit correction attempt. The upper bound lives beside the configuration
+# field that validates it, so no caller can turn a bounded correction into
+# repeated resampling, and the benchmark can freeze the configured value in a
+# manifest without importing the correction machinery.
+DEFAULT_EVIDENCE_CORRECTION_ATTEMPTS = 1
+MAX_EVIDENCE_CORRECTION_ATTEMPTS = 1
+
+
 class AgentRunConfig(BaseModel):
     """Model and bounded-output configuration for one agent run."""
 
@@ -156,6 +165,11 @@ class AgentRunConfig(BaseModel):
     max_document_chars: int = Field(default=16_000, ge=256, le=1_000_000)
     agent_turn_limits: dict[AgentRole, int] = Field(
         default_factory=lambda: dict(DEFAULT_AGENT_TURN_LIMITS)
+    )
+    evidence_correction_attempts: int = Field(
+        default=DEFAULT_EVIDENCE_CORRECTION_ATTEMPTS,
+        ge=0,
+        le=MAX_EVIDENCE_CORRECTION_ATTEMPTS,
     )
 
     @field_validator("agent_turn_limits", mode="before")

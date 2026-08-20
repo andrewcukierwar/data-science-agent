@@ -17,6 +17,7 @@ from agents.audit_evidence import (
     build_audit_evidence_catalog,
     persist_audit_result,
 )
+from agents.correction import run_bounded_evidence_correction
 from agents.evidence import executed_references, has_source_lineage
 from agents.hypothesis_state import (
     HypothesisEvidenceError,
@@ -244,7 +245,17 @@ def record_open_question(
 
 
 class LeadEvidenceError(ValueError):
-    """Raised when a Lead result cites evidence that was not executed."""
+    """Raised when a Lead result cites evidence that was not executed.
+
+    The response satisfied the strict output schema, so this is a semantic
+    contract failure rather than a malformed model response. ``invalid_fields``
+    names exactly which output fields failed, which is what a bounded
+    correction attempt needs in order to be specific rather than a blind retry.
+    """
+
+    def __init__(self, message: str, invalid_fields: tuple[str, ...] = ()) -> None:
+        self.invalid_fields = invalid_fields
+        super().__init__(message)
 
 
 class _NestedSpecialistHooks(ModelUsageHooks):
@@ -841,7 +852,8 @@ def validate_lead_result(
             *[f"source_lineage:{item}" for item in invalid_lineage],
         ]
         raise LeadEvidenceError(
-            "lead outputs cite no executed evidence: " + ", ".join(details)
+            "lead outputs cite no executed evidence: " + ", ".join(details),
+            tuple(details),
         )
     return result
 
@@ -963,7 +975,24 @@ async def run_lead(
         LeadResult,
         agent_name=selected_agent.name,
     )
-    return _persist_result(output, context)
+    try:
+        return _persist_result(output, context)
+    except LeadEvidenceError as error:
+        # Strict output succeeded and only the citations are wrong, so this is a
+        # semantic contract failure the model can repair from evidence that
+        # already exists. Exactly one bounded attempt, with no new execution.
+        return await run_bounded_evidence_correction(
+            context,
+            output,
+            error,
+            output_type=LeadResult,
+            persist=lambda corrected: _persist_result(corrected, context),
+            agent_name=selected_agent.name,
+            model=str(selected_agent.model)
+            if selected_agent.model is not None
+            else None,
+            audit_evidence=audit_evidence,
+        )
 
 
 __all__ = [

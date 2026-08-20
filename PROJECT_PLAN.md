@@ -2,19 +2,20 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-20 — Phase 2 Tasks 1–9, R1–R19, R20, R21, and R22 are
+**Revision:** 2026-08-20 — Phase 2 Tasks 1–9, R1–R19, and R20–R23 are
 implemented.
 The deterministic portion of the reopened R6 gate and its benchmark-validity
 review are complete. Fresh paid canaries were run: the single-agent architecture
 passed, while the multi-agent architecture failed its executed-evidence gate.
-The resulting audit/Lead provenance gaps are tracked as R20–R25. R20, R21, and
-R22 are now closed: audit contract 2.0 makes every material audit claim
+The resulting audit/Lead provenance gaps are tracked as R20–R25. R20–R23 are
+now closed: audit contract 2.0 makes every material audit claim
 evidence-bearing, one persistence boundary refuses an unsupported completed
 audit, the Lead receives a bounded typed audit evidence catalog, offline scoring
-enforces the same provenance boundary at catalog evaluator version 1.2, and one
+enforces the same provenance boundary at catalog evaluator version 1.2, one
 shared hypothesis-evidence rule is enforced when the state transition is
-requested. R23–R25 remain open. Task 10 remains blocked before the paid matrix;
-no benchmark result is published.
+requested, and a strict-schema-valid response whose citations do not resolve
+gets one bounded tool-less correction attempt. R24–R25 remain open. Task 10
+remains blocked before the paid matrix; no benchmark result is published.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1477,9 +1478,9 @@ bound to the frozen manifest. The post-R19 deterministic preflight and
 benchmark-validity review are complete. Fresh paid canaries ran on 2026-08-20:
 the single-agent architecture passed, while the multi-agent architecture failed
 because Lead hypothesis `H2` cited `completed_data_audit` rather than executed
-evidence. A focused review opened R20–R25. R20, R21,
-and R22 are implemented; R23–R25 remain open, and R6 must be rerun after all of
-them and therefore remains open.
+evidence. A focused review opened R20–R25. R20–R23
+are implemented; R24–R25 remain open, and R6 must be rerun after all of them and
+therefore remains open.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
 rescores and aggregate reports are retained under
@@ -1499,7 +1500,7 @@ constraints are recorded in `docs/phase2-status.md`.
 | 7 | Complete | Bounded generalist architecture sharing runtime, provenance, tools, and report contracts without specialist delegation |
 | 8 | Complete | Immutable resumable matrix runner, paid opt-in, cost pilot gate, failure isolation, and offline rescoring |
 | 9 | Complete | Deterministic denominator-preserving aggregation, uncertainty, paired comparisons, cost/latency, and failure reporting |
-| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R23–R25 and a fresh final R6 preflight must close before a new 60-cell matrix is started |
+| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R24–R25 and a fresh final R6 preflight must close before a new 60-cell matrix is started |
 
 ### Phase 2 implementation order
 
@@ -1745,9 +1746,9 @@ Status: the deterministic preflight and benchmark-validity review were rerun at
 this revision after R13–R19. The fresh paid single-agent canary passed on
 2026-08-20, but the multi-agent canary failed the production evidence gate. R20
 and R21 have since closed the audit-provenance half of that failure at runtime
-and offline, and R22 closed the hypothesis-transition half. R23–R25 must close
-before the complete R6 preflight and both live canaries are rerun, so R6
-remains open.
+and offline, R22 closed the hypothesis-transition half, and R23 added the one
+bounded correction attempt. R24–R25 must close before the complete R6 preflight
+and both live canaries are rerun, so R6 remains open.
 
 Scenario-document integrity is now enforced in code rather than only in a test.
 The shared generated document is inherited unchanged by the clean baseline and
@@ -2303,8 +2304,8 @@ references, and resolved hypothesis `H2` using the invented reference
 
 R20–R25 close the cross-agent provenance contract rather than weakening that
 gate or retrying until a favorable model output appears. All six tasks must be
-implemented before another complete R6 preflight or Task 10 manifest. R20, R21,
-and R22 are implemented; R23–R25 remain open.
+implemented before another complete R6 preflight or Task 10 manifest. R20–R23
+are implemented; R24–R25 remain open.
 
 #### R20 — Preserve typed audit provenance across architecture boundaries [P0] — Implemented
 
@@ -2470,7 +2471,7 @@ is required before paid execution. Decision record
 `docs/decisions/0010-hypothesis-evidence-rule.md` holds the rationale and
 `tests/test_hypothesis_transitions.py` holds the regressions.
 
-#### R23 — Add bounded correction for semantic provenance failures [P1]
+#### R23 — Add bounded correction for semantic provenance failures [P1] — Implemented
 
 Treat a strict-schema-valid Lead response with invalid evidence references as a
 bounded semantic contract failure that may receive one explicit correction
@@ -2490,6 +2491,39 @@ Acceptance:
   attributable to the active attempt;
 - a second invalid response terminates with an explicit provenance failure; no
   output is silently rewritten or repeatedly retried.
+
+Implemented. `AgentRunConfig.evidence_correction_attempts` is validated
+`ge=0, le=1` and the correction agent runs with `max_turns=1`, so the bound is
+structural rather than conventional. That agent has no tools at all — no SQL, no
+Python, no specialist delegation, no Critic — so it reuses the run's existing
+executions and spends no additional resource budget; the regression asserts
+every budget counter and the tool-event count are unchanged across a corrected
+run.
+
+`LeadEvidenceError` now carries typed `invalid_fields`, and the correction
+request contains those field IDs, the validator's message, the previous output
+verbatim, and a bounded `EvidenceCorrectionCatalog` of executed tool-event IDs
+and query/script paths, persisted specialist findings with their canonical
+references, and the R20 audit evidence catalog. Every entry derives from the
+run's own executed evidence; no scenario ground truth, evaluator rule, or
+orchestration internal reaches the prompt.
+
+The application never edits a citation. The corrected response passes through
+the identical validating persistence boundary that rejected the first one, and a
+second invalid response raises the provenance failure and ends the run. Both
+model calls stay observable as agent events with real timing, bound to the
+active attempt, with usage from both accumulating through the normal
+response-boundary accounting.
+
+Two deliberate scope decisions: the single-agent baseline gets the same
+allowance through `run_generalist`, because giving one architecture a second
+attempt at valid provenance would be measured by the benchmark as an
+architecture difference; and `AuditEvidenceError` stays terminal, since the
+audit is a preflight the rest of the run builds on. The configured allowance is
+frozen into the manifest's `run_configuration.parameters` and therefore its
+declaration digest. Decision record
+`docs/decisions/0011-bounded-evidence-correction.md` holds the rationale and
+`tests/test_evidence_correction.py` holds the regressions.
 
 #### R24 — Make citation resolution lossless and consistent [P1]
 

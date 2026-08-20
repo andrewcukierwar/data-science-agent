@@ -951,8 +951,14 @@ class AnalysisLedger(ToolEventLedger):
         output_type: str | None = None,
         error: str | None = None,
         attempt_id: str | None = None,
+        started_at: datetime | None = None,
     ) -> AgentEvent:
-        """Create and persist a concise agent invocation trace entry."""
+        """Create and persist a concise agent invocation trace entry.
+
+        ``started_at`` defaults to the completion time for callers that only
+        record the fact of an invocation. Callers that know when the call began
+        pass it so the event carries real latency.
+        """
 
         completed_at = datetime.now(UTC)
         event = AgentEvent(
@@ -961,7 +967,7 @@ class AnalysisLedger(ToolEventLedger):
             agent_name=agent_name,
             agent_role=agent_role,
             status=status,
-            started_at=completed_at,
+            started_at=started_at or completed_at,
             completed_at=completed_at,
             model=model,
             objective=objective,

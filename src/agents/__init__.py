@@ -62,6 +62,17 @@ from agents.auditor import (  # noqa: E402
     run_auditor,
     run_data_auditor,
 )
+from agents.correction import (  # noqa: E402
+    CORRECTION_TURN_LIMIT,
+    EVIDENCE_CORRECTION_CONTRACT_VERSION,
+    EVIDENCE_CORRECTION_INSTRUCTIONS,
+    EvidenceCorrectionCatalog,
+    FindingEvidenceEntry,
+    build_correction_prompt,
+    build_evidence_correction_agent,
+    build_evidence_correction_catalog,
+    run_bounded_evidence_correction,
+)
 from agents.critic import (  # noqa: E402
     CRITIC_INSTRUCTIONS,
     CRITIC_OBJECTIVE,
@@ -106,6 +117,8 @@ from agents.lead import (  # noqa: E402
 )
 from agents.runtime import (  # noqa: E402
     DEFAULT_AGENT_TURN_LIMITS,
+    DEFAULT_EVIDENCE_CORRECTION_ATTEMPTS,
+    MAX_EVIDENCE_CORRECTION_ATTEMPTS,
     AgentRole,
     AgentRunConfig,
     AgentRunContext,
@@ -145,6 +158,17 @@ from agents.tools import (  # noqa: E402
 
 __all__ = [
     "AUDIT_EVIDENCE_CATALOG_VERSION",
+    "CORRECTION_TURN_LIMIT",
+    "DEFAULT_EVIDENCE_CORRECTION_ATTEMPTS",
+    "EVIDENCE_CORRECTION_CONTRACT_VERSION",
+    "EVIDENCE_CORRECTION_INSTRUCTIONS",
+    "MAX_EVIDENCE_CORRECTION_ATTEMPTS",
+    "EvidenceCorrectionCatalog",
+    "FindingEvidenceEntry",
+    "build_correction_prompt",
+    "build_evidence_correction_agent",
+    "build_evidence_correction_catalog",
+    "run_bounded_evidence_correction",
     "HypothesisEvidenceError",
     "canonical_hypothesis_evidence",
     "hypothesis_has_executed_evidence",

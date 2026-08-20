@@ -10,9 +10,11 @@ five-agent architecture.
 from __future__ import annotations
 
 from agents import Agent
-from agents.audit_evidence import persist_audit_result
+from agents.audit_evidence import build_audit_evidence_catalog, persist_audit_result
+from agents.correction import run_bounded_evidence_correction
 from agents.critic import persist_validation_result
 from agents.lead import (
+    LeadEvidenceError,
     persist_lead_result,
     record_hypothesis,
     record_open_question,
@@ -193,7 +195,25 @@ async def run_generalist(
         GeneralistResult,
         agent_name=selected_agent.name,
     )
-    return persist_generalist_result(output, context)
+    try:
+        return persist_generalist_result(output, context)
+    except LeadEvidenceError as error:
+        # The single-agent baseline gets the same bounded correction the Lead
+        # gets, for the same failure. Giving it to only one architecture would
+        # hand that architecture an extra attempt at valid provenance and make
+        # the comparison unfair.
+        return await run_bounded_evidence_correction(
+            context,
+            output,
+            error,
+            output_type=GeneralistResult,
+            persist=lambda corrected: persist_generalist_result(corrected, context),
+            agent_name=selected_agent.name,
+            model=str(selected_agent.model)
+            if selected_agent.model is not None
+            else None,
+            audit_evidence=build_audit_evidence_catalog(output.audit, context.ledger),
+        )
 
 
 __all__ = [
