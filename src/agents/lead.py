@@ -523,13 +523,24 @@ def _reuse_specialist_metric_comparisons(
     for comparison in comparisons:
         normalized = normalize_metric_comparison(comparison)
         exact = specialist_index.get(metric_comparison_identity(normalized))
-        if exact is not None:
+        if exact is not None and set(normalized.evidence_refs).intersection(
+            exact.evidence_refs
+        ):
             reused.append(exact)
             continue
         scoped = specialist_scope_index.get(
             metric_comparison_scope_identity(normalized), []
         )
-        reused.append(scoped[0] if len(scoped) == 1 else normalized)
+        cited_scoped = [
+            item
+            for item in scoped
+            if set(normalized.evidence_refs).intersection(item.evidence_refs)
+        ]
+        # Scope-only reuse exists to recover a specialist's richer typed
+        # definition context when Lead cites that same execution.  Replacing a
+        # Lead comparison with the only same-scope value from an unrelated
+        # execution silently changes both the measurement and its provenance.
+        reused.append(cited_scoped[0] if len(cited_scoped) == 1 else normalized)
     for finding in findings or []:
         if finding.metric is None:
             continue

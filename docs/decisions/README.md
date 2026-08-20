@@ -21,6 +21,7 @@ credentials, or evaluator-only expected values.
 | [0012](0012-single-citation-resolution-contract.md) | One lossless citation-resolution contract shared by every provenance boundary | Accepted |
 | [0013](0013-provenance-failure-taxonomy.md) | Semantic citation failures are a named operational outcome, not `other` | Accepted |
 | [0014](0014-final-r6-live-contract-stabilization.md) | Final live-schema, provenance, and objective-driven visualization contracts that close R6 | Accepted |
+| [0015](0015-evidence-safe-metric-remediation.md) | Evidence-bound specialist metric reuse and canonical metric-definition remediation | Accepted |
 
 The chronological failure history, present run status, operational commands,
 and remaining risks are in [Phase 1 lessons](../phase1-lessons.md).

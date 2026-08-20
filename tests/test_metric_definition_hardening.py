@@ -15,7 +15,7 @@ from agents.critic import (
     validate_candidate_evidence_provenance,
 )
 from agents.evidence import executed_references
-from agents.lead import persist_lead_result
+from agents.lead import _reuse_specialist_metric_comparisons, persist_lead_result
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
 from schemas.audit import AuditResult, AuditStatus
@@ -26,6 +26,7 @@ from schemas.metrics import (
     MetricDefinitionContext,
     metric_comparison_identity,
     metric_comparison_scope_identity,
+    normalize_metric_key,
 )
 from schemas.run_state import (
     ArtifactKind,
@@ -166,6 +167,41 @@ def test_equivalent_metric_aliases_share_the_corrected_identity(
     assert len(context.ledger.metric_comparisons) == 1
     assert context.ledger.metric_comparisons[0].metric_key == "marketing_spend"
     assert context.ledger.metric_comparisons[0].value == 0.07
+
+
+def test_overall_cac_aliases_the_generic_cac_measure() -> None:
+    assert normalize_metric_key("overall_cac", {}) == "cac"
+
+
+def test_scope_fallback_never_substitutes_unrelated_specialist_evidence(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path, AgentRole.LEAD)
+    stale = _comparison(
+        metric_key="cac",
+        value=0.0699,
+        evidence_ref="working/queries/stale.sql",
+    )
+    corrected = _comparison(
+        metric_key="overall_cac",
+        value=0.0426,
+        evidence_ref="working/scripts/corrected.py",
+    )
+    context.ledger.record_specialist_result(
+        "analyst",
+        SpecialistResult(objective="Initial CAC.", metric_comparisons=[stale]),
+    )
+
+    reused = _reuse_specialist_metric_comparisons([corrected], context.ledger)
+
+    assert reused == [
+        corrected.model_copy(
+            update={
+                "metric_key": "cac",
+                "unit": "relative_change_fraction",
+            }
+        )
+    ]
 
 
 def test_remediation_preserves_original_estimand_and_keeps_new_scope_distinct(

@@ -174,6 +174,7 @@ _METRIC_ALIASES = {
     "spend": "marketing_spend",
     "marketing": "marketing_spend",
     "customer_acquisition_cost": "cac",
+    "overall_cac": "cac",
     "new_customers": "acquired_customers",
     "customer_count": "acquired_customers",
     "acquired_customer_count": "acquired_customers",

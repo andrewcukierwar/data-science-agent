@@ -59,6 +59,18 @@ CriticRunner = Callable[..., Awaitable[ValidationResult]]
 MAX_LEAD_FOLLOW_UP_CYCLES = 2
 
 
+def _critic_allows_metric_definition_change(
+    validation: ValidationResult,
+) -> bool:
+    """Return whether Critic explicitly requested an estimand correction."""
+
+    return any(
+        (issue.category or "").startswith("metric_definition")
+        or issue.category == "definition_error"
+        for issue in validation.issues
+    )
+
+
 @dataclass(slots=True)
 class AnalysisRunResult:
     """Typed application result containing the persisted run products."""
@@ -469,10 +481,8 @@ class AnalysisRunner:
                         remediation_prompt,
                         allow_follow_up=False,
                         prior_result=lead_result,
-                        allow_definition_change=any(
-                            issue.category
-                            in {"metric_definition_incorrect", "definition_error"}
-                            for issue in validation_result.issues
+                        allow_definition_change=(
+                            _critic_allows_metric_definition_change(validation_result)
                         ),
                     )
                     lead_result = remediated_lead_result

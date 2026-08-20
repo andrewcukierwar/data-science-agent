@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from agents import MaxTurnsExceeded
 from agents.runtime import AgentRole
 from orchestration.ledger import AnalysisLedger
-from orchestration.runner import AnalysisRunner
+from orchestration.runner import AnalysisRunner, _critic_allows_metric_definition_change
 from schemas.audit import AuditResult, AuditStatus
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.lead import LeadResult
@@ -28,6 +28,42 @@ from schemas.validation import (
 from tests.conftest import evidence_bearing_audit
 from tools.artifacts import ArtifactManager
 from tools.workspace import WorkspaceManager
+
+
+def test_metric_definition_consistency_issue_allows_requested_correction() -> None:
+    validation = ValidationResult(
+        status=ValidationStatus.REVISE,
+        issues=[
+            ValidationIssue(
+                id="V1",
+                severity=ValidationSeverity.HIGH,
+                category="metric_definition_consistency",
+                message="The denominator is inconsistent with the definition.",
+                recommendation="Use the documented denominator.",
+            )
+        ],
+        summary="Correct the metric definition.",
+    )
+
+    assert _critic_allows_metric_definition_change(validation) is True
+
+
+def test_non_definition_issue_preserves_the_existing_estimand() -> None:
+    validation = ValidationResult(
+        status=ValidationStatus.REVISE,
+        issues=[
+            ValidationIssue(
+                id="V1",
+                severity=ValidationSeverity.MEDIUM,
+                category="unsupported_claim",
+                message="The claim has no supporting output.",
+                recommendation="Remove or support the claim.",
+            )
+        ],
+        summary="Repair the unsupported claim.",
+    )
+
+    assert _critic_allows_metric_definition_change(validation) is False
 
 
 def test_visualization_requirement_is_explicit_and_word_bounded() -> None:
