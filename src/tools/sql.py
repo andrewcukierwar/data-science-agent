@@ -77,6 +77,10 @@ class RelationInspectionResult(BaseModel):
     relation_limit: int = Field(ge=1)
     truncated: bool = False
     row_counts_included: bool = False
+    # Exact provenance for the metadata below. An agent that states a row
+    # count, column, or date-coverage fact from this response can cite this
+    # reference instead of having no way to prove where the fact came from.
+    tool_event_id: str | None = None
 
 
 class SQLExecutionLedger(ToolEventLedger, Protocol):
@@ -143,6 +147,11 @@ class DuckDBExecutionService:
             )
             raise
 
+        if self.ledger is None:
+            # Without a ledger the event is never persisted, so advertising a
+            # reference for it would hand the model unresolvable provenance.
+            return result
+        result = result.model_copy(update={"tool_event_id": event_id})
         self._emit_event(
             ToolEvent(
                 id=event_id,

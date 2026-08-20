@@ -17,7 +17,13 @@ from agents import (
 )
 from agents.model_usage import Runner
 from orchestration.ledger import AnalysisLedger
-from schemas.audit import AuditResult, AuditStatus, DateRange, TableAudit
+from schemas.audit import (
+    AuditObservation,
+    AuditResult,
+    AuditStatus,
+    DateRange,
+    TableAudit,
+)
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService
@@ -100,6 +106,9 @@ def test_data_auditor_persists_typed_result_in_ledger(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
+    inspection = context.sql_service.inspect_relations()
+    evidence_ref = inspection.tool_event_id
+    assert evidence_ref is not None
     audited_at = datetime(2026, 1, 1, tzinfo=UTC)
     audit = AuditResult(
         status=AuditStatus.COMPLETE,
@@ -111,6 +120,13 @@ def test_data_auditor_persists_typed_result_in_ledger(
                     start=date(2025, 1, 1),
                     end=date(2025, 1, 10),
                 ),
+                evidence_refs=[evidence_ref],
+            )
+        ],
+        limitations=[
+            AuditObservation(
+                statement="No sessions table is registered for this run.",
+                evidence_refs=[evidence_ref],
             )
         ],
         audited_at=audited_at,

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agents import Agent, MaxTurnsExceeded
+from agents.audit_evidence import persist_audit_result
 from agents.auditor import build_data_auditor_agent, run_data_auditor
 from agents.critic import (
     build_critic_agent,
@@ -214,7 +215,9 @@ class AnalysisRunner:
             active_agent_recorded = True
             # Keep this explicit even though the existing specialist runner also
             # persists it; it makes the application lifecycle invariant clear.
-            ledger.record_audit(audit)
+            # Persisting through the shared boundary also means an injected
+            # auditor runner cannot bypass audit-provenance validation.
+            audit = persist_audit_result(audit, audit_context)
             if audit.status is AuditStatus.BLOCKED:
                 raise BlockedAuditError("mandatory data audit was blocked")
 

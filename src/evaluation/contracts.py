@@ -35,7 +35,7 @@ from schemas.statistics import StatisticalExpectation
 
 EVALUATION_CONTRACT_VERSION = "1.0"
 LEGACY_WORKSPACE_VERSION = "legacy"
-SUPPORTED_WORKSPACE_VERSIONS = frozenset({LEGACY_WORKSPACE_VERSION, "1.0"})
+SUPPORTED_WORKSPACE_VERSIONS = frozenset({LEGACY_WORKSPACE_VERSION, "1.0", "1.1"})
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
 VersionString = Annotated[str, Field(pattern=r"^\d+\.\d+$", min_length=3)]

@@ -1,8 +1,8 @@
 # Architecture Decision Log
 
-This directory records the non-obvious Phase 0 and Phase 1 decisions that must
-survive beyond an individual development session. The records describe durable
-contracts and their rationale; they do not contain hidden model reasoning,
+This directory records the non-obvious Phase 0, Phase 1, and Phase 2 decisions
+that must survive beyond an individual development session. The records describe
+durable contracts and their rationale; they do not contain hidden model reasoning,
 credentials, or evaluator-only expected values.
 
 | Record | Decision | Status |
@@ -15,6 +15,7 @@ credentials, or evaluator-only expected values.
 | [0006](0006-persisted-workspace-is-the-acceptance-source.md) | Persisted run state is the source for offline canonical acceptance | Accepted |
 | [0007](0007-model-configuration-usage-and-cost.md) | Central model configuration, usage, and reproducible cost estimation | Accepted |
 | [0008](0008-deterministic-ci-and-opt-in-live-runs.md) | Deterministic CI is separate from paid live-agent acceptance | Accepted |
+| [0009](0009-audit-provenance-across-architectures.md) | Evidence-bearing audit claims and a bounded audit evidence catalog for the Lead | Accepted |
 
 The chronological failure history, present run status, operational commands,
 and remaining risks are in [Phase 1 lessons](../phase1-lessons.md).

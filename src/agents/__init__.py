@@ -38,6 +38,19 @@ from agents.analyst import (  # noqa: E402
     run_analyst,
     validate_analyst_result,
 )
+from agents.audit_evidence import (  # noqa: E402
+    AUDIT_EVIDENCE_CATALOG_VERSION,
+    AuditClaim,
+    AuditClaimKind,
+    AuditEvidenceCatalog,
+    AuditEvidenceEntry,
+    AuditEvidenceError,
+    audit_claims,
+    build_audit_evidence_catalog,
+    canonicalize_audit_result,
+    persist_audit_result,
+    validate_audit_provenance,
+)
 from agents.auditor import (  # noqa: E402
     AUDITOR_INSTRUCTIONS,
     AUDITOR_OBJECTIVE,
@@ -125,6 +138,17 @@ from agents.tools import (  # noqa: E402
 )
 
 __all__ = [
+    "AUDIT_EVIDENCE_CATALOG_VERSION",
+    "AuditClaim",
+    "AuditClaimKind",
+    "AuditEvidenceCatalog",
+    "AuditEvidenceEntry",
+    "AuditEvidenceError",
+    "audit_claims",
+    "build_audit_evidence_catalog",
+    "canonicalize_audit_result",
+    "persist_audit_result",
+    "validate_audit_provenance",
     "AgentRole",
     "Agent",
     "AgentRunConfig",

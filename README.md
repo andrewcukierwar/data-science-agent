@@ -14,8 +14,9 @@ accurate failure taxonomy), and R19 (stratified pilot-set calibration) are all
 complete. The deterministic R6 rerun and benchmark-validity review are also
 complete. On 2026-08-20 the fresh single-agent canary passed, but the
 multi-agent canary failed its executed-evidence gate. Remediations R20–R25 now
-track the resulting audit/Lead provenance gaps. The paid matrix remains blocked,
-the final R6 gate is open, and no complete benchmark result is claimed. See
+track the resulting audit/Lead provenance gaps; R20 is complete and R21–R25
+remain open. The paid matrix remains blocked, the final R6 gate is open, and no
+complete benchmark result is claimed. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, retained run artifacts, and the blocked live-run report.
 
@@ -41,9 +42,10 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **508 passed and 16 live tests
+deterministic verification completed with **535 passed and 16 live tests
 deselected**; Ruff lint and formatting checks passed, and the 10 × 2 × 3 matrix
-dry-run produced 60 unique cells.
+dry-run produced 60 unique cells. That is deterministic verification only; the
+complete R6 preflight, including both paid live canaries, is still open.
 
 Before Task 10, review the twenty-five documented remediation tasks in
 [`PROJECT_PLAN.md`](PROJECT_PLAN.md): architecture-neutral evaluation (R1),
@@ -62,12 +64,13 @@ complete), outcome-sensitive preflight tests (R17, complete), accurate
 blocked-run taxonomy (R18, complete), and representative pilot calibration
 across architectures/workload classes (R19, complete).
 
-The live-canary review adds six open provenance remediations: typed audit
-provenance across architecture boundaries (R20, P0), audit-provenance
-enforcement in capability and offline scoring (R21, P0), aligned hypothesis
-evidence transitions (R22, P1), one bounded semantic correction cycle (R23,
-P1), lossless and consistent citation resolution (R24, P1), and explicit
-provenance-failure taxonomy plus final regression closure (R25, P2).
+The live-canary review adds six provenance remediations: typed audit
+provenance across architecture boundaries (R20, P0, complete),
+audit-provenance enforcement in capability and offline scoring (R21, P0),
+aligned hypothesis evidence transitions (R22, P1), one bounded semantic
+correction cycle (R23, P1), lossless and consistent citation resolution (R24,
+P1), and explicit provenance-failure taxonomy plus final regression closure
+(R25, P2).
 
 R13 replaces every open-ended dimension map with a typed `MetricDimension`
 list, so all six production agent output types compile through the Agents SDK
@@ -123,6 +126,21 @@ immutable run record, and manifest-declaration and output-schema digests force a
 new manifest version on any model, turn-budget, matrix-size, pilot-set, or
 schema change.
 
+R20 gives the Data Audit the provenance the rest of the evidence contract
+already required. Audit contract `2.0` replaces provenance-free warning and
+limitation strings with typed `AuditObservation` objects and gives each table
+profile its own `evidence_refs`. Both architectures persist through one
+boundary that canonicalizes every claim against the ledger and refuses a
+non-blocked audit whose material claims have missing, failed, ambiguous, or
+fabricated provenance. The Lead then receives a bounded typed
+`AuditEvidenceCatalog` — one entry per resolving claim with its exact executed
+references — instead of raw audit JSON under a heading that read like a
+citation, so it never needs a pseudo-reference such as `completed_data_audit`
+and still gains no SQL, Python, or internal-state access. Persisted state is
+versioned `1.1`, contract `1.0` payloads still load with their provenance
+explicitly empty, and the output-schema fingerprint change forces a new
+benchmark manifest before any paid execution.
+
 R1–R12 are implemented and covered by architecture-equivalence, capability/tool-
 mix, failed-evidence, workspace identity, evaluator-error, lifecycle,
 aggregation-safe rescore, pilot/run-record binding, append-only attempt
@@ -135,7 +153,7 @@ review pass. That review closed pilot selection, pilot-partition, repository
 identity, failure-taxonomy, and incomplete-accounting gaps. A fresh paid run on
 2026-08-20 passed the single-agent canary and coverage assertion but failed the
 multi-agent canary because Lead hypothesis `H2` cited no executed evidence.
-R20–R25 must close, followed by a fresh complete R6 preflight and both live
+R21–R25 must close, followed by a fresh complete R6 preflight and both live
 architecture canaries, before another Task 10 manifest is frozen.
 
 Task 10 execution is currently blocked before the paid matrix. Four immutable
@@ -229,7 +247,7 @@ uv run python scripts/run_benchmark.py plan benchmark.json --model gpt-5.6-luna
 ```
 
 The paid commands below are the current CLI surface, but **must not be run again
-until R20–R25 are complete and the reopened R6 gate passes**. R19 already
+until R21–R25 are complete and the reopened R6 gate passes**. R19 already
 replaced the single first-cell estimate with a declared pilot set containing at
 least one cell per architecture before the remaining immutable cells can resume:
 

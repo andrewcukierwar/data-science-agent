@@ -391,6 +391,11 @@ class CostBreakdown(BaseModel):
         return self
 
 
+# Persisted-state contract version.  ``1.1`` carries audit contract 2.0:
+# evidence-bearing audit observations and per-table audit provenance.
+CURRENT_STATE_SCHEMA_VERSION = "1.1"
+
+
 class AnalysisRunState(BaseModel):
     """Persisted, observable state for one analysis run."""
 
@@ -398,7 +403,10 @@ class AnalysisRunState(BaseModel):
 
     # Added after the Phase 1 canonical workspaces were created.  The default
     # keeps those workspaces loadable while new persisted state advertises the
-    # schema understood by the offline evaluation contracts.
+    # schema understood by the offline evaluation contracts.  New state is
+    # written at ``CURRENT_STATE_SCHEMA_VERSION``; the default stays at the
+    # first versioned release so an older persisted file is not silently
+    # relabelled as carrying the newer audit contract.
     schema_version: str = "1.0"
     run_id: NonEmptyString
     attempt_number: int = Field(default=0, ge=0)

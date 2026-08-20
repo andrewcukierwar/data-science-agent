@@ -1,13 +1,17 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-20
-**Implementation:** Tasks 1–9 and R1–R19 complete; R20–R25 open
+**Implementation:** Tasks 1–9, R1–R19, and R20 complete; R21–R25 open
 
 **Remediation:** R13–R19 are all implemented. The reopened R6 deterministic
 preflight and benchmark-validity review were rerun at this revision. Fresh paid
 canaries ran on 2026-08-20: single-agent passed; multi-agent failed its
 executed-evidence gate. R20–R25 track the resulting audit/Lead provenance
-defects. R6 remains open until they close and its complete preflight is rerun.
+defects. R20 is now implemented: audit contract 2.0 carries typed
+evidence-bearing claims, one persistence boundary refuses unsupported completed
+audits, and the Lead receives a bounded typed audit evidence catalog. R21–R25
+remain open and R6 remains open until they close and its complete preflight is
+rerun.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -114,7 +118,7 @@ dry-run—was rerun successfully at this revision. The benchmark-validity review
 is also complete. The failed multi-agent canary subsequently opened R20–R25, so
 Task 10 is blocked until those tasks and a fresh complete R6 preflight close.
 
-## Phase 2 Live-Canary Provenance Remediation: R20–R25 (open)
+## Phase 2 Live-Canary Provenance Remediation: R20 closed, R21–R25 open
 
 The 2026-08-20 provider-backed R6 run passed the single-agent canary but failed
 the multi-agent canary after valid strict output. The Data Auditor's successful
@@ -126,7 +130,7 @@ acceptance criteria.
 
 | Remediation | Priority | Status | Required closure |
 | --- | --- | --- | --- |
-| R20 — Preserve typed audit provenance across architecture boundaries | P0 | Open | Evidence-bearing audit observations; validated persistence; bounded canonical audit evidence supplied to Lead; strict contracts and fingerprints versioned |
+| R20 — Preserve typed audit provenance across architecture boundaries | P0 | Complete | Audit contract 2.0 gives table profiles, warnings, issues, and limitations typed `evidence_refs`; `persist_audit_result` canonicalizes them and refuses a non-blocked audit with missing, failed, ambiguous, or fabricated provenance; the Lead receives a bounded typed `AuditEvidenceCatalog` instead of raw audit JSON; persisted state is versioned `1.1` and the output-schema fingerprint forces a new manifest |
 | R21 — Enforce audit provenance in capability and offline scoring | P0 | Open | Required audit outputs must resolve to successful execution or verified artifacts; failed/missing/fabricated and unrelated-success adversarial fixtures; architecture equivalence |
 | R22 — Align hypothesis evidence contracts and validate state transitions | P1 | Open | Exact evidence required for every resolved hypothesis; invalid transitions refused before ledger/history mutation; resume-safe regressions |
 | R23 — Add bounded correction for semantic provenance failures | P1 | Open | At most one explicit Lead correction using existing canonical evidence; no silent rewrite or specialist/tool rerun; usage and outcomes retained |
@@ -497,6 +501,59 @@ state — records, aggregates, status, and the per-scenario source identities R8
 verifies separately — is excluded, so a matrix run cannot invalidate its own
 pilot. Unknown-cost acknowledgement binds every affected pilot record digest.
 
+### 14. Typed audit provenance across architecture boundaries (R20)
+
+The Data Audit was the one material output that could influence a candidate
+answer without carrying provenance. `TableAudit` asserted row counts, date
+coverage, duplicate rates, and missingness with no references; table warnings
+and run limitations were bare strings. That is invisible in the single-agent
+architecture, where the generalist still holds its own tool results, and fatal
+in the multi-agent one, where the Lead has no SQL, Python, or internal-state
+access with which to rediscover how a claim was established.
+
+Audit contract `2.0` makes every material claim evidence-bearing: warnings and
+limitations are typed `AuditObservation` objects with a `statement` and
+`evidence_refs`, and `TableAudit` carries references for the profile it
+asserts. `agents.audit_evidence.audit_claims` enumerates those claims with
+positional, collision-free IDs — `audit:table:0`, `audit:table:0:warning:1`,
+`audit:issue:0`, `audit:limitation:0` — so two claims cannot share an ID even
+when a model repeats a table name or issue ID.
+
+Both architectures now persist through one boundary,
+`persist_audit_result`, which canonicalizes each claim against the ledger with
+the same resolver that validates Lead output and refuses to persist a
+non-blocked audit whose material claims have missing, failed, ambiguous, or
+fabricated provenance. A blocked audit stays exempt so it is still reported
+under its own blocked-audit condition rather than as a provenance failure. The
+runner, the generalist persistence path, and the nested-auditor hook all route
+through it, so an injected runner cannot bypass validation.
+
+The Lead is handed a bounded typed `AuditEvidenceCatalog` under
+`DATA_AUDIT_EVIDENCE_CATALOG_JSON` — one entry per resolving audit claim with
+its canonical references, plus the flattened citable set. Claims that do not
+resolve are omitted, so nothing in the catalog can be cited into an unsupported
+answer, and a `claim_id` is explicitly a label rather than a reference. The
+Lead gains no execution tool and no access to internal state. The section
+heading `COMPLETED_DATA_AUDIT_JSON`, which is where the invented
+`completed_data_audit` reference came from, is gone; a regression pins that the
+production gate still rejects that exact citation.
+
+`inspect_relations` now returns the `tool_event_id` of its persisted event.
+Without it an auditor could establish a row count through a successful tool
+call and still have nothing to cite for it. When no ledger is attached the
+field stays null rather than advertising an unresolvable reference.
+
+The contract change is versioned in three places: persisted state is written at
+`CURRENT_STATE_SCHEMA_VERSION = "1.1"`, accepted alongside `legacy` and `1.0`;
+`output_schema_fingerprint()` covers `AuditResult` and `GeneralistResult`, so
+any existing pilot estimate is invalidated and a new manifest version is
+required before paid execution; and contract `1.0` payloads still load with
+their statements preserved and `evidence_refs` explicitly empty. Compatibility
+keeps the 18 retained ledger states readable without inventing provenance for
+them, so a legacy audit claim correctly reads as unsupported. Decision record
+[0009](decisions/0009-audit-provenance-across-architectures.md) holds the
+rationale; `tests/test_audit_provenance.py` holds the regressions.
+
 ## Verification completed
 
 ### Reopened R6 preflight and validity review, rerun at this revision
@@ -543,6 +600,28 @@ change or another opportunistic retry. R20–R25 must first preserve and validat
 audit provenance end to end, align hypothesis transitions and citation
 semantics, add one bounded correction path, and classify the failure explicitly.
 The entire R6 preflight then starts again from a fresh revision.
+
+### Deterministic verification at the R20 revision
+
+```text
+535 passed, 16 deselected
+```
+
+Ruff lint reported `All checks passed!` and format reported 150 files already
+formatted. The 27 new `tests/test_audit_provenance.py` regressions cover claim
+enumeration, missing/failed/ambiguous/fabricated/unrelated-success provenance,
+verified and tampered artifact references, blocked-audit exemption, catalog
+bounds and omission of unresolved claims, the `completed_data_audit` canary
+regression, single-agent/multi-agent claim equivalence, and the three
+versioning surfaces. The complete 10 × 2 × 3 declaration still produced 60
+cells with 60 unique run IDs and 60 unique workspace paths, all 10 retained
+benchmark manifests and 18 retained ledger states still load under audit
+contract 2.0, and offline rescore and report still run against retained
+benchmark evidence.
+
+This is deterministic verification of R20 only. It is not the complete R6
+preflight, which R25 reruns after R21–R24, and no live canary was run at this
+revision.
 
 ### Scenario-document integrity is now a code invariant (R6)
 
@@ -730,8 +809,14 @@ Before another paid attempt:
    checks, failure-path accounting, lifecycle and taxonomy fixtures,
    scenario-document integrity, Docker integrations, Ruff, retained-artifact
    rescoring, all 60 dry-run cells, and seven new validity regressions.
-3. Implement R20–R25 in order, preserving R2/R7 and versioning audit schemas,
-   evaluator rules, failure taxonomy, and output fingerprints deliberately.
+3. R20 is implemented — audit contract 2.0, one validating persistence
+   boundary, the Lead's bounded `AuditEvidenceCatalog`, and persisted-state
+   version `1.1` — with its regressions in `tests/test_audit_provenance.py` and
+   its rationale in decision record 0009. Implement R21–R25 in order,
+   preserving R2/R7 and continuing to version evaluator rules, failure
+   taxonomy, and output fingerprints deliberately. The audit-contract change
+   already invalidates any existing pilot estimate, so a new manifest version is
+   required regardless.
 4. Rerun the complete R6 preflight from the new revision: full deterministic
    suite, Ruff, Docker integrations, architecture-equivalence and adversarial
    provenance fixtures, retained-artifact checks, 60-cell dry-run, and both

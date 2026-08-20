@@ -10,6 +10,7 @@ five-agent architecture.
 from __future__ import annotations
 
 from agents import Agent
+from agents.audit_evidence import persist_audit_result
 from agents.critic import persist_validation_result
 from agents.lead import (
     persist_lead_result,
@@ -53,7 +54,15 @@ Required behavior:
    choosing populations, dates, denominators, metrics, or causal language.
 2. Audit table coverage, keys, joins, missingness, date coverage, and data-quality
    limitations. Do not treat hidden scenario ground truth or evaluator rules as
-   evidence; they are not available to you.
+   evidence; they are not available to you. Every table audit, table warning,
+   data-quality issue, and limitation in the returned AuditResult must set
+   `evidence_refs` to exact executed evidence: the `tool_event_id` of a
+   successful `inspect_relations`, the `query_id`/`query_path` of a successful
+   `run_sql`, or the `script_path`/`generated_evidence_refs` of a successful
+   `run_python`. Audit warnings and limitations are typed objects with a
+   `statement` and `evidence_refs`, not bare strings. A completed audit whose
+   material claims have missing, failed, ambiguous, or fabricated provenance is
+   rejected; run the supporting check or omit the statement.
 3. Use SQL/Python for every material number. Preserve exact evidence_refs to
    executed tool events, query/script paths, or registered artifacts. Save useful
    charts or reproducible scripts when appropriate.
@@ -123,14 +132,16 @@ def persist_generalist_result(
 
     if context.agent_role is not AgentRole.GENERALIST:
         raise ValueError("persist_generalist_result requires a Generalist context")
-    context.ledger.record_audit(result.audit)
+    audit = persist_audit_result(result.audit, context)
     candidate = persist_lead_result(result.candidate, context)
     validation = persist_validation_result(
         result.validation,
         context.ledger,
         allow_issue_updates=True,
     )
-    return result.model_copy(update={"candidate": candidate, "validation": validation})
+    return result.model_copy(
+        update={"audit": audit, "candidate": candidate, "validation": validation}
+    )
 
 
 def _generalist_input(

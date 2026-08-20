@@ -1,6 +1,10 @@
 """Typed schema package for agent communication and run state."""
 
 from schemas.audit import (
+    AUDIT_CONTRACT_VERSION,
+    LEGACY_AUDIT_CONTRACT_VERSION,
+    SUPPORTED_AUDIT_CONTRACT_VERSIONS,
+    AuditObservation,
     AuditResult,
     AuditStatus,
     DataAuditResult,
@@ -38,6 +42,7 @@ from schemas.metrics import (
     normalize_metric_unit,
 )
 from schemas.run_state import (
+    CURRENT_STATE_SCHEMA_VERSION,
     AgentEvent,
     AgentEventStatus,
     AnalysisLedger,
@@ -75,6 +80,11 @@ from schemas.validation import (
 )
 
 __all__ = [
+    "AUDIT_CONTRACT_VERSION",
+    "CURRENT_STATE_SCHEMA_VERSION",
+    "LEGACY_AUDIT_CONTRACT_VERSION",
+    "SUPPORTED_AUDIT_CONTRACT_VERSIONS",
+    "AuditObservation",
     "AnalysisLedger",
     "AnalysisRunState",
     "AgentEvent",

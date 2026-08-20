@@ -12,6 +12,11 @@ from agents import (
     ToolOutputText,
     function_tool,
 )
+from agents.audit_evidence import (
+    AuditEvidenceCatalog,
+    build_audit_evidence_catalog,
+    persist_audit_result,
+)
 from agents.evidence import executed_references, has_source_lineage
 from agents.model_usage import ModelUsageHooks, run_agent_with_usage
 from agents.output_contract import (
@@ -80,7 +85,13 @@ Required investigation behavior:
    inconclusive only when the returned evidence supports that disposition.
 3. The application has already completed and persisted the mandatory Data Audit
    before you start. Use the supplied audit as the data-quality and relationship
-   baseline; do not delegate another broad audit. Delegate bounded decomposition
+   baseline; do not delegate another broad audit. The audit itself is internal
+   run state, not an evidence reference. DATA_AUDIT_EVIDENCE_CATALOG_JSON lists
+   every audit claim with the exact executed evidence references that support
+   it; cite those `evidence_refs` verbatim whenever an audit observation
+   supports a finding, hypothesis, recommendation, or caveat. A catalog
+   `claim_id` names a claim and is not citable, and there is no reference named
+   `completed_data_audit`, `data_audit`, or `audit`. Delegate bounded decomposition
    and metric work to Analyst, and inferential questions to Statistician. When a
    material cohort or channel difference affects the answer, ask Statistician to
    assess uncertainty and practical significance. When a multi-component
@@ -234,7 +245,7 @@ class _NestedSpecialistHooks(ModelUsageHooks):
                     if isinstance(output, AuditResult)
                     else AuditResult.model_validate(output)
                 )
-                runtime_context.ledger.record_audit(audit)
+                persist_audit_result(audit, runtime_context)
             elif self.role in {AgentRole.ANALYST, AgentRole.STATISTICIAN}:
                 try:
                     specialist_result = (
@@ -851,8 +862,15 @@ def _lead_input(
     *,
     business_context: str | None = None,
     audit: AuditResult | None = None,
+    audit_evidence: AuditEvidenceCatalog | None = None,
 ) -> str:
-    """Build the bounded application context supplied to the Lead."""
+    """Build the bounded application context supplied to the Lead.
+
+    The Lead has no SQL, Python, or internal-state access, so the audit's
+    provenance has to cross the architecture boundary with it. The typed
+    catalog carries exactly that: each audit claim and the canonical executed
+    references that establish it, and nothing else from the run's internals.
+    """
 
     if business_context is None and audit is None:
         return objective
@@ -860,8 +878,17 @@ def _lead_input(
     if business_context:
         sections.append(f"BUSINESS_CONTEXT:\n{business_context}")
     if audit is not None:
+        sections.append("DATA_AUDIT_RESULT_JSON:\n" + audit.model_dump_json(indent=2))
+    if audit_evidence is not None:
         sections.append(
-            "COMPLETED_DATA_AUDIT_JSON:\n" + audit.model_dump_json(indent=2)
+            "DATA_AUDIT_EVIDENCE_CATALOG_JSON:\n"
+            + audit_evidence.model_dump_json(indent=2)
+        )
+        sections.append(
+            "The data audit is internal run state, not an evidence reference. "
+            "Cite an audit claim only through the exact evidence_refs listed for "
+            "it in DATA_AUDIT_EVIDENCE_CATALOG_JSON. A claim_id is a label, not "
+            "a reference, and no reference named completed_data_audit exists."
         )
     sections.append(
         "Use this context as evidence and create/update the persisted plan and "
@@ -883,12 +910,18 @@ async def run_lead(
     if context.agent_role is not AgentRole.LEAD:
         raise ValueError("run_lead requires a Lead AgentRunContext")
     selected_agent = agent or build_lead_agent(context.run_config)
+    audit_evidence = (
+        build_audit_evidence_catalog(audit, context.ledger)
+        if audit is not None
+        else None
+    )
     result = await run_agent_with_usage(
         selected_agent,
         _lead_input(
             objective,
             business_context=business_context,
             audit=audit,
+            audit_evidence=audit_evidence,
         ),
         context=context,
         max_turns=context.run_config.turn_limit,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agents import Agent
+from agents.audit_evidence import persist_audit_result
 from agents.model_usage import run_agent_with_usage
 from agents.output_contract import require_strict_output, strict_output_type
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
@@ -78,8 +79,26 @@ Required workflow:
   read approved raw files with pandas or PyArrow under `/workspace/inputs`.
 - Record issues only when supported by observed tool evidence. If a check is
   unavailable or ambiguous, record a limitation instead of inventing a problem.
-- Use issue evidence_refs for executed query/script paths or tool-event IDs when
-  available. Keep the audit concise and actionable.
+- Keep the audit concise and actionable.
+
+Evidence provenance is mandatory:
+
+- Every table audit, every table warning, every data-quality issue, and every
+  limitation you return must set `evidence_refs` to the exact executed evidence
+  that establishes it. Warnings and limitations are typed objects with a
+  `statement` and `evidence_refs`, not bare strings.
+- A reference is valid when it names one of your own successful executions or a
+  verified artifact. Use whichever check actually established the claim: the
+  `tool_event_id` returned by a successful `inspect_relations`, the `query_id`
+  or `query_path` returned by a successful `run_sql`, or the `script_path` or
+  `generated_evidence_refs` returned by a successful `run_python`.
+- Copy references verbatim from the tool response. Never invent a reference,
+  never cite a failed execution, and never use a prose label such as
+  `data_audit`, `manual_inspection`, or `completed_data_audit`.
+- The application rejects a completed audit whose material claims have missing,
+  failed, ambiguous, or fabricated provenance. If you cannot support a
+  statement with an executed reference, run the check that would support it or
+  omit the statement.
 
 The result is persisted as internal run state. It is not a final user-facing
 answer and must not include unsupported business explanations.
@@ -140,7 +159,7 @@ async def run_data_auditor(
         AuditResult,
         agent_name=selected_agent.name,
     )
-    return context.ledger.record_audit(output)
+    return persist_audit_result(output, context)
 
 
 run_auditor = run_data_auditor

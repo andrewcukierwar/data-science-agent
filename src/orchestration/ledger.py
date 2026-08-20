@@ -21,6 +21,7 @@ from schemas.metrics import (
     normalize_metric_comparison,
 )
 from schemas.run_state import (
+    CURRENT_STATE_SCHEMA_VERSION,
     AgentEvent,
     AgentEventStatus,
     AnalysisRunState,
@@ -108,6 +109,7 @@ class AnalysisLedger(ToolEventLedger):
             if not objective:
                 raise ValueError("objective is required when creating a new ledger")
             self._state = AnalysisRunState(
+                schema_version=CURRENT_STATE_SCHEMA_VERSION,
                 run_id=inferred_run_id,
                 objective=objective,
                 business_context=business_context,
