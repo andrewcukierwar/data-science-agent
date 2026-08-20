@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from agents import DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
 from benchmark import (
     BenchmarkCellResult,
     BenchmarkError,
@@ -169,6 +170,58 @@ def test_plan_is_persisted_before_execution_and_resume_skips_completed_cells(
 
     with pytest.raises(BenchmarkError, match="already contains run records"):
         runner.execute(manifest_path)
+
+
+def test_plan_freezes_agent_run_wall_clock_timeout(tmp_path) -> None:
+    runner = _runner(tmp_path, _completed)
+    manifest_path = _plan(runner, tmp_path)
+
+    manifest = load_manifest(manifest_path)
+
+    assert (
+        manifest.run_configuration.parameters["agent_run_timeout_seconds"]
+        == DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
+    )
+
+    with pytest.raises(
+        BenchmarkError,
+        match="agent_run_timeout_seconds",
+    ):
+        BenchmarkRunner(
+            tmp_path / "override-workspaces",
+            runner_options={"agent_run_timeout_seconds": 900},
+        )
+
+
+def test_live_execution_refuses_legacy_manifest_without_frozen_timeout(
+    tmp_path: Path,
+) -> None:
+    runner = _runner(tmp_path, _completed)
+    manifest = runner.build_manifest(
+        manifest_id="legacy-timeout-manifest",
+        scenario_ids=[SCENARIO_ID],
+        architectures=("single-agent",),
+        repetitions=3,
+        model="fixture-model",
+        model_provider="openai",
+        execution_mode=ExecutionMode.LIVE,
+    )
+    path = tmp_path / "legacy-timeout-manifest.json"
+    runner.persist_plan(manifest, path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    del payload["run_configuration"]["parameters"]["agent_run_timeout_seconds"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BenchmarkError, match="agent_run_timeout_seconds"):
+        runner.execute(
+            path,
+            allow_paid=True,
+            environment={
+                "OPENAI_API_KEY": "fixture-key",
+                "OPENAI_DEFAULT_MODEL": "fixture-model",
+            },
+            require_pilot=False,
+        )
 
 
 def test_interruption_aborts_without_losing_workspace_and_resume_continues(tmp_path):

@@ -266,6 +266,37 @@ def test_successful_run_records_each_response_exactly_once(
     _assert_totals_match_attempts(context.ledger)
 
 
+def test_agent_run_timeout_is_terminal_and_marks_usage_incomplete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context(tmp_path, AgentRole.ANALYST, "run-usage-timeout")
+    context.run_config.agent_run_timeout_seconds = 0.01
+    agent = build_analyst_agent(model="gpt-5.6-luna")
+
+    async def never_returns(*args: object, **kwargs: object) -> object:
+        await asyncio.sleep(60)
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr("agents.model_usage.Runner.run", never_returns)
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(
+            run_agent_with_usage(
+                agent,
+                "analyze",
+                context=context,
+                max_turns=2,
+            )
+        )
+
+    assert context.ledger.state.usage_complete is False
+    assert "without a reconcilable usage total" in (
+        context.ledger.state.usage_incompleteness_note or ""
+    )
+    assert context.usage_recorder is None
+
+
 def test_response_hook_that_never_fires_is_recovered_by_reconciliation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -24,7 +24,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from agents.runtime import DEFAULT_EVIDENCE_CORRECTION_ATTEMPTS
+from agents.runtime import (
+    DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
+    DEFAULT_EVIDENCE_CORRECTION_ATTEMPTS,
+)
 from benchmark.aggregation import AGGREGATION_VERSION, aggregate_manifest
 from evaluation.contracts import (
     BenchmarkManifest,
@@ -752,6 +755,7 @@ class BenchmarkRunner:
             "docker_image",
             "budget",
             "agent_turn_limits",
+            "agent_run_timeout_seconds",
         }
         conflicts = frozen_option_names.intersection(self.runner_options)
         if conflicts:
@@ -854,6 +858,9 @@ class BenchmarkRunner:
             # calls a cell can make, so it is frozen in the declaration digest
             # and changing it requires a new manifest version.
             "evidence_correction_attempts": DEFAULT_EVIDENCE_CORRECTION_ATTEMPTS,
+            # This is part of the estimand: a cell's operational outcome must
+            # be measured under a frozen end-to-end agent invocation bound.
+            "agent_run_timeout_seconds": DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
             "cell_run_ids": cell_ids,
         }
         if repetition_justification:
@@ -946,6 +953,18 @@ class BenchmarkRunner:
                 manifest.run_configuration.execution_mode is ExecutionMode.LIVE
             )
         if manifest.run_configuration.execution_mode is ExecutionMode.LIVE:
+            configured_timeout = manifest.run_configuration.parameters.get(
+                "agent_run_timeout_seconds"
+            )
+            if (
+                not isinstance(configured_timeout, int | float)
+                or isinstance(configured_timeout, bool)
+                or not 0 < configured_timeout <= 3_600
+            ):
+                raise BenchmarkError(
+                    "live benchmark manifest is missing a valid frozen "
+                    "agent_run_timeout_seconds; freeze a new manifest version"
+                )
             self._require_paid_access(
                 manifest,
                 allow_paid=allow_paid,
@@ -1626,6 +1645,9 @@ class BenchmarkRunner:
                     "critic",
                 }
             },
+            "agent_run_timeout_seconds": manifest.run_configuration.parameters[
+                "agent_run_timeout_seconds"
+            ],
         }
         runner_options.update(self.runner_options)
         runner = runner_class(**runner_options)

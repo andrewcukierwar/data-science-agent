@@ -3,7 +3,7 @@
 Foundation for an evidence-backed, multi-agent business analytics system.
 
 Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
-complete. Phase 2 Tasks 1–9 and remediations R1–R12 are implemented. Task
+complete. Phase 2 Tasks 1–9 and remediations R1–R26 are implemented. Task
 10—the paid single-agent versus five-agent benchmark—was attempted on
 2026-08-19, but the retained pilots exposed additional release blockers tracked
 as R13–R19. R13 (strict analytical output schemas, including both live
@@ -11,14 +11,18 @@ architecture canaries), R14 (failure-safe usage and cost accounting), R15
 (single-agent attempt lifecycle), R16 (retained and resumable interrupted
 cells), R17 (outcome-sensitive preflight gate), R18 (explicit block reasons and
 accurate failure taxonomy), and R19 (stratified pilot-set calibration) are all
-complete. The final R6 rerun and benchmark-validity review are also complete.
+complete. R26 was added after the renewed paid pilot exposed an unbounded
+provider invocation; every agent run now has a frozen 300-second wall-clock
+limit. That change reopens R6 for Docker and provider-backed verification.
 On 2026-08-20 the provider-backed gate exposed and then closed three final live
 integration defects: valid JSON datetimes were parsed with Python-object
 strictness, every multi-agent objective was incorrectly marked as requesting a
 visualization, and the provider-visible audit schema allowed empty provenance
 lists that the runtime correctly refused. After those fixes, both architecture
-canaries completed and passed the shared R17 outcome gate. R6 is closed and a
-new Task 10 manifest/pilot is unblocked; the paid matrix has not yet been run,
+canaries completed and passed the shared R17 outcome gate at the preceding
+revision. The R26 deterministic gates pass, but the current environment denied
+the required Docker/live reruns after exhausting its tool allowance. A new
+clean-revision manifest/pilot is therefore not yet authorized; the paid matrix has not been run,
 and no complete benchmark result is claimed. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, retained run artifacts, and historical live-run report.
@@ -54,7 +58,7 @@ suite then passed **4 tests in 80.92 seconds**, including one completed canary
 per architecture. R6 is closed; Task 10 is ready for a new frozen manifest and
 stratified cost pilot.
 
-Before Task 10, review the twenty-five documented remediation tasks in
+Before Task 10, review the twenty-six documented remediation tasks in
 [`PROJECT_PLAN.md`](PROJECT_PLAN.md): architecture-neutral evaluation (R1),
 hardened evidence provenance (R2), scenario-bound workspaces (R3), explicit
 evaluator errors (R4), hardened benchmark execution semantics (R5), and
@@ -78,6 +82,11 @@ complete), aligned hypothesis evidence transitions (R22, P1, complete), one
 bounded semantic correction cycle (R23, P1, complete), lossless and consistent
 citation resolution (R24, P1, complete), and explicit provenance-failure
 taxonomy plus final regression closure (R25, P2, complete).
+
+R26 bounds every complete model invocation to 300 seconds, freezes that limit
+in the manifest, and retains timeouts as operational outcomes with incomplete
+usage and unavailable cost where necessary. Its deterministic verification is
+complete; R6 awaits only the Docker and provider-backed reruns at this revision.
 
 R13 replaces every open-ended dimension map with a typed `MetricDimension`
 list, so all six production agent output types compile through the Agents SDK

@@ -1,7 +1,7 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-20
-**Implementation:** Tasks 1–9 and R1–R25 complete; renewed final R6 gate closed
+**Implementation:** Tasks 1–9 and R1–R26 complete; R6 external rerun pending
 
 **Remediation:** R13–R19 are all implemented. The reopened R6 deterministic
 preflight and benchmark-validity review were rerun at this revision. Fresh paid
@@ -48,7 +48,14 @@ citation correction to both architectures after both live canaries reproduced
 the same fabricated limitation reference. A second invalid correction remains
 terminal and the audit persistence/evaluator boundaries are unchanged.
 
-**Experiment:** Historical Task 10 attempts retained; new manifest/pilot ready;
+The next R19 pilot then exposed R26: one Critic SDK invocation exceeded thirty
+minutes because per-request transport retries had no end-to-end wall-clock
+bound. The attempt is retained as interrupted with incomplete usage and
+unavailable cost. R26 now imposes and freezes a 300-second bound. Its 689-test
+restricted suite, Ruff, and 60-cell dry-run pass; Docker and provider-backed
+R6 reruns were denied by the execution environment's exhausted tool allowance.
+
+**Experiment:** Historical Task 10 attempts retained; replacement manifest/pilot pending final external R6 rerun;
 paid matrix not executed; no analytical results published
 
 This document records the Phase 2 work, the required pre-benchmark remediation,
@@ -172,6 +179,19 @@ acceptance criteria.
 | R23 — Add bounded correction for semantic provenance failures | P1 | Complete | `evidence_correction_attempts` is validated `ge=0, le=1`; the correction agent has no tools and one turn; the request names the invalid field IDs and a bounded citable-evidence catalog; the corrected response passes the identical persistence boundary; both calls, their usage, and their outcomes bind to the active attempt; a second invalid response terminates. Both architectures get the same allowance |
 | R24 — Make citation resolution lossless and consistent | P1 | Complete | `resolve_citations` returns resolved and unresolved explicitly and `canonical_references` drops nothing; a claim is supported only when every citation resolves; `material_claims` is one shared definition; the Lead's private resolver is deleted and the Critic now checks resolution; qualitative-finding and source-lineage rules apply offline too |
 | R25 — Classify provenance failures and close the live regression gap | P2 | Complete | `EvidenceProvenanceError` is the shared base; `RunBlockReason.EVIDENCE_PROVENANCE` and `FailureCategory.EVIDENCE_PROVENANCE` propagate through attempt history, benchmark records, aggregation, failure reports, and canonical offline rescore; the 2026-08-20 handoff is reproduced deterministically; lifecycle fixtures use evidence-bearing audits; both paid live canaries pass at the final R6 revision |
+
+## Phase 2 Live-Availability Remediation: R26
+
+| Remediation | Priority | Status | Required closure |
+| --- | --- | --- | --- |
+| R26 — Bound complete agent invocation latency | P1 | Implemented; external verification pending | Every complete SDK invocation is limited to 300 seconds in both architectures; the value is frozen in the manifest; timeout remains a typed operational result; response-boundary usage is retained while unreconciled usage makes cost unavailable; deterministic timeout and manifest regressions pass |
+
+The retained `.runs/phase2-task10-20260820-v4/` attempt exposed R26 after one
+Critic invocation remained in the provider SDK for more than thirty minutes.
+The normal interruption path retained attempt 1 with 2,051.45 seconds elapsed,
+32 accounted requests, 263,188 tokens, incomplete usage, and unavailable cost.
+No later pilot stratum or matrix cell ran. The replacement R19 pilot requires a
+new manifest bound to the R26 revision after Docker and live R6 gates pass.
 
 R20–R25 must preserve R2 and R7: the solution may carry and validate provenance
 across agent boundaries, but it may not accept an audit merely because a role

@@ -22,6 +22,7 @@ from agents.critic import (
 from agents.generalist import build_generalist_agent
 from agents.lead import build_lead_agent, persist_lead_result, run_lead
 from agents.runtime import (
+    DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
     AgentRole,
     AgentRunConfig,
     AgentRunContext,
@@ -107,6 +108,7 @@ class AnalysisRunner:
         docker_image: str = "data-science-agent-python:latest",
         budget: RunBudget | None = None,
         agent_turn_limits: Mapping[AgentRole | str, int] | None = None,
+        agent_run_timeout_seconds: float = DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
         input_cost_per_1k_tokens: float | None = None,
         cached_input_cost_per_1k_tokens: float | None = None,
         output_cost_per_1k_tokens: float | None = None,
@@ -129,6 +131,11 @@ class AnalysisRunner:
         self.docker_image = docker_image
         self.budget = budget
         self.agent_turn_limits = normalize_agent_turn_limits(agent_turn_limits)
+        if not 0 < agent_run_timeout_seconds <= 3_600:
+            raise ValueError(
+                "agent_run_timeout_seconds must be greater than 0 and at most 3600"
+            )
+        self.agent_run_timeout_seconds = float(agent_run_timeout_seconds)
         legacy_rates = (
             input_cost_per_1k_tokens,
             cached_input_cost_per_1k_tokens,
@@ -737,6 +744,7 @@ class AnalysisRunner:
             model=self.model,
             model_provider=self.model_provider,
             agent_turn_limits=self.agent_turn_limits,
+            agent_run_timeout_seconds=self.agent_run_timeout_seconds,
         )
         context = AgentRunContext(
             workspace=workspace,

@@ -9,6 +9,7 @@ import pytest
 from agents.tool_context import ToolContext
 
 from agents import (
+    DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
     DEFAULT_AGENT_TURN_LIMITS,
     AgentRole,
     AgentRunConfig,
@@ -64,6 +65,29 @@ def test_agent_turn_limits_are_role_specific_and_configurable() -> None:
             agent_role=AgentRole.LEAD,
             agent_turn_limits={AgentRole.LEAD: 0},
         )
+
+
+def test_agent_run_timeout_is_bounded_and_configurable() -> None:
+    default = AgentRunConfig(
+        run_id="run-default-timeout",
+        agent_role=AgentRole.LEAD,
+    )
+    assert default.agent_run_timeout_seconds == DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
+
+    configured = AgentRunConfig(
+        run_id="run-custom-timeout",
+        agent_role=AgentRole.LEAD,
+        agent_run_timeout_seconds=45.5,
+    )
+    assert configured.agent_run_timeout_seconds == 45.5
+
+    for invalid in (0, -1, 3_601):
+        with pytest.raises(ValueError):
+            AgentRunConfig(
+                run_id="run-invalid-timeout",
+                agent_role=AgentRole.LEAD,
+                agent_run_timeout_seconds=invalid,
+            )
 
 
 class FakeExecutor:

@@ -2,8 +2,9 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-20 — Phase 2 Tasks 1–9 and R1–R25 are implemented, and
-the final R6 pre-benchmark gate is closed. The resulting audit/Lead provenance
+**Revision:** 2026-08-20 — Phase 2 Tasks 1–9 and R1–R26 are implemented. R26
+reopened the final R6 pre-benchmark gate after a renewed R19 pilot exposed an
+unbounded provider invocation. The resulting audit/Lead provenance
 gaps were tracked as R20–R25, all now closed: audit contract 2.0 makes every
 material audit claim
 evidence-bearing, one persistence boundary refuses an unsupported completed
@@ -1513,7 +1514,7 @@ constraints are recorded in `docs/phase2-status.md`.
 | 7 | Complete | Bounded generalist architecture sharing runtime, provenance, tools, and report contracts without specialist delegation |
 | 8 | Complete | Immutable resumable matrix runner, paid opt-in, cost pilot gate, failure isolation, and offline rescoring |
 | 9 | Complete | Deterministic denominator-preserving aggregation, uncertainty, paired comparisons, cost/latency, and failure reporting |
-| 10 | Ready / not executed | Seven failed pilot attempts remain retained and none entered the matrix; the latest exposed and closed correction-catalog truncation and audit-correction parity gaps, so a replacement clean-revision R19 pilot must pass before any 60-cell execution |
+| 10 | Blocked on final external preflight | The latest retained pilot exposed and closed an unbounded provider invocation; R26 deterministic tests, Ruff, and the 60-cell dry-run pass, but Docker/live R6 gates and a replacement clean-revision R19 pilot remain required before any matrix execution |
 
 ### Phase 2 implementation order
 
@@ -2655,6 +2656,36 @@ bounded correction completion in
 rationale. `tests/test_provenance_failure_taxonomy.py` and
 `tests/test_evidence_correction.py` hold the regressions.
 
+### Phase 2 Live-Availability Remediation: R26
+
+#### R26 — Bound complete agent invocation latency [P1] — Implemented; external verification pending
+
+Add an end-to-end wall-clock limit around every Agents SDK invocation. The
+transport's per-request timeout and retry policy is not a lifecycle bound and
+must not allow one benchmark cell to occupy a worker indefinitely.
+
+Acceptance:
+
+- every role in both architectures, including evidence correction, uses the
+  same finite complete-invocation limit;
+- the limit is frozen into the manifest run configuration and therefore into
+  the declaration and pilot digests;
+- timeout is persisted as a typed operational outcome and remains in
+  reliability denominators;
+- usage observed before timeout is retained, but an unreconciled in-flight
+  response makes usage incomplete and cost unavailable rather than zero;
+- timeout, accounting, manifest-binding, interruption, and resume regressions
+  pass before a replacement paid pilot is frozen.
+
+Implemented with a 300-second limit. The R19 attempt that exposed the gap is
+retained under `.runs/phase2-task10-20260820-v4/`: its first multi-agent attempt
+was interrupted after 2,051.45 seconds with 32 accounted requests, 263,188
+tokens, incomplete usage, and unavailable cost. The new restricted suite passes
+689 tests, Ruff passes across 167 files, and the dry-run still declares 60
+unique cells with the limit frozen. R6 is reopened until Docker and both
+provider-backed architecture canaries pass at this revision. Decision record
+`docs/decisions/0018-bounded-agent-invocation-latency.md` holds the rationale.
+
 #### Task 10 — Execute and publish the Phase 2 benchmark
 
 Status (2026-08-19): attempted but blocked before the paid matrix. The
@@ -2681,7 +2712,7 @@ records remain operational failures, are `not_evaluated`, and have no
 analytical score; missing cells are not treated as observations. These are
 retained attempt artifacts rather than benchmark results.
 
-After R1–R25 are complete, including a new final R6 preflight after R20–R25,
+After R1–R26 are complete, including a new final R6 preflight after R26,
 freeze a benchmark manifest, run the declared
 single-agent and five-agent matrix, evaluate every persisted workspace offline,
 inspect failures without changing rules mid-experiment, and publish the actual
@@ -2715,7 +2746,7 @@ Do not invent results before running the benchmark.
 
 ### Phase 2 done when
 
-- R1–R25 pre-benchmark remediation is complete and the reopened R6 regression
+- R1–R26 pre-benchmark remediation is complete and the reopened R6 regression
   suite is green;
 - approximately 10 deterministic, versioned scenarios cover root cause, data
   quality, statistical reasoning, evidence grounding, and non-driver rejection;

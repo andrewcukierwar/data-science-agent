@@ -147,6 +147,7 @@ def allowed_tools_for_role(role: AgentRole | str) -> frozenset[str]:
 # manifest without importing the correction machinery.
 DEFAULT_EVIDENCE_CORRECTION_ATTEMPTS = 1
 MAX_EVIDENCE_CORRECTION_ATTEMPTS = 1
+DEFAULT_AGENT_RUN_TIMEOUT_SECONDS = 300.0
 
 
 class AgentRunConfig(BaseModel):
@@ -170,6 +171,15 @@ class AgentRunConfig(BaseModel):
         default=DEFAULT_EVIDENCE_CORRECTION_ATTEMPTS,
         ge=0,
         le=MAX_EVIDENCE_CORRECTION_ATTEMPTS,
+    )
+    # Bound the complete SDK run, including provider retries and tool turns.
+    # The OpenAI client's transport timeout is per request and may be retried,
+    # which otherwise allows one benchmark agent invocation to hang for more
+    # than thirty minutes without producing a terminal attempt record.
+    agent_run_timeout_seconds: float = Field(
+        default=DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
+        gt=0,
+        le=3_600,
     )
 
     @field_validator("agent_turn_limits", mode="before")

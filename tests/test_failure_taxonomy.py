@@ -328,6 +328,7 @@ def test_exception_classification_separates_budget_from_other_stops() -> None:
         is RunBlockReason.SCHEMA_FAILURE
     )
     assert classify_exception(KeyboardInterrupt()) is RunBlockReason.INTERRUPTED
+    assert classify_exception(TimeoutError()) is RunBlockReason.TIMEOUT
     assert classify_exception(RuntimeError("boom")) is RunBlockReason.OTHER
 
 
@@ -343,6 +344,7 @@ def test_every_block_reason_maps_to_a_distinct_benchmark_category() -> None:
         RunBlockReason.SCHEMA_FAILURE,
         RunBlockReason.AGENT_FAILURE,
         RunBlockReason.INTERRUPTED,
+        RunBlockReason.TIMEOUT,
         RunBlockReason.DATA_QUALITY,
     ):
         assert mapped[reason] is not FailureCategory.BUDGET, reason
@@ -515,6 +517,18 @@ def test_multi_agent_schema_failure_is_not_a_budget_failure(
     assert result.status is RunStatus.FAILED
     assert result.block_reason is RunBlockReason.SCHEMA_FAILURE
     assert result.block_reason is not RunBlockReason.BUDGET_EXHAUSTED
+
+
+def test_multi_agent_timeout_is_persisted_as_timeout(tmp_path: Path) -> None:
+    result = _multi_agent_run(
+        tmp_path,
+        "run-taxonomy-multi-timeout",
+        lead_error=TimeoutError(),
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.block_reason is RunBlockReason.TIMEOUT
+    assert result.ledger.state.block_reason is RunBlockReason.TIMEOUT
 
 
 # --- benchmark records and aggregation --------------------------------------

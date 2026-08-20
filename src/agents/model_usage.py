@@ -21,6 +21,7 @@ total that omits real calls.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from agents import RunHooks, Runner
@@ -132,13 +133,14 @@ async def run_agent_with_usage(
     context.usage_recorder = recorder
     try:
         try:
-            result = await Runner.run(
-                agent,
-                agent_input,
-                context=context,
-                max_turns=max_turns,
-                hooks=hooks or ModelUsageHooks(),
-            )
+            async with asyncio.timeout(context.run_config.agent_run_timeout_seconds):
+                result = await Runner.run(
+                    agent,
+                    agent_input,
+                    context=context,
+                    max_turns=max_turns,
+                    hooks=hooks or ModelUsageHooks(),
+                )
         except BaseException as error:
             recorder.reconcile(
                 _cumulative_usage(error),
