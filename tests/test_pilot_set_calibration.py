@@ -8,6 +8,7 @@ manifest, and the estimate is a stratified sum with an explicit range.
 """
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from evaluation.contracts import (
     EvaluatorResult,
     EvaluatorStatus,
     ExecutionMode,
+    FailureCategory,
     LifecycleOutcome,
     LifecycleStatus,
     PilotSetDeclaration,
@@ -468,6 +470,61 @@ def test_full_run_gate_refuses_a_tampered_matrix_estimate(tmp_path: Path) -> Non
         )
 
 
+def test_pilot_accepts_a_bounded_blocked_cell_as_a_cost_observation(
+    tmp_path: Path,
+) -> None:
+    """A blocked cell with reconciled usage is a valid cost observation.
+
+    The multi-agent stratum's declared cell legitimately blocks with
+    ``validation_revision`` on the harder scenarios. That is a real benchmark
+    outcome the failure taxonomy records, and it consumed its declared budgets,
+    so it is the conservative cost measurement — not a reason to refuse the
+    matrix the benchmark exists to run.
+    """
+
+    def execute(cell, _workspace):
+        result = _architecture_cost(cell)
+        if cell.architecture != "multi-agent":
+            return result
+        return replace(
+            result,
+            lifecycle=LifecycleOutcome(
+                status=LifecycleStatus.BLOCKED,
+                failure_category=FailureCategory.VALIDATION,
+                failure_message=(
+                    "Critic returned REVISE and the configured maximum of "
+                    "3 critic loop(s) was reached."
+                ),
+            ),
+            evaluator_result=None,
+        )
+
+    runner = _runner(tmp_path, execute)
+    manifest_path = _plan(runner, tmp_path)
+    pilot_path = tmp_path / "pilot.json"
+
+    _, report = runner.run_pilot(manifest_path, pilot_path=pilot_path)
+
+    assert pilot_path.exists()
+    assert report.estimated_full_matrix_cost_usd is not None
+    blocked = [
+        record
+        for record in load_manifest(manifest_path).run_records
+        if record.architecture == "multi-agent"
+    ]
+    assert blocked
+    assert all(record.lifecycle.status is LifecycleStatus.BLOCKED for record in blocked)
+    assert all(record.usage.complete for record in blocked)
+    # The full-matrix gate accepts the same evidence it was measured from.
+    runner.execute(
+        manifest_path,
+        resume=True,
+        require_pilot=True,
+        pilot_path=pilot_path,
+        max_cells=1,
+    )
+
+
 def test_full_run_gate_refuses_a_failed_pilot_cell(tmp_path: Path) -> None:
     state = {"fail_multi": False}
 
@@ -480,7 +537,7 @@ def test_full_run_gate_refuses_a_failed_pilot_cell(tmp_path: Path) -> None:
     runner = _runner(tmp_path, execute)
     manifest_path = _plan(runner, tmp_path)
 
-    with pytest.raises(BenchmarkError, match="did not complete"):
+    with pytest.raises(BenchmarkError, match="ended as failed"):
         runner.run_pilot(manifest_path, pilot_path=tmp_path / "pilot.json")
 
     # A second invocation must not skip the failed observation and select a

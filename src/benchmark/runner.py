@@ -430,6 +430,39 @@ def _matrix_estimate(strata: Sequence[PilotStratumEstimate]) -> dict[str, object
     }
 
 
+PILOT_COST_OBSERVABLE_STATUSES = frozenset(
+    {LifecycleStatus.COMPLETED, LifecycleStatus.BLOCKED}
+)
+
+
+def _require_pilot_cost_observation(record: BenchmarkRunRecord) -> None:
+    """Refuse a pilot cell that cannot support a cost observation.
+
+    The gate exists to measure cost before the paid matrix, not to require a
+    successful analysis. A bounded ``blocked`` cell is a real benchmark
+    outcome that the failure taxonomy and reliability denominators already
+    record, its usage is reconciled, and it is the conservative cost
+    observation because it consumed its declared budgets. Requiring
+    completion instead made the gate demand the very analytical success the
+    benchmark is meant to measure.
+
+    ``failed`` and ``cancelled`` cells are still refused: neither is a bounded
+    measurement of a working cell.
+    """
+
+    if record.lifecycle.status not in PILOT_COST_OBSERVABLE_STATUSES:
+        raise BenchmarkError(
+            f"pilot cell {record.run_id} ended as "
+            f"{record.lifecycle.status.value}; the cost gate requires a "
+            "completed or bounded blocked cell"
+        )
+    if not record.usage.complete:
+        raise BenchmarkError(
+            f"pilot usage is incomplete for {record.run_id}; the cost gate "
+            "requires reconciled provider usage"
+        )
+
+
 def _require_reconciled_observation(
     observation: PilotObservation,
     record: BenchmarkRunRecord,
@@ -1159,12 +1192,12 @@ class BenchmarkRunner:
                     for record in summary.manifest.run_records
                     if record.run_id == target.run_id
                 )
-                if observed.lifecycle.status is not LifecycleStatus.COMPLETED:
+                try:
+                    _require_pilot_cost_observation(observed)
+                except BenchmarkError as error:
                     raise BenchmarkError(
-                        f"pilot cell {target.run_id} did not complete "
-                        f"({observed.lifecycle.status.value}); no later pilot "
-                        "strata were executed"
-                    )
+                        f"{error}; no later pilot strata were executed"
+                    ) from error
             else:
                 reused_run_ids.append(target.run_id)
             selected_run_ids.append(target.run_id)
@@ -1279,17 +1312,7 @@ class BenchmarkRunner:
                     scenario_id=record.scenario_id,
                 ):
                     continue
-                if record.lifecycle.status is not LifecycleStatus.COMPLETED:
-                    raise BenchmarkError(
-                        f"pilot cell {run_id} did not complete "
-                        f"({record.lifecycle.status.value}); resolve it before "
-                        "publishing a cost pilot"
-                    )
-                if not record.usage.complete:
-                    raise BenchmarkError(
-                        f"pilot usage is incomplete for {run_id}; freeze a new "
-                        "manifest after usage accounting is repaired"
-                    )
+                _require_pilot_cost_observation(record)
                 digest = canonical_run_record_digest(record)
                 if record.cost.estimated_cost_usd is None:
                     unknown_digests.append(digest)
@@ -2156,11 +2179,7 @@ class BenchmarkRunner:
                         f"pilot observation {observation.run_id} does not "
                         "reference a recorded cell"
                     )
-                if record.lifecycle.status is not LifecycleStatus.COMPLETED:
-                    raise BenchmarkError(
-                        f"pilot cell {observation.run_id} did not complete "
-                        "successfully; full matrix execution is blocked"
-                    )
+                _require_pilot_cost_observation(record)
                 if not BenchmarkRunner._stratum_matches(
                     declared,
                     architecture=record.architecture,

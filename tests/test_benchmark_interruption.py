@@ -448,7 +448,7 @@ def test_interrupted_pilot_cell_cannot_be_published_as_a_cost_pilot(
     manifest_path = _plan(runner, tmp_path, repetitions=3)
     pilot_path = tmp_path / "pilot.json"
 
-    with pytest.raises(Exception, match="did not complete"):
+    with pytest.raises(Exception, match="ended as cancelled"):
         runner.run_pilot(manifest_path, pilot_path=pilot_path)
 
     assert not pilot_path.exists()
