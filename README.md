@@ -13,8 +13,9 @@ cells), R17 (outcome-sensitive preflight gate), R18 (explicit block reasons and
 accurate failure taxonomy), and R19 (stratified pilot-set calibration) are all
 complete. The deterministic R6 rerun and benchmark-validity review are also
 complete. On 2026-08-20 the fresh single-agent canary passed, but the
-multi-agent canary failed its executed-evidence gate. The paid matrix remains
-blocked, the final R6 gate is open, and no complete benchmark result is claimed. See
+multi-agent canary failed its executed-evidence gate. Remediations R20–R25 now
+track the resulting audit/Lead provenance gaps. The paid matrix remains blocked,
+the final R6 gate is open, and no complete benchmark result is claimed. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, retained run artifacts, and the blocked live-run report.
 
@@ -44,7 +45,7 @@ deterministic verification completed with **508 passed and 16 live tests
 deselected**; Ruff lint and formatting checks passed, and the 10 × 2 × 3 matrix
 dry-run produced 60 unique cells.
 
-Before Task 10, review the nineteen documented remediation tasks in
+Before Task 10, review the twenty-five documented remediation tasks in
 [`PROJECT_PLAN.md`](PROJECT_PLAN.md): architecture-neutral evaluation (R1),
 hardened evidence provenance (R2), scenario-bound workspaces (R3), explicit
 evaluator errors (R4), hardened benchmark execution semantics (R5), and
@@ -60,6 +61,13 @@ attempt lifecycle (R15, complete), interrupted-cell retention and resume (R16,
 complete), outcome-sensitive preflight tests (R17, complete), accurate
 blocked-run taxonomy (R18, complete), and representative pilot calibration
 across architectures/workload classes (R19, complete).
+
+The live-canary review adds six open provenance remediations: typed audit
+provenance across architecture boundaries (R20, P0), audit-provenance
+enforcement in capability and offline scoring (R21, P0), aligned hypothesis
+evidence transitions (R22, P1), one bounded semantic correction cycle (R23,
+P1), lossless and consistent citation resolution (R24, P1), and explicit
+provenance-failure taxonomy plus final regression closure (R25, P2).
 
 R13 replaces every open-ended dimension map with a typed `MetricDimension`
 list, so all six production agent output types compile through the Agents SDK
@@ -127,8 +135,8 @@ review pass. That review closed pilot selection, pilot-partition, repository
 identity, failure-taxonomy, and incomplete-accounting gaps. A fresh paid run on
 2026-08-20 passed the single-agent canary and coverage assertion but failed the
 multi-agent canary because Lead hypothesis `H2` cited no executed evidence.
-That multi-agent release blocker must be resolved before another Task 10
-manifest is frozen.
+R20–R25 must close, followed by a fresh complete R6 preflight and both live
+architecture canaries, before another Task 10 manifest is frozen.
 
 Task 10 execution is currently blocked before the paid matrix. Four immutable
 attempts were retained under `.runs/phase2-task10-20260819/`: three attempts
@@ -221,9 +229,9 @@ uv run python scripts/run_benchmark.py plan benchmark.json --model gpt-5.6-luna
 ```
 
 The paid commands below are the current CLI surface, but **must not be run again
-until the reopened R6 gate passes**. R19 will replace
-the single first-cell estimate with a declared pilot set containing at least one
-cell per architecture before the remaining immutable cells can resume:
+until R20–R25 are complete and the reopened R6 gate passes**. R19 already
+replaced the single first-cell estimate with a declared pilot set containing at
+least one cell per architecture before the remaining immutable cells can resume:
 
 ```bash
 uv run python scripts/run_benchmark.py pilot benchmark.json --allow-paid

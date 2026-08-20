@@ -6,8 +6,8 @@
 deterministic portion of the reopened R6 gate and its benchmark-validity review
 are complete. Fresh paid canaries were run: the single-agent architecture
 passed, while the multi-agent architecture failed its executed-evidence gate.
-Task 10 remains blocked before the paid matrix; no benchmark result is
-published.
+The resulting audit/Lead provenance gaps are tracked as R20–R25. Task 10
+remains blocked before the paid matrix; no benchmark result is published.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1470,7 +1470,8 @@ bound to the frozen manifest. The post-R19 deterministic preflight and
 benchmark-validity review are complete. Fresh paid canaries ran on 2026-08-20:
 the single-agent architecture passed, while the multi-agent architecture failed
 because Lead hypothesis `H2` cited `completed_data_audit` rather than executed
-evidence. R6 therefore remains open.
+evidence. A focused review opened R20–R25; R6 must be rerun after they are
+implemented and therefore remains open.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
 rescores and aggregate reports are retained under
@@ -1490,7 +1491,7 @@ constraints are recorded in `docs/phase2-status.md`.
 | 7 | Complete | Bounded generalist architecture sharing runtime, provenance, tools, and report contracts without specialist delegation |
 | 8 | Complete | Immutable resumable matrix runner, paid opt-in, cost pilot gate, failure isolation, and offline rescoring |
 | 9 | Complete | Deterministic denominator-preserving aggregation, uncertainty, paired comparisons, cost/latency, and failure reporting |
-| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R13–R19 and the deterministic R6 rerun are complete, but fresh paid live canaries must pass before a new 60-cell matrix is started |
+| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R20–R25 and a fresh final R6 preflight must close before a new 60-cell matrix is started |
 
 ### Phase 2 implementation order
 
@@ -1729,13 +1730,14 @@ perform a complete deterministic benchmark preflight:
 - another Sol High code review focused specifically on benchmark validity.
 
 R6 is the final pre-benchmark gate. Its complete preflight must be rerun after
-all later remediation, including R13–R19; an earlier green test run does not
-close R6.
+all later remediation, including R13–R19 and R20–R25; an earlier green test run
+does not close R6.
 
 Status: the deterministic preflight and benchmark-validity review were rerun at
 this revision after R13–R19. The fresh paid single-agent canary passed on
-2026-08-20, but the multi-agent canary failed the production evidence gate, so
-R6 remains open.
+2026-08-20, but the multi-agent canary failed the production evidence gate.
+R20–R25 must close before the complete R6 preflight and both live canaries are
+rerun, so R6 remains open.
 
 Scenario-document integrity is now enforced in code rather than only in a test.
 The shared generated document is inherited unchanged by the clean baseline and
@@ -2173,8 +2175,9 @@ Acceptance:
   interruptions cannot satisfy the smoke assertions;
 - the opt-in live preflight runs one bounded canary per architecture before any
   matrix pilot;
-- after R13–R19, the full R6 suite, Ruff, Docker-backed integrations, adversarial
-  fixtures, and 60-cell dry-run all pass again.
+- after all later remediation, including R20–R25, the full R6 suite, Ruff,
+  Docker-backed integrations, adversarial fixtures, 60-cell dry-run, and both
+  live architecture canaries all pass again.
 
 R13 already contributes the strict-schema compilation checks and the two opt-in
 live canaries this task must run; R17 adds the remaining outcome assertions.
@@ -2278,6 +2281,148 @@ Acceptance:
 - any model, schema, turn-budget, matrix-size, or pilot-set change requires a
   new manifest/version before paid execution.
 
+### Phase 2 Live-Canary Provenance Remediation: R20–R25
+
+The post-R19 live R6 rerun passed the single-agent canary but failed the
+multi-agent canary after the model returned valid strict JSON. The Data Auditor
+had executed its checks successfully, but its typed audit output did not carry
+canonical evidence references for table observations or limitations. The Lead
+was told to treat that audit as evidence, could not discover the auditor's tool
+references, and resolved hypothesis `H2` using the invented reference
+`completed_data_audit`. The production evidence gate correctly rejected it.
+
+R20–R25 close the cross-agent provenance contract rather than weakening that
+gate or retrying until a favorable model output appears. All six tasks must be
+implemented before another complete R6 preflight or Task 10 manifest.
+
+#### R20 — Preserve typed audit provenance across architecture boundaries [P0]
+
+Make every material audit observation that can influence a candidate answer
+carry canonical provenance. Replace provenance-free warning/limitation strings
+where necessary with typed evidence-bearing observations, and expose those
+references unchanged when the persisted audit is supplied to the Lead. The
+multi-agent architecture must give the Lead the same usable provenance that the
+single-agent architecture retains from its own tool calls without granting the
+Lead SQL/Python execution or access to internal state.
+
+Acceptance:
+
+- material audit issues, table observations, warnings, and limitations used
+  downstream carry exact successful tool-event, query/script, or verified
+  artifact references;
+- completed audits cannot persist material claims with missing, failed,
+  ambiguous, or fabricated provenance;
+- the Lead receives a bounded typed audit evidence catalog and never needs a
+  pseudo-reference such as `completed_data_audit`;
+- semantically equivalent single-agent and multi-agent audit outputs expose
+  equivalent claim-level provenance;
+- strict output schemas, fingerprints, persisted contracts, and compatibility
+  handling are versioned for the audit-contract change.
+
+#### R21 — Enforce audit provenance in capability and offline scoring [P0]
+
+Extend the evaluator's data-audit capability and provenance checks so a
+completed `AuditResult` or expected issue ID is insufficient by itself. Audit
+claims used to satisfy scenario requirements must resolve through the same
+successful-execution and verified-artifact boundary as findings, metrics,
+hypotheses, and statistical assessments.
+
+Acceptance:
+
+- data-audit capability passes only when the required typed audit outputs and
+  their provenance are present;
+- required issue IDs backed only by failed SQL, failed Python, failed artifacts,
+  missing files, or fabricated references fail offline evaluation;
+- an unrelated successful execution cannot rescue an unsupported audit claim;
+- clean-audit evidence proves the performed checks without requiring a
+  particular tool mix or producer role;
+- architecture-equivalence fixtures give semantically identical audits the same
+  result, and the evaluator version is advanced deliberately.
+
+#### R22 — Align hypothesis evidence contracts and validate state transitions [P1]
+
+Make the model-visible instructions, `Hypothesis` contract, state tools, final
+Lead validation, and offline evaluation agree on one rule: an open hypothesis
+may have no evidence, but every supported, rejected, or inconclusive hypothesis
+must cite canonical executed evidence. Validate this when the state transition
+is requested rather than accepting poisoned state and failing only after the
+final model response.
+
+Acceptance:
+
+- Lead and Generalist instructions explicitly require exact evidence references
+  for every resolved hypothesis, including qualitative audit hypotheses;
+- `record_hypothesis` refuses an invalid resolved transition before mutating the
+  current hypothesis or append-only history and returns an actionable typed
+  error;
+- open hypotheses remain usable without manufactured evidence;
+- resume cannot inherit an invalid resolved hypothesis from a rejected state
+  transition;
+- deterministic tests cover open-to-supported, rejected, and inconclusive
+  transitions using direct, aliased, missing, and failed references.
+
+#### R23 — Add bounded correction for semantic provenance failures [P1]
+
+Treat a strict-schema-valid Lead response with invalid evidence references as a
+bounded semantic contract failure that may receive one explicit correction
+attempt. The correction must identify the invalid output fields and the
+canonical references already available; it must not rerun specialists, alter
+claims silently, or weaken provenance validation.
+
+Acceptance:
+
+- one configured correction attempt is available after strict output succeeds
+  but Lead provenance validation fails;
+- the correction prompt contains the invalid field IDs and a bounded canonical
+  evidence catalog, without evaluator-only data or hidden state;
+- correction reuses existing executions and does not spend additional SQL,
+  Python, specialist, or Critic budget;
+- both model calls, usage, latency, and terminal outcomes remain observable and
+  attributable to the active attempt;
+- a second invalid response terminates with an explicit provenance failure; no
+  output is silently rewritten or repeatedly retried.
+
+#### R24 — Make citation resolution lossless and consistent [P1]
+
+Use one citation-resolution contract at runtime, Critic validation, offline
+evaluation, and rescoring. Never discard an unresolved citation merely because
+another citation resolves, and do not let `any(valid_reference)` conceal a
+failed, fabricated, or unrelated reference.
+
+Acceptance:
+
+- canonicalization returns resolved and unresolved references explicitly rather
+  than silently dropping invalid entries;
+- every cited reference required for a material claim must resolve to successful
+  execution or a verified artifact at all evaluation boundaries;
+- mixed valid/failed, valid/fabricated, ambiguous alias, cyclic alias, and
+  unrelated-success fixtures fail consistently;
+- direct and uniquely aliased specialist references canonicalize
+  deterministically without changing claim meaning;
+- runtime validation and offline rescoring produce the same provenance result
+  for the same persisted workspace.
+
+#### R25 — Classify provenance failures and close the live regression gap [P2]
+
+Give semantic evidence failures an explicit operational taxonomy and retain the
+2026-08-20 canary failure as a deterministic regression. Replace keyword-only
+and empty-audit mocks with a production-shaped audit-to-Lead fixture, then rerun
+the complete R6 gate after R20–R24.
+
+Acceptance:
+
+- `LeadEvidenceError` and equivalent semantic citation failures map to a named
+  run reason and benchmark failure category rather than `other`;
+- the category propagates through attempt history, benchmark records,
+  aggregation, failure reports, and canonical offline rescore;
+- a deterministic fixture reproduces the provenance-free audit handoff and the
+  `completed_data_audit` failure without a provider call;
+- lifecycle tests use evidence-bearing audits and resolved hypotheses rather
+  than empty audits or unchecked synthetic references;
+- after R20–R24, all deterministic tests, Ruff, Docker integrations, adversarial
+  provenance suites, the 60-cell dry-run, retained-artifact checks, and both
+  paid live architecture canaries pass in one fresh R6 preflight.
+
 #### Task 10 — Execute and publish the Phase 2 benchmark
 
 Status (2026-08-19): attempted but blocked before the paid matrix. The
@@ -2304,7 +2449,7 @@ records remain operational failures, are `not_evaluated`, and have no
 analytical score; missing cells are not treated as observations. These are
 retained attempt artifacts rather than benchmark results.
 
-After R1–R19 are complete, including a new final R6 preflight after R13–R19,
+After R1–R25 are complete, including a new final R6 preflight after R20–R25,
 freeze a benchmark manifest, run the declared
 single-agent and five-agent matrix, evaluate every persisted workspace offline,
 inspect failures without changing rules mid-experiment, and publish the actual
@@ -2338,7 +2483,7 @@ Do not invent results before running the benchmark.
 
 ### Phase 2 done when
 
-- R1–R19 pre-benchmark remediation is complete and the reopened R6 regression
+- R1–R25 pre-benchmark remediation is complete and the reopened R6 regression
   suite is green;
 - approximately 10 deterministic, versioned scenarios cover root cause, data
   quality, statistical reasoning, evidence grounding, and non-driver rejection;

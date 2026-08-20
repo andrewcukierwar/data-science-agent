@@ -1,12 +1,13 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-20
-**Implementation:** Tasks 1–9, R1–R12, and R13–R19 complete
+**Implementation:** Tasks 1–9 and R1–R19 complete; R20–R25 open
 
 **Remediation:** R13–R19 are all implemented. The reopened R6 deterministic
 preflight and benchmark-validity review were rerun at this revision. Fresh paid
 canaries ran on 2026-08-20: single-agent passed; multi-agent failed its
-executed-evidence gate. R6 remains open on that multi-agent failure.
+executed-evidence gate. R20–R25 track the resulting audit/Lead provenance
+defects. R6 remains open until they close and its complete preflight is rerun.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -19,8 +20,8 @@ successful architecture-comparison report.
 ## Completed Phase 2 Pre-Benchmark Remediation: R1–R12
 
 The following remediation tasks were completed and deterministically verified
-before the first Task 10 attempt. The later R13–R19 findings do not erase that
-historical verification, but they reopen the final R6 gate.
+before the first Task 10 attempt. The later R13–R19 and R20–R25 findings do not
+erase that historical verification, but they reopen the final R6 gate.
 
 1. **R1 — Make the evaluator architecture-neutral [P0].** Remove
    role-presence requirements from scoring and replace them with
@@ -49,7 +50,7 @@ historical verification, but they reopen the final R6 gate.
    failed evidence, evaluator exceptions, interrupted resume, unknown pricing,
    all 10 × 2 × 3 dry-run cells, and a benchmark-validity-focused Sol High code
    review. This is the final gate and must be rerun after any later remediation,
-   including R13–R19.
+   including R13–R19 and R20–R25.
 7. **R7 — Make tool use capability-driven [P0] (implemented).** Remove unconditional SQL and
    Python presence gates. Express requirements as scenario-specific typed
    capabilities and test equivalent outputs across different valid tool mixes.
@@ -82,7 +83,7 @@ historical verification, but they reopen the final R6 gate.
 | R3 | Verified | Identity mismatch and source-tamper regressions |
 | R4 | Verified | Evaluator-error denominator and taxonomy regressions |
 | R5 | Verified | Explicit model, pricing gate, cumulative resume, and pilot semantics |
-| R6 | Deterministic preflight and validity review complete; live gate open | 508 tests, Ruff, adversarial suites, Docker integrations, 60 dry-run cells, retained-artifact checks, and validity review passed. On 2026-08-20 single-agent passed live; multi-agent failed because Lead hypothesis `H2` cited no executed evidence |
+| R6 | Reopened; R20–R25 and fresh full rerun required | The post-R19 deterministic gate passed. On 2026-08-20 single-agent passed live; multi-agent failed because Lead hypothesis `H2` cited no executed evidence. The complete gate must run again after R20–R25 |
 | R7 | Verified | Capability/tool-mix and architecture-equivalence regressions |
 | R8 | Verified | Identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
 | R9 | Verified | Multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
@@ -110,8 +111,32 @@ this revision. `PROJECT_PLAN.md` contains the complete acceptance criteria.
 The deterministic half of that preflight—Ruff, the full suite, the adversarial
 suites, Docker integrations, retained-artifact rescoring, and the 60-cell
 dry-run—was rerun successfully at this revision. The benchmark-validity review
-is also complete. Task 10 remains blocked only on fresh opt-in live canaries for
-both architectures.
+is also complete. The failed multi-agent canary subsequently opened R20–R25, so
+Task 10 is blocked until those tasks and a fresh complete R6 preflight close.
+
+## Phase 2 Live-Canary Provenance Remediation: R20–R25 (open)
+
+The 2026-08-20 provider-backed R6 run passed the single-agent canary but failed
+the multi-agent canary after valid strict output. The Data Auditor's successful
+tool provenance was not represented in its typed limitations, the Lead was told
+to treat the provenance-free audit JSON as evidence, and resolved hypothesis
+`H2` cited the fabricated reference `completed_data_audit`. A focused code
+review found six remediation areas. `PROJECT_PLAN.md` contains their full
+acceptance criteria.
+
+| Remediation | Priority | Status | Required closure |
+| --- | --- | --- | --- |
+| R20 — Preserve typed audit provenance across architecture boundaries | P0 | Open | Evidence-bearing audit observations; validated persistence; bounded canonical audit evidence supplied to Lead; strict contracts and fingerprints versioned |
+| R21 — Enforce audit provenance in capability and offline scoring | P0 | Open | Required audit outputs must resolve to successful execution or verified artifacts; failed/missing/fabricated and unrelated-success adversarial fixtures; architecture equivalence |
+| R22 — Align hypothesis evidence contracts and validate state transitions | P1 | Open | Exact evidence required for every resolved hypothesis; invalid transitions refused before ledger/history mutation; resume-safe regressions |
+| R23 — Add bounded correction for semantic provenance failures | P1 | Open | At most one explicit Lead correction using existing canonical evidence; no silent rewrite or specialist/tool rerun; usage and outcomes retained |
+| R24 — Make citation resolution lossless and consistent | P1 | Open | Unresolved citations remain visible; every material citation resolves; runtime, Critic, evaluator, and rescore agree on mixed/aliased references |
+| R25 — Classify provenance failures and close the live regression gap | P2 | Open | Named provenance taxonomy; production-shaped deterministic audit-to-Lead fixture; complete post-R25 R6 rerun and both live canaries pass |
+
+R20–R25 must preserve R2 and R7: the solution may carry and validate provenance
+across agent boundaries, but it may not accept an audit merely because a role
+ran, prescribe an unnecessary tool, silently replace model citations, or retry
+until a favorable output appears.
 
 ## What is implemented
 
@@ -503,7 +528,7 @@ interrupt exits that could leave usage marked complete, incomplete usage being
 accepted as pilot evidence, and continued pilot spending after a failed
 stratum. Seven new regressions cover these cases.
 
-One R6 item remains open: the multi-agent live canary. After an initial
+The post-R19 R6 run remains open on the multi-agent live canary. After an initial
 Docker-permission skip inside the restricted sandbox, the elevated
 provider-backed run completed in 72.06 seconds with `1 failed, 2 passed`. The
 single-agent canary and canary-coverage assertion passed. Multi-agent failed
@@ -512,6 +537,12 @@ its supported `H2` cited `completed_data_audit`, which is neither a successful
 tool execution nor a verified artifact. The retained ledger recorded 14 model
 requests, 62,039 tokens, the successful audit and analyst events, three
 successful SQL executions, and the failed Lead event.
+
+The follow-up review established that this is not safely closed by a prompt-only
+change or another opportunistic retry. R20–R25 must first preserve and validate
+audit provenance end to end, align hypothesis transitions and citation
+semantics, add one bounded correction path, and classify the failure explicitly.
+The entire R6 preflight then starts again from a fresh revision.
 
 ### Scenario-document integrity is now a code invariant (R6)
 
@@ -617,26 +648,29 @@ The publishable observations are limited to the following:
 The repeated invalid-JSON outcome across models and architectures points to the
 permissive output-schema integration, not simple API availability or one model
 identity. No evaluator rule or score was changed to make an attempt pass, and
-no result was selected because it favored either architecture. R13–R19, the
-deterministic R6 rerun, and the validity review are now complete; fresh live
-canaries must pass before a new manifest and pilot set are frozen under the same
-offline-evaluation rules.
+no result was selected because it favored either architecture. R13–R19 are
+complete; R20–R25 and a fresh final R6 preflight must close before a new
+manifest and pilot set are frozen under the same offline-evaluation rules.
 
 ## Diagnosed local execution issues
 
-### VS Code environment inheritance
+### Provider environment loading
 
-The active VS Code agent process reported both variables absent, including when
-checked through the project Python interpreter:
+The active VS Code agent process originally reported both variables absent,
+including when checked through the project Python interpreter:
 
 ```text
 OPENAI_API_KEY=absent
 OPENAI_DEFAULT_MODEL=absent
 ```
 
-Exporting variables in VS Code's integrated terminal affects only that shell and
-processes launched by it. It does not update an extension host that is already
-running. The safe setup is:
+The variables were subsequently confirmed in the repository's ignored `.env`
+file without printing their values. The 2026-08-20 live rerun loaded them with
+`uv run --env-file .env`; provider access succeeded. Future bounded live commands
+should use the same explicit loading path. As an alternative, exporting
+variables in VS Code's integrated terminal affects only that shell and processes
+launched by it; it does not update an extension host that is already running.
+The safe inherited-environment setup is:
 
 1. Fully quit VS Code.
 2. Open macOS Terminal and export the values there.
@@ -691,33 +725,33 @@ Before another paid attempt:
    `tests/test_failure_taxonomy.py`, and
    `tests/test_pilot_set_calibration.py`. No evaluator rule was altered to
    mask the retained failures.
-2. The deterministic half of the reopened R6 preflight and the
+2. The prior deterministic half of the reopened R6 preflight and the
    benchmark-validity review have been rerun at this revision — strict-schema
    checks, failure-path accounting, lifecycle and taxonomy fixtures,
    scenario-document integrity, Docker integrations, Ruff, retained-artifact
    rescoring, all 60 dry-run cells, and seven new validity regressions.
-3. Resolve the multi-agent evidence-reference failure without weakening R2/R7,
-   then rerun `tests/test_strict_output_canary_live.py`. The 2026-08-20 paid run
-   passed single-agent but rejected multi-agent hypothesis `H2` because
-   `completed_data_audit` did not identify executed evidence. Version any
-   production contract or orchestration change before freezing a Task 10
-   manifest.
-4. Recheck variable presence without printing the key and confirm Docker access.
-5. Select the compatible model and freeze a new manifest before any paid execution.
-6. Review the declared ten-scenario × two-architecture × three-repetition matrix,
+3. Implement R20–R25 in order, preserving R2/R7 and versioning audit schemas,
+   evaluator rules, failure taxonomy, and output fingerprints deliberately.
+4. Rerun the complete R6 preflight from the new revision: full deterministic
+   suite, Ruff, Docker integrations, architecture-equivalence and adversarial
+   provenance fixtures, retained-artifact checks, 60-cell dry-run, and both
+   bounded paid live canaries. Do not retry a failed canary without disposition.
+5. Recheck variable presence without printing the key and confirm Docker access.
+6. Select the compatible model and freeze a new manifest before any paid execution.
+7. Review the declared ten-scenario × two-architecture × three-repetition matrix,
    budgets, evaluator versions, code revision, and output paths.
-7. Run and retain the R19 pilot set, including at least one cell per architecture.
-8. Decide whether the declared repetition count remains affordable. If it must
+8. Run and retain the R19 pilot set, including at least one cell per architecture.
+9. Decide whether the declared repetition count remains affordable. If it must
    change, create a new manifest/version and record the justification before the
    full run.
-9. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
+10. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
     overwrite workspaces.
-10. Evaluate every persisted workspace offline using the frozen evaluator rules.
-11. Inspect failures without changing rules mid-experiment. If code or evaluator
+11. Evaluate every persisted workspace offline using the frozen evaluator rules.
+12. Inspect failures without changing rules mid-experiment. If code or evaluator
     changes are required, version the benchmark and rerun the affected declared
     matrix rather than silently patching scores.
-12. Generate and retain raw manifests, run records, evaluator results, pilot
+13. Generate and retain raw manifests, run records, evaluator results, pilot
     report, and aggregate report.
-13. Publish real results and limitations, including denominators, failed runs,
+14. Publish real results and limitations, including denominators, failed runs,
     sample size, model specificity, evaluator limitations, uncertainty, cost,
     and latency—regardless of which architecture performs better.
