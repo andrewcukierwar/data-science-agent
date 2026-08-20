@@ -14,9 +14,9 @@ accurate failure taxonomy), and R19 (stratified pilot-set calibration) are all
 complete. The deterministic R6 rerun and benchmark-validity review are also
 complete. On 2026-08-20 the fresh single-agent canary passed, but the
 multi-agent canary failed its executed-evidence gate. Remediations R20–R25 now
-track the resulting audit/Lead provenance gaps; R20 is complete and R21–R25
-remain open. The paid matrix remains blocked, the final R6 gate is open, and no
-complete benchmark result is claimed. See
+track the resulting audit/Lead provenance gaps; R20 and R21 are complete and
+R22–R25 remain open. The paid matrix remains blocked, the final R6 gate is
+open, and no complete benchmark result is claimed. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, retained run artifacts, and the blocked live-run report.
 
@@ -42,7 +42,7 @@ The repository now contains versioned evaluation contracts, a zero-API offline
 evaluation engine, ten deterministic scenarios, calibrated correct and
 adversarial fixtures, a bounded generalist baseline, an immutable resumable
 benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **535 passed and 16 live tests
+deterministic verification completed with **565 passed and 16 live tests
 deselected**; Ruff lint and formatting checks passed, and the 10 × 2 × 3 matrix
 dry-run produced 60 unique cells. That is deterministic verification only; the
 complete R6 preflight, including both paid live canaries, is still open.
@@ -66,11 +66,11 @@ across architectures/workload classes (R19, complete).
 
 The live-canary review adds six provenance remediations: typed audit
 provenance across architecture boundaries (R20, P0, complete),
-audit-provenance enforcement in capability and offline scoring (R21, P0),
-aligned hypothesis evidence transitions (R22, P1), one bounded semantic
-correction cycle (R23, P1), lossless and consistent citation resolution (R24,
-P1), and explicit provenance-failure taxonomy plus final regression closure
-(R25, P2).
+audit-provenance enforcement in capability and offline scoring (R21, P0,
+complete), aligned hypothesis evidence transitions (R22, P1), one bounded
+semantic correction cycle (R23, P1), lossless and consistent citation
+resolution (R24, P1), and explicit provenance-failure taxonomy plus final
+regression closure (R25, P2).
 
 R13 replaces every open-ended dimension map with a typed `MetricDimension`
 list, so all six production agent output types compile through the Agents SDK
@@ -141,11 +141,26 @@ versioned `1.1`, contract `1.0` payloads still load with their provenance
 explicitly empty, and the output-schema fingerprint change forces a new
 benchmark manifest before any paid execution.
 
+R21 carries that boundary into offline scoring, which is the benchmark's source
+of truth and runs against workspaces the current runtime never touched. A
+completed `AuditResult` no longer satisfies the data-audit capability by itself:
+the audit must state a material claim and every material claim must resolve to
+successful execution or a verified artifact. Each required issue ID is scored
+for presence and for provenance separately, so an expected defect asserted from
+failed SQL, a failed script, a deleted artifact, a missing file, or an invented
+reference fails rather than scoring as recall. A clean audit must show a
+performed check through a supported table profile or limitation — reporting no
+defects is evidence of a clean dataset only when the checks behind it ran — and
+that rule stays neutral about which tool or role produced the evidence. The
+catalog evaluator version advanced deliberately to `1.2`, so records scored
+under `1.1` are refused rather than silently rescored under the new rules.
+
 R1–R12 are implemented and covered by architecture-equivalence, capability/tool-
 mix, failed-evidence, workspace identity, evaluator-error, lifecycle,
 aggregation-safe rescore, pilot/run-record binding, append-only attempt
 reconciliation, scenario-document integrity, and exclusive atomic offline-output
-fixtures. The catalog evaluator version is now `1.1` for these scoring changes.
+fixtures. The catalog evaluator version is now `1.2`, advanced for the R9
+aggregation changes and again for R21 audit-provenance scoring.
 The reopened R6 preflight has been rerun at this revision: the 508-test
 deterministic suite, Ruff, every declared adversarial suite, the Docker-backed
 integration tests, all 60 declared dry-run cells, and a benchmark-validity code
@@ -153,7 +168,7 @@ review pass. That review closed pilot selection, pilot-partition, repository
 identity, failure-taxonomy, and incomplete-accounting gaps. A fresh paid run on
 2026-08-20 passed the single-agent canary and coverage assertion but failed the
 multi-agent canary because Lead hypothesis `H2` cited no executed evidence.
-R21–R25 must close, followed by a fresh complete R6 preflight and both live
+R22–R25 must close, followed by a fresh complete R6 preflight and both live
 architecture canaries, before another Task 10 manifest is frozen.
 
 Task 10 execution is currently blocked before the paid matrix. Four immutable
@@ -247,7 +262,7 @@ uv run python scripts/run_benchmark.py plan benchmark.json --model gpt-5.6-luna
 ```
 
 The paid commands below are the current CLI surface, but **must not be run again
-until R21–R25 are complete and the reopened R6 gate passes**. R19 already
+until R22–R25 are complete and the reopened R6 gate passes**. R19 already
 replaced the single first-cell estimate with a declared pilot set containing at
 least one cell per architecture before the remaining immutable cells can resume:
 

@@ -21,7 +21,13 @@ from evaluation.rules import (
 from scenarios import get_scenario
 from scenarios.experiment_scenarios import statistical_assessment_for_scenario
 from scenarios.generator import SyntheticEcommerceConfig, SyntheticEcommerceGenerator
-from schemas.audit import AuditResult, AuditStatus, DataQualityIssue, IssueSeverity
+from schemas.audit import (
+    AuditResult,
+    AuditStatus,
+    DataQualityIssue,
+    IssueSeverity,
+    TableAudit,
+)
 from schemas.findings import SpecialistResult
 from schemas.run_state import AnalysisRunState, SpecialistResultRecord
 from schemas.statistics import (
@@ -106,11 +112,19 @@ def test_auditor_defect_recall_and_wrong_defect_rejection(
     policy = rules().data_quality_policy
 
     correct_state = _state(audit=_audit(expected_issue))
-    correct_checks = evaluate_data_quality(correct_state, policy)
+    correct_checks = evaluate_data_quality(
+        correct_state,
+        policy,
+        executed_refs=_executed_refs(correct_state),
+    )
     assert all(check.status.value == "pass" for check in correct_checks)
 
     wrong_state = _state(audit=_audit(wrong_issue))
-    wrong_checks = evaluate_data_quality(wrong_state, policy)
+    wrong_checks = evaluate_data_quality(
+        wrong_state,
+        policy,
+        executed_refs=_executed_refs(wrong_state),
+    )
     assert any(check.status.value == "fail" for check in wrong_checks)
 
 
@@ -119,15 +133,19 @@ def test_clean_data_quality_policy_rejects_false_positive() -> None:
         maximum_issue_severity=IssueSeverity.HIGH,
         forbid_any_issues=True,
     )
+    clean_state = _state(audit=_clean_audit())
     clean_checks = evaluate_data_quality(
-        _state(audit=AuditResult(status=AuditStatus.COMPLETE)),
+        clean_state,
         policy,
+        executed_refs=_executed_refs(clean_state),
     )
     assert all(check.status.value == "pass" for check in clean_checks)
 
+    false_positive_state = _state(audit=_audit("missing_reporting_day"))
     false_positive_checks = evaluate_data_quality(
-        _state(audit=_audit("missing_reporting_day")),
+        false_positive_state,
         policy,
+        executed_refs=_executed_refs(false_positive_state),
     )
     assert any(
         check.check_id == "data_quality:no_issues" and check.status.value == "fail"
@@ -294,9 +312,19 @@ def test_statistical_evaluator_rejects_incomplete_or_wrong_claims(
     assert any(check.status.value == "fail" for check in checks)
 
 
+_PROFILE_EVIDENCE = "evidence:table-profile"
+
+
 def _audit(*issue_ids: str) -> AuditResult:
     return AuditResult(
         status=AuditStatus.COMPLETE,
+        tables=[
+            TableAudit(
+                table_name="orders",
+                row_count=1200,
+                evidence_refs=[_PROFILE_EVIDENCE],
+            )
+        ],
         issues=[
             DataQualityIssue(
                 id=issue_id,
@@ -307,6 +335,38 @@ def _audit(*issue_ids: str) -> AuditResult:
             for issue_id in issue_ids
         ],
     )
+
+
+def _clean_audit() -> AuditResult:
+    """A clean audit still has to show which checks it ran."""
+
+    return AuditResult(
+        status=AuditStatus.COMPLETE,
+        tables=[
+            TableAudit(
+                table_name="orders",
+                row_count=1200,
+                evidence_refs=[_PROFILE_EVIDENCE],
+            )
+        ],
+    )
+
+
+def _executed_refs(state: AnalysisRunState) -> set[str]:
+    """Treat every reference the fixture audit cites as executed evidence.
+
+    Provenance resolution itself is covered by the offline adversarial fixtures;
+    these scenario tests are about defect recall and false positives.
+    """
+
+    references = {_PROFILE_EVIDENCE}
+    if state.audit is not None:
+        references.update(
+            reference
+            for issue in state.audit.issues
+            for reference in issue.evidence_refs
+        )
+    return references
 
 
 def _state(**values: object) -> AnalysisRunState:

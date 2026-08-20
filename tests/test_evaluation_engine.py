@@ -42,6 +42,10 @@ from schemas.metrics import MetricComparison
 from schemas.run_state import RunStatus, ToolEvent, ToolEventStatus
 from tools.workspace import WorkspaceManager
 
+# Fixture identities track the catalog; the deliberate version gate lives
+# in tests/test_scenario_catalog.py.
+_CATALOG_EVALUATOR_VERSION = CANONICAL_PROFITABILITY_SCENARIO.evaluator_version
+
 
 def _comparisons() -> list[MetricComparison]:
     return [
@@ -194,7 +198,7 @@ def _bound_fixture_workspace(tmp_path: Path):
             run_id="bound",
             scenario_id=CANONICAL_PROFITABILITY_SCENARIO.scenario_id,
             scenario_version="1.0",
-            evaluator_version="1.1",
+            evaluator_version=_CATALOG_EVALUATOR_VERSION,
             architecture="single-agent",
             repetition=1,
             seed=42,
@@ -211,7 +215,7 @@ def test_bound_workspace_refuses_rules_with_different_scenario_or_evaluator(
     rules = ScenarioRules(
         scenario_id="different-scenario",
         scenario_version="1.0",
-        evaluator_version="1.1",
+        evaluator_version=_CATALOG_EVALUATOR_VERSION,
     )
 
     with pytest.raises(WorkspaceIdentityError, match="does not match evaluator rules"):

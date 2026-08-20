@@ -46,7 +46,9 @@ def test_catalog_resolves_canonical_generator_evaluator_and_version() -> None:
     )
     registration = get_scenario("canonical-q2-profitability", "1.0")
     assert registration.generator_name == "generate_canonical_profitability_scenario"
-    assert registration.evaluator_rules().evaluator_version == "1.1"
+    # The catalog evaluator version is advanced deliberately, never as a
+    # side effect. ``1.2`` carries R21 audit-provenance enforcement.
+    assert registration.evaluator_rules().evaluator_version == "1.2"
     assert registration.evaluation_spec.ground_truth == (
         *CANONICAL_PROFITABILITY_SCENARIO.ground_truth,
     )

@@ -80,7 +80,10 @@ class ScenarioDefinition(BaseModel):
     user_question: NonEmptyString
     seed: int = Field(default=42, ge=0)
     generation_config: dict[str, JsonValue] = Field(default_factory=dict)
-    evaluator_version: VersionString = "1.1"
+    # Advanced deliberately whenever a scoring rule changes. ``1.2`` adds
+    # R21 audit-provenance enforcement: a completed audit or a matching
+    # issue ID no longer satisfies a requirement on its own.
+    evaluator_version: VersionString = "1.2"
     injected_conditions: tuple[InjectedCondition, ...] = Field(min_length=1)
     expected_primary_driver: NonEmptyString
     expected_secondary_findings: tuple[NonEmptyString, ...] = Field(min_length=1)

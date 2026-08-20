@@ -19,7 +19,14 @@ from agents.evidence import executed_references
 from evaluation.contracts import EvaluationCheck, EvaluationCheckStatus
 from orchestration.ledger import AnalysisLedger
 from scenarios.definitions.models import GroundTruthMetric
-from schemas.audit import AuditStatus, IssueSeverity
+from schemas.audit import (
+    AuditClaim,
+    AuditClaimKind,
+    AuditResult,
+    AuditStatus,
+    IssueSeverity,
+    audit_claims,
+)
 from schemas.findings import SpecialistResult
 from schemas.lead import LeadResult
 from schemas.metrics import (
@@ -411,13 +418,82 @@ def compile_final_metric_set(
     return tuple(compilation.comparisons), tuple(checks)
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedAuditClaim:
+    """One material audit claim and whether its provenance survives offline.
+
+    ``supported`` uses the same successful-execution and verified-artifact
+    boundary as findings, metrics, hypotheses, and statistical assessments. A
+    claim is supported only when it names evidence of its own; an unrelated
+    successful execution elsewhere in the run never rescues it.
+    """
+
+    claim: AuditClaim
+    supported: bool
+
+    @property
+    def claim_id(self) -> str:
+        return self.claim.claim_id
+
+
+def resolve_audit_claims(
+    audit: AuditResult | None,
+    executed_refs: set[str],
+) -> tuple[ResolvedAuditClaim, ...]:
+    """Resolve every material audit claim against executed evidence."""
+
+    if audit is None:
+        return ()
+    return tuple(
+        ResolvedAuditClaim(
+            claim=claim,
+            supported=any(
+                reference in executed_refs for reference in claim.evidence_refs
+            ),
+        )
+        for claim in audit_claims(audit)
+    )
+
+
+def _unsupported_claim_ids(
+    resolved: Sequence[ResolvedAuditClaim],
+) -> tuple[str, ...]:
+    return tuple(item.claim_id for item in resolved if not item.supported)
+
+
+def _performed_check_evidence(
+    resolved: Sequence[ResolvedAuditClaim],
+) -> tuple[ResolvedAuditClaim, ...]:
+    """Return supported claims that demonstrate a check was actually performed.
+
+    A table profile or a stated limitation both prove work happened. Neither
+    prescribes a tool mix or a producer role: any reference that resolves to a
+    successful execution or verified artifact counts.
+    """
+
+    return tuple(
+        item
+        for item in resolved
+        if item.supported
+        and item.claim.kind in {AuditClaimKind.TABLE_PROFILE, AuditClaimKind.LIMITATION}
+    )
+
+
 def evaluate_data_quality(
     state: AnalysisRunState,
     policy: DataQualityPolicy,
     *,
+    executed_refs: set[str],
     check_prefix: str = "data_quality",
 ) -> tuple[EvaluationCheck, ...]:
-    """Evaluate audit completion, expected defects, and false positives."""
+    """Evaluate audit completion, expected defects, false positives, provenance.
+
+    A completed audit or a matching issue ID is not sufficient on its own. Every
+    audit claim that satisfies a scenario requirement must resolve through the
+    same executed-evidence boundary the rest of the evidence contract uses, so a
+    defect asserted from failed SQL, a failed script, a missing file, or an
+    invented reference fails here rather than scoring as recall.
+    """
 
     audit = state.audit
     if audit is None:
@@ -429,6 +505,14 @@ def evaluate_data_quality(
             ),
         )
 
+    resolved = resolve_audit_claims(audit, executed_refs)
+    supported_issue_ids = {
+        item.claim.issue_id
+        for item in resolved
+        if item.supported
+        and item.claim.kind is AuditClaimKind.ISSUE
+        and item.claim.issue_id is not None
+    }
     checks = [
         _check(
             f"{check_prefix}:audit_status",
@@ -444,6 +528,18 @@ def evaluate_data_quality(
                 f"{check_prefix}:required:{issue_id}",
                 issue_id in issue_ids,
                 f"required data-quality issue {issue_id} is present",
+            )
+        )
+        checks.append(
+            _check(
+                f"{check_prefix}:required_provenance:{issue_id}",
+                issue_id in supported_issue_ids,
+                f"required data-quality issue {issue_id} cites executed evidence"
+                if issue_id in supported_issue_ids
+                else (
+                    f"required data-quality issue {issue_id} cites no successful "
+                    "execution or verified artifact"
+                ),
             )
         )
     for issue_id in policy.forbidden_issue_ids:
@@ -487,6 +583,33 @@ def evaluate_data_quality(
                 + ", ".join(issue.id for issue in audit.issues),
             )
         )
+        # A clean audit still has to prove it looked. Reporting no defects is
+        # only evidence of a clean dataset when the checks behind it ran.
+        performed = _performed_check_evidence(resolved)
+        checks.append(
+            _check(
+                f"{check_prefix}:clean_audit_evidence",
+                bool(performed),
+                "clean audit demonstrates executed checks: "
+                + ", ".join(item.claim_id for item in performed)
+                if performed
+                else (
+                    "clean audit demonstrates no executed check; a table profile "
+                    "or limitation citing successful execution or a verified "
+                    "artifact is required"
+                ),
+            )
+        )
+    unsupported = _unsupported_claim_ids(resolved)
+    checks.append(
+        _check(
+            f"{check_prefix}:claim_provenance",
+            not unsupported,
+            "every material audit claim cites executed evidence"
+            if not unsupported
+            else "audit claims cite no executed evidence: " + ", ".join(unsupported),
+        )
+    )
     return tuple(checks)
 
 
@@ -551,17 +674,48 @@ def evaluate_capabilities(
     state: AnalysisRunState,
     policy: CapabilityPolicy,
     *,
+    executed_refs: set[str] | None = None,
     check_prefix: str = "capability",
 ) -> tuple[EvaluationCheck, ...]:
     """Check scenario-declared outputs without prescribing their producer."""
 
+    resolved_refs = (
+        _evidence_refs(workspace) if executed_refs is None else executed_refs
+    )
     checks: list[EvaluationCheck] = []
     for capability in policy.required:
         if capability is AnalyticalCapability.DATA_AUDIT:
-            passed = state.audit is not None and (
-                state.audit.status is AuditStatus.COMPLETE
+            # A completed AuditResult is a lifecycle fact, not an analytical
+            # output. The capability is satisfied only when the audit states
+            # something material and that statement resolves to executed
+            # evidence, whichever role or tool produced it.
+            resolved_claims = resolve_audit_claims(state.audit, resolved_refs)
+            supported_claims = tuple(item for item in resolved_claims if item.supported)
+            passed = (
+                state.audit is not None
+                and state.audit.status is AuditStatus.COMPLETE
+                and bool(supported_claims)
+                and not _unsupported_claim_ids(resolved_claims)
             )
-            message = "completed data audit is present"
+            if state.audit is None:
+                message = "completed data audit is missing"
+            elif state.audit.status is not AuditStatus.COMPLETE:
+                message = (
+                    f"data audit status is {state.audit.status.value}; "
+                    "expected complete"
+                )
+            elif not resolved_claims:
+                message = "completed data audit states no material claim"
+            elif unsupported := _unsupported_claim_ids(resolved_claims):
+                message = (
+                    "completed data audit states claims without executed "
+                    "evidence: " + ", ".join(unsupported)
+                )
+            else:
+                message = (
+                    "completed data audit is present with executed provenance "
+                    f"for {len(supported_claims)} material claims"
+                )
         elif capability is AnalyticalCapability.REQUIRED_METRICS:
             passed = bool(state.metric_comparisons)
             message = "required structured metric outputs are present"
@@ -574,7 +728,7 @@ def evaluate_capabilities(
             )
             message = "successful final critique is present"
         elif capability is AnalyticalCapability.VERIFIED_EVIDENCE:
-            passed = bool(executed_references(AnalysisLedger(workspace)))
+            passed = bool(resolved_refs)
             message = "verified evidence is present"
         else:  # pragma: no cover - exhaustive for the typed capability enum
             passed = False
@@ -1163,6 +1317,8 @@ __all__ = [
     "contains_non_driver_conclusion",
     "contains_stable_conclusion",
     "compile_final_metric_set",
+    "ResolvedAuditClaim",
+    "resolve_audit_claims",
     "evaluate_data_quality",
     "evaluate_capabilities",
     "evaluate_lifecycle",

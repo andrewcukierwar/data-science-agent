@@ -9,6 +9,7 @@ loadable: the coercion below preserves their statements and leaves their
 provenance explicitly empty rather than inventing references for them.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Annotated, Any
@@ -149,6 +150,85 @@ class AuditResult(BaseModel):
         if self.audited_at.tzinfo is None or self.audited_at.utcoffset() is None:
             raise ValueError("audited_at must include timezone information")
         return self
+
+
+class AuditClaimKind(StrEnum):
+    """Where a material audit claim was stated."""
+
+    TABLE_PROFILE = "table_profile"
+    TABLE_WARNING = "table_warning"
+    ISSUE = "issue"
+    LIMITATION = "limitation"
+
+
+@dataclass(frozen=True, slots=True)
+class AuditClaim:
+    """One material audit statement and the references the model supplied."""
+
+    claim_id: str
+    kind: AuditClaimKind
+    statement: str
+    evidence_refs: tuple[str, ...]
+    table_name: str | None = None
+    issue_id: str | None = None
+
+
+def audit_claims(audit: AuditResult) -> tuple[AuditClaim, ...]:
+    """Enumerate every material audit claim with a deterministic claim ID.
+
+    This projection lives beside the contract rather than in the agent runtime
+    so the offline evaluator can resolve the same claims, with the same IDs,
+    without importing anything that executes agents.
+
+    Claim IDs are positional so two claims can never collide, even when a model
+    reuses an issue ID or repeats a table name.
+    """
+
+    claims: list[AuditClaim] = []
+    for table_index, table in enumerate(audit.tables):
+        claims.append(
+            AuditClaim(
+                claim_id=f"audit:table:{table_index}",
+                kind=AuditClaimKind.TABLE_PROFILE,
+                statement=(
+                    f"{table.table_name}: {table.row_count} rows, duplicate rate "
+                    f"{table.duplicate_rate}"
+                ),
+                evidence_refs=tuple(table.evidence_refs),
+                table_name=table.table_name,
+            )
+        )
+        for warning_index, warning in enumerate(table.warnings):
+            claims.append(
+                AuditClaim(
+                    claim_id=f"audit:table:{table_index}:warning:{warning_index}",
+                    kind=AuditClaimKind.TABLE_WARNING,
+                    statement=warning.statement,
+                    evidence_refs=tuple(warning.evidence_refs),
+                    table_name=table.table_name,
+                )
+            )
+    for issue_index, issue in enumerate(audit.issues):
+        claims.append(
+            AuditClaim(
+                claim_id=f"audit:issue:{issue_index}",
+                kind=AuditClaimKind.ISSUE,
+                statement=f"[{issue.severity.value}] {issue.message}",
+                evidence_refs=tuple(issue.evidence_refs),
+                table_name=issue.table_name,
+                issue_id=issue.id,
+            )
+        )
+    for limitation_index, limitation in enumerate(audit.limitations):
+        claims.append(
+            AuditClaim(
+                claim_id=f"audit:limitation:{limitation_index}",
+                kind=AuditClaimKind.LIMITATION,
+                statement=limitation.statement,
+                evidence_refs=tuple(limitation.evidence_refs),
+            )
+        )
+    return tuple(claims)
 
 
 # Name used by some callers when the result is referred to as a data audit.

@@ -2,15 +2,18 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-20 — Phase 2 Tasks 1–9, R1–R19, and R20 are implemented.
+**Revision:** 2026-08-20 — Phase 2 Tasks 1–9, R1–R19, R20, and R21 are
+implemented.
 The deterministic portion of the reopened R6 gate and its benchmark-validity
 review are complete. Fresh paid canaries were run: the single-agent architecture
 passed, while the multi-agent architecture failed its executed-evidence gate.
-The resulting audit/Lead provenance gaps are tracked as R20–R25. R20 is now
-closed: audit contract 2.0 makes every material audit claim evidence-bearing,
-one persistence boundary refuses an unsupported completed audit, and the Lead
-receives a bounded typed audit evidence catalog. R21–R25 remain open. Task 10
-remains blocked before the paid matrix; no benchmark result is published.
+The resulting audit/Lead provenance gaps are tracked as R20–R25. R20 and R21
+are now closed: audit contract 2.0 makes every material audit claim
+evidence-bearing, one persistence boundary refuses an unsupported completed
+audit, the Lead receives a bounded typed audit evidence catalog, and offline
+scoring enforces the same provenance boundary at catalog evaluator version 1.2.
+R22–R25 remain open. Task 10 remains blocked before the paid matrix; no
+benchmark result is published.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1473,9 +1476,9 @@ bound to the frozen manifest. The post-R19 deterministic preflight and
 benchmark-validity review are complete. Fresh paid canaries ran on 2026-08-20:
 the single-agent architecture passed, while the multi-agent architecture failed
 because Lead hypothesis `H2` cited `completed_data_audit` rather than executed
-evidence. A focused review opened R20–R25. R20 is
-implemented; R21–R25 remain open, and R6 must be rerun after all of them and
-therefore remains open.
+evidence. A focused review opened R20–R25. R20 and
+R21 are implemented; R22–R25 remain open, and R6 must be rerun after all of
+them and therefore remains open.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
 rescores and aggregate reports are retained under
@@ -1495,7 +1498,7 @@ constraints are recorded in `docs/phase2-status.md`.
 | 7 | Complete | Bounded generalist architecture sharing runtime, provenance, tools, and report contracts without specialist delegation |
 | 8 | Complete | Immutable resumable matrix runner, paid opt-in, cost pilot gate, failure isolation, and offline rescoring |
 | 9 | Complete | Deterministic denominator-preserving aggregation, uncertainty, paired comparisons, cost/latency, and failure reporting |
-| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R21–R25 and a fresh final R6 preflight must close before a new 60-cell matrix is started |
+| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R22–R25 and a fresh final R6 preflight must close before a new 60-cell matrix is started |
 
 ### Phase 2 implementation order
 
@@ -1740,9 +1743,9 @@ does not close R6.
 Status: the deterministic preflight and benchmark-validity review were rerun at
 this revision after R13–R19. The fresh paid single-agent canary passed on
 2026-08-20, but the multi-agent canary failed the production evidence gate. R20
-has since closed the audit-provenance half of that failure. R21–R25 must close
-before the complete R6 preflight and both live canaries are rerun, so R6
-remains open.
+and R21 have since closed the audit-provenance half of that failure at runtime
+and offline. R22–R25 must close before the complete R6 preflight and both live
+canaries are rerun, so R6 remains open.
 
 Scenario-document integrity is now enforced in code rather than only in a test.
 The shared generated document is inherited unchanged by the clean baseline and
@@ -2298,8 +2301,8 @@ references, and resolved hypothesis `H2` using the invented reference
 
 R20–R25 close the cross-agent provenance contract rather than weakening that
 gate or retrying until a favorable model output appears. All six tasks must be
-implemented before another complete R6 preflight or Task 10 manifest. R20 is
-implemented; R21–R25 remain open.
+implemented before another complete R6 preflight or Task 10 manifest. R20 and
+R21 are implemented; R22–R25 remain open.
 
 #### R20 — Preserve typed audit provenance across architecture boundaries [P0] — Implemented
 
@@ -2361,7 +2364,7 @@ gaining invented provenance. Decision record
 `docs/decisions/0009-audit-provenance-across-architectures.md` holds the
 rationale and `tests/test_audit_provenance.py` holds the regressions.
 
-#### R21 — Enforce audit provenance in capability and offline scoring [P0]
+#### R21 — Enforce audit provenance in capability and offline scoring [P0] — Implemented
 
 Extend the evaluator's data-audit capability and provenance checks so a
 completed `AuditResult` or expected issue ID is insufficient by itself. Audit
@@ -2380,6 +2383,39 @@ Acceptance:
   particular tool mix or producer role;
 - architecture-equivalence fixtures give semantically identical audits the same
   result, and the evaluator version is advanced deliberately.
+
+Implemented. `evaluation.primitives.resolve_audit_claims` resolves every
+material audit claim against the same successful-execution and verified-artifact
+boundary used for findings, metrics, hypotheses, and statistical assessments.
+The claim projection moved from `agents.audit_evidence` into `schemas.audit` so
+the evaluator resolves identical claim IDs without importing anything that
+executes agents, and `evaluate_workspace` resolves executed references once and
+shares that one set with the audit, capability, and provenance checks.
+
+`capability:data_audit` now requires a completed audit that states at least one
+material claim with no unsupported claim, and names the unsupported claim IDs
+when it fails. Each required issue ID is scored twice: the existing presence
+check plus `data_quality:required_provenance:{id}`, so an expected defect
+asserted from failed SQL, a failed script, a deleted artifact, a missing file,
+or an invented reference fails while its presence check still passes — the
+distinction stays visible instead of scoring as recall.
+`data_quality:claim_provenance` covers every material claim, and
+`data_quality:clean_audit_evidence` requires a clean audit to demonstrate a
+performed check through a supported table profile or limitation.
+
+The clean-audit rule preserves R1 and R7: references from `run_sql`,
+`run_python`, `inspect_relations`, or a verified artifact satisfy it equally,
+and no check inspects the producing role. Architecture-equivalence fixtures
+assert that five-role and single-role workspaces holding the same audit produce
+byte-identical check tuples in both the passing and failing direction.
+
+The catalog evaluator version advanced deliberately from `1.1` to `1.2`. Two
+consequences are intended, not worked around: offline rescore of the retained
+`1.1`-bound Task 10 manifests is refused unless rules pinned to `1.1` are
+supplied explicitly, and the retained Phase-1 canonical workspace — whose audit
+predates contract 2.0 — goes from 4 to 7 offline failures because its claims
+correctly resolve as unsupported. `tests/test_audit_provenance_scoring.py`
+holds the regressions.
 
 #### R22 — Align hypothesis evidence contracts and validate state transitions [P1]
 

@@ -66,6 +66,7 @@ from evaluation.primitives import (
     AnalyticalCapability,
     CapabilityPolicy,
     DataQualityPolicy,
+    ResolvedAuditClaim,
     StatisticsPolicy,
     TaskCompletenessPolicy,
     TextRule,
@@ -79,6 +80,7 @@ from evaluation.primitives import (
     evaluate_statistics,
     evaluate_task_completeness,
     evaluate_unsupported_claims,
+    resolve_audit_claims,
 )
 from evaluation.rules import (
     canonical_rules,
@@ -160,6 +162,8 @@ __all__ = [
     "dump_stable_json",
     "ensure_distinct_paths",
     "ensure_output_is_new",
+    "ResolvedAuditClaim",
+    "resolve_audit_claims",
     "evaluate_data_quality",
     "evaluate_capabilities",
     "evaluate_lifecycle",

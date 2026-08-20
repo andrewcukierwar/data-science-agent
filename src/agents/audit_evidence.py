@@ -6,21 +6,21 @@ multi-agent lifecycle the Lead receives a persisted audit and has no SQL,
 Python, or internal-state access with which to rediscover how a claim was
 established. This module makes that provenance travel with the claim.
 
-Three things happen here:
+Two things happen here, over the claim projection ``schemas.audit`` owns:
 
-* every material audit claim is enumerated with a deterministic claim ID;
 * the persistence boundary canonicalizes each claim's references against the
   ledger and refuses to persist a completed audit whose material claims have
   missing, failed, ambiguous, or fabricated provenance;
 * a bounded, typed catalog exposes the surviving canonical references so the
   Lead can cite exact executed evidence instead of a pseudo-reference such as
   ``completed_data_audit``.
+
+The offline evaluator enforces the same boundary from persisted state alone;
+see ``evaluation.primitives.resolve_audit_claims``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,7 +32,13 @@ from agents.evidence import (
 )
 from agents.runtime import AgentRunContext
 from orchestration.ledger import AnalysisLedger
-from schemas.audit import AuditResult, AuditStatus
+from schemas.audit import (
+    AuditClaim,
+    AuditClaimKind,
+    AuditResult,
+    AuditStatus,
+    audit_claims,
+)
 from schemas.findings import Finding
 
 AUDIT_EVIDENCE_CATALOG_VERSION = "1.0"
@@ -47,27 +53,6 @@ MAX_CATALOG_STATEMENT_CHARS = 400
 
 class AuditEvidenceError(ValueError):
     """Raised when material audit claims lack canonical executed provenance."""
-
-
-class AuditClaimKind(StrEnum):
-    """Where a material audit claim was stated."""
-
-    TABLE_PROFILE = "table_profile"
-    TABLE_WARNING = "table_warning"
-    ISSUE = "issue"
-    LIMITATION = "limitation"
-
-
-@dataclass(frozen=True, slots=True)
-class AuditClaim:
-    """One material audit statement and the references the model supplied."""
-
-    claim_id: str
-    kind: AuditClaimKind
-    statement: str
-    evidence_refs: tuple[str, ...]
-    table_name: str | None = None
-    issue_id: str | None = None
 
 
 class AuditEvidenceEntry(BaseModel):
@@ -101,60 +86,6 @@ class AuditEvidenceCatalog(BaseModel):
     entry_limit: int = Field(default=MAX_CATALOG_ENTRIES, ge=1)
     truncated: bool = False
     citable_references: tuple[str, ...] = Field(default_factory=tuple)
-
-
-def audit_claims(audit: AuditResult) -> tuple[AuditClaim, ...]:
-    """Enumerate every material audit claim with a deterministic claim ID.
-
-    Claim IDs are positional so two claims can never collide, even when a model
-    reuses an issue ID or repeats a table name.
-    """
-
-    claims: list[AuditClaim] = []
-    for table_index, table in enumerate(audit.tables):
-        claims.append(
-            AuditClaim(
-                claim_id=f"audit:table:{table_index}",
-                kind=AuditClaimKind.TABLE_PROFILE,
-                statement=(
-                    f"{table.table_name}: {table.row_count} rows, duplicate rate "
-                    f"{table.duplicate_rate}"
-                ),
-                evidence_refs=tuple(table.evidence_refs),
-                table_name=table.table_name,
-            )
-        )
-        for warning_index, warning in enumerate(table.warnings):
-            claims.append(
-                AuditClaim(
-                    claim_id=f"audit:table:{table_index}:warning:{warning_index}",
-                    kind=AuditClaimKind.TABLE_WARNING,
-                    statement=warning.statement,
-                    evidence_refs=tuple(warning.evidence_refs),
-                    table_name=table.table_name,
-                )
-            )
-    for issue_index, issue in enumerate(audit.issues):
-        claims.append(
-            AuditClaim(
-                claim_id=f"audit:issue:{issue_index}",
-                kind=AuditClaimKind.ISSUE,
-                statement=f"[{issue.severity.value}] {issue.message}",
-                evidence_refs=tuple(issue.evidence_refs),
-                table_name=issue.table_name,
-                issue_id=issue.id,
-            )
-        )
-    for limitation_index, limitation in enumerate(audit.limitations):
-        claims.append(
-            AuditClaim(
-                claim_id=f"audit:limitation:{limitation_index}",
-                kind=AuditClaimKind.LIMITATION,
-                statement=limitation.statement,
-                evidence_refs=tuple(limitation.evidence_refs),
-            )
-        )
-    return tuple(claims)
 
 
 def _canonical_refs(

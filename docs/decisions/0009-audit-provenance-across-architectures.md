@@ -4,6 +4,7 @@
 - Date: 2026-08-20
 - Phase: Phase 2
 - Extends: [0004](0004-evidence-provenance-and-metric-compilation.md)
+- Covers: remediation R20 (runtime contract) and R21 (offline enforcement)
 
 ## Context
 
@@ -62,8 +63,30 @@ access to internal state.
 Without it, an auditor could establish a row count with a successful tool call
 and still have no reference to cite for it.
 
+Offline scoring enforces the same boundary from persisted state alone, because
+the benchmark's source of truth is the evaluator and it runs against workspaces
+the current runtime never touched. The claim projection therefore lives in
+`schemas.audit`, where the evaluator can reach it without importing anything
+that executes agents, and `evaluate_workspace` resolves executed references once
+for the audit, capability, and provenance checks so they cannot disagree. A
+completed `AuditResult` no longer satisfies the data-audit capability on its
+own: the audit must state a material claim and every material claim must
+resolve. Each required issue ID is scored twice — presence and provenance — so
+a defect asserted from failed or fabricated evidence is visibly distinguished
+from one that was actually established. A clean audit must demonstrate a
+performed check through a supported table profile or limitation; reporting no
+defects is evidence of a clean dataset only when the checks behind it ran.
+
+That clean-audit rule is deliberately tool- and role-neutral, preserving
+decisions 0002 and the R1/R7 architecture-neutrality contract: a reference from
+SQL, Python, relation inspection, or a verified artifact satisfies it equally,
+and no check inspects which agent produced the audit.
+
 Version handling:
 
+- the catalog evaluator version advances from `1.1` to `1.2` for the scoring
+  change, so records scored under the old rules are not silently rescored under
+  the new ones;
 - persisted state is written at `CURRENT_STATE_SCHEMA_VERSION = "1.1"`, which
   the offline evaluation contracts accept alongside `legacy` and `1.0`;
 - `output_schema_fingerprint()` covers `AuditResult` and `GeneralistResult`, so
@@ -84,10 +107,17 @@ Version handling:
 - The Data Auditor must spend a tool call on any statement it wants to make.
   Preferring an omitted statement to an unsupported one is the intended
   trade-off.
-- Retained pre-`2.0` workspaces remain loadable and rescoreable, but their audit
-  claims carry no provenance and must not be read as supported.
+- Retained pre-`2.0` workspaces remain loadable, but their audit claims carry no
+  provenance and correctly score as unsupported. The retained Phase-1 canonical
+  workspace goes from 4 to 7 offline failures for exactly this reason; it
+  already failed before the change.
+- Offline rescore of a manifest bound to evaluator `1.1` is refused under `1.2`
+  rules. That is the identity binding working, not a defect: rescoring old
+  evidence under new rules is the thing the version exists to prevent. Rescoring
+  such a manifest requires explicitly supplying rules pinned to `1.1`.
 
 ## Verification
 
-See `src/schemas/audit.py`, `src/agents/audit_evidence.py`, and
-`tests/test_audit_provenance.py`.
+See `src/schemas/audit.py`, `src/agents/audit_evidence.py`,
+`src/evaluation/primitives.py`, `tests/test_audit_provenance.py`, and
+`tests/test_audit_provenance_scoring.py`.

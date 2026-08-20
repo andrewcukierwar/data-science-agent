@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agents.evidence import executed_references
 from evaluation.contracts import (
     BenchmarkManifest,
     BenchmarkRunRecord,
@@ -189,14 +190,25 @@ def evaluate_workspace(
             evaluator_version=rules.evaluator_version,
         )
     state = snapshot.state
+    # One resolution of executed evidence for the whole evaluation, so the
+    # audit, capability, and provenance checks cannot disagree about what
+    # counts as a successful execution or a verified artifact.
+    executed_refs = executed_references(snapshot.ledger)
     checks: list[EvaluationCheck] = []
     checks.extend(evaluate_lifecycle(state))
-    checks.extend(evaluate_data_quality(state, rules.data_quality_policy))
+    checks.extend(
+        evaluate_data_quality(
+            state,
+            rules.data_quality_policy,
+            executed_refs=executed_refs,
+        )
+    )
     checks.extend(
         evaluate_capabilities(
             snapshot.workspace,
             state,
             rules.capability_policy,
+            executed_refs=executed_refs,
         )
     )
     final_metrics, metric_set_checks = compile_final_metric_set(

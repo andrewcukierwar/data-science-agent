@@ -22,7 +22,7 @@ from evaluation.canonical import (
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
-from schemas.audit import AuditResult
+from schemas.audit import AuditObservation, AuditResult, TableAudit
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.hypotheses import Hypothesis, HypothesisStatus
 from schemas.lead import LeadResult
@@ -36,6 +36,7 @@ from schemas.run_state import (
 )
 from schemas.validation import ValidationResult, ValidationStatus
 from tools.artifacts import ArtifactManager
+from tools.sql import DuckDBExecutionService
 from tools.workspace import WorkspaceManager
 
 
@@ -266,11 +267,41 @@ def test_evaluator_metadata_does_not_enter_lead_or_critic_prompt_text() -> None:
     )
 
 
+def _audit_with_executed_provenance(context) -> AuditResult:  # noqa: ANN001
+    """Return a production-shaped audit that cites its own executed check.
+
+    A real Data Auditor establishes its table profile with an approved tool
+    call, so the deterministic fixture does the same rather than asserting a
+    completed status with nothing behind it.
+    """
+
+    inspection = context.sql_service.inspect_relations()
+    reference = inspection.tool_event_id
+    assert reference is not None
+    return AuditResult(
+        status="complete",
+        tables=[
+            TableAudit(
+                table_name=relation.relation_name,
+                row_count=relation.row_count or 0,
+                evidence_refs=[reference],
+            )
+            for relation in inspection.relations
+        ],
+        limitations=[
+            AuditObservation(
+                statement="Only the registered input relations were inspected.",
+                evidence_refs=[reference],
+            )
+        ],
+    )
+
+
 def test_canonical_acceptance_rejects_incomplete_persisted_runs(
     tmp_path: Path,
 ) -> None:
     async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
-        return AuditResult(status="complete")
+        return _audit_with_executed_provenance(context)
 
     async def fake_lead(context, objective, *, business_context, audit, agent):  # noqa: ANN001
         return LeadResult(objective=objective, answer="Not enough evidence.")
@@ -314,7 +345,7 @@ def test_complete_offline_fixture_passes_phase1_acceptance_without_api(
     )
 
     async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
-        return AuditResult(status="complete")
+        return _audit_with_executed_provenance(context)
 
     async def fake_lead(context, objective, *, business_context, audit, agent):  # noqa: ANN001
         ledger = context.ledger
@@ -516,7 +547,27 @@ def test_completed_persisted_workspace_passes_without_executing_agents(
         objective=CANONICAL_PROFITABILITY_SCENARIO.user_question,
     )
     ledger.record_run_metadata(model="offline-fixture", model_provider="none")
-    ledger.record_audit(AuditResult(status="complete"))
+    inspection = DuckDBExecutionService(workspace, ledger).inspect_relations()
+    assert inspection.tool_event_id is not None
+    ledger.record_audit(
+        AuditResult(
+            status="complete",
+            tables=[
+                TableAudit(
+                    table_name=relation.relation_name,
+                    row_count=relation.row_count or 0,
+                    evidence_refs=[inspection.tool_event_id],
+                )
+                for relation in inspection.relations
+            ],
+            limitations=[
+                AuditObservation(
+                    statement="Only the registered input relations were inspected.",
+                    evidence_refs=[inspection.tool_event_id],
+                )
+            ],
+        )
+    )
     ledger.update_investigation_plan(
         ["Audit inputs", "Decompose profit", "Validate recommendations"]
     )

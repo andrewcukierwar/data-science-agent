@@ -38,6 +38,7 @@ from evaluation.workspace_identity import (
 )
 from orchestration.ledger import AnalysisLedger
 from orchestration.pricing import MODEL_PRICING
+from scenarios import discover_scenarios
 from schemas.run_state import (
     AttemptStatus,
     CostBreakdown,
@@ -48,6 +49,13 @@ from schemas.run_state import (
 
 FIXED_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 SCENARIO_ID = "meaningful-ab-treatment-effect"
+# Fixture identities must track the catalog rather than restating it; the
+# deliberate version gate lives in tests/test_scenario_catalog.py.
+_CATALOG_EVALUATOR_VERSION = next(
+    registration.metadata.evaluator_version
+    for registration in discover_scenarios()
+    if registration.scenario_id == SCENARIO_ID
+)
 
 
 def _sources(_registration, destination: Path) -> tuple[Path, Path]:
@@ -326,7 +334,7 @@ def test_offline_rescore_writes_new_manifest_without_rerunning_agents(
     current_rules = ScenarioRules(
         scenario_id=SCENARIO_ID,
         scenario_version="1.0",
-        evaluator_version="1.1",
+        evaluator_version=_CATALOG_EVALUATOR_VERSION,
     )
 
     def fake_evaluate(workspace, rules, **_kwargs):
@@ -338,7 +346,9 @@ def test_offline_rescore_writes_new_manifest_without_rerunning_agents(
                     scenario=SimpleNamespace(
                         scenario_id=SCENARIO_ID,
                         scenario_version="1.0",
-                        metadata=SimpleNamespace(evaluator_version="1.1"),
+                        metadata=SimpleNamespace(
+                            evaluator_version=_CATALOG_EVALUATOR_VERSION
+                        ),
                     ),
                 ),
                 evaluator_version=rules.evaluator_version,
@@ -357,10 +367,12 @@ def test_offline_rescore_writes_new_manifest_without_rerunning_agents(
     assert output_path.is_file()
     assert manifest_path.read_bytes() != output_path.read_bytes()
     assert len(calls) == 3
-    assert {record.evaluator_version for record in rescored.run_records} == {"1.1"}
+    assert {record.evaluator_version for record in rescored.run_records} == {
+        _CATALOG_EVALUATOR_VERSION
+    }
     assert {
         record.evaluator_result.evaluator_version for record in rescored.run_records
-    } == {"1.1"}
+    } == {_CATALOG_EVALUATOR_VERSION}
     assert all(record.score_breakdown is not None for record in rescored.run_records)
 
 
@@ -526,7 +538,9 @@ def test_canonical_rescore_isolates_crashes_and_rebuilds_aggregates(
                     scenario=SimpleNamespace(
                         scenario_id=SCENARIO_ID,
                         scenario_version="1.0",
-                        metadata=SimpleNamespace(evaluator_version="1.1"),
+                        metadata=SimpleNamespace(
+                            evaluator_version=_CATALOG_EVALUATOR_VERSION
+                        ),
                     ),
                 ),
                 evaluator_version=rules.evaluator_version,

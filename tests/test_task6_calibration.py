@@ -15,7 +15,13 @@ from evaluation.primitives import AnalyticalCapability, CapabilityPolicy
 from evaluation.rules import rules_for_scenario
 from scenarios import discover_scenarios
 from scenarios.generator import SyntheticEcommerceConfig
-from schemas.audit import AuditResult, DataQualityIssue, IssueSeverity
+from schemas.audit import (
+    AuditObservation,
+    AuditResult,
+    DataQualityIssue,
+    IssueSeverity,
+    TableAudit,
+)
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.hypotheses import Hypothesis, HypothesisStatus
 from schemas.metrics import MetricComparison, MetricDefinitionContext
@@ -259,7 +265,27 @@ def _persist_fixture(
         status=RunStatus.COMPLETED,
         created_at=_NOW,
         updated_at=_NOW + timedelta(seconds=1),
-        audit=AuditResult(status="complete", issues=issues, audited_at=_NOW),
+        audit=AuditResult(
+            status="complete",
+            # A production-shaped audit states what it profiled and cites the
+            # execution behind it, so a clean result is evidence of a performed
+            # check rather than only an absence of reported issues.
+            tables=[
+                TableAudit(
+                    table_name="marketing_spend",
+                    row_count=180,
+                    evidence_refs=[_EVIDENCE],
+                )
+            ],
+            issues=issues,
+            limitations=[
+                AuditObservation(
+                    statement="Refund reasons are not present in the inputs.",
+                    evidence_refs=[_EVIDENCE],
+                )
+            ],
+            audited_at=_NOW,
+        ),
         investigation_plan=[
             "Audit sources",
             "Measure declared metrics",

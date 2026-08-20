@@ -4,6 +4,8 @@ from schemas.audit import (
     AUDIT_CONTRACT_VERSION,
     LEGACY_AUDIT_CONTRACT_VERSION,
     SUPPORTED_AUDIT_CONTRACT_VERSIONS,
+    AuditClaim,
+    AuditClaimKind,
     AuditObservation,
     AuditResult,
     AuditStatus,
@@ -13,6 +15,7 @@ from schemas.audit import (
     IssueSeverity,
     MissingnessObservation,
     TableAudit,
+    audit_claims,
 )
 from schemas.findings import (
     ConfidenceLevel,
@@ -84,7 +87,10 @@ __all__ = [
     "CURRENT_STATE_SCHEMA_VERSION",
     "LEGACY_AUDIT_CONTRACT_VERSION",
     "SUPPORTED_AUDIT_CONTRACT_VERSIONS",
+    "AuditClaim",
+    "AuditClaimKind",
     "AuditObservation",
+    "audit_claims",
     "AnalysisLedger",
     "AnalysisRunState",
     "AgentEvent",
