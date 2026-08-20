@@ -169,8 +169,8 @@ class RunBlockReason(StrEnum):
     Orchestration records the originating condition so downstream operational
     reporting never has to infer it from prose. Not every non-completion is a
     budget problem: a self-critique that still requires revision, an unresolved
-    objective-critical follow-up, a schema violation, and an interruption are
-    all distinct outcomes.
+    objective-critical follow-up, a schema violation, an unsupported citation,
+    and an interruption are all distinct outcomes.
     """
 
     BUDGET_EXHAUSTED = "budget_exhausted"
@@ -183,6 +183,9 @@ class RunBlockReason(StrEnum):
     SANDBOX_FAILURE = "sandbox_failure"
     WORKSPACE_FAILURE = "workspace_failure"
     DATA_QUALITY = "data_quality"
+    # A response that satisfied its output schema but cited evidence that
+    # does not resolve to a successful execution or a verified artifact.
+    EVIDENCE_PROVENANCE = "evidence_provenance"
     TIMEOUT = "timeout"
     INTERRUPTED = "interrupted"
     OTHER = "other"
@@ -330,6 +333,9 @@ class AttemptRecord(BaseModel):
     cost: AttemptCost | None = None
     elapsed_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
     error: NonEmptyString | None = None
+    # The typed cause of a non-completed attempt, so attempt history carries the
+    # same taxonomy as the run and the benchmark record instead of only prose.
+    block_reason: RunBlockReason | None = None
 
     @model_validator(mode="after")
     def lifecycle_is_consistent(self) -> "AttemptRecord":

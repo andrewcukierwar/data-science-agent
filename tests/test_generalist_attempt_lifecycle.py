@@ -21,7 +21,12 @@ from agents.runtime import AgentRole
 from orchestration.generalist_runner import GeneralistRunner
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
-from schemas.audit import AuditResult, AuditStatus
+from schemas.audit import (
+    AuditObservation,
+    AuditResult,
+    AuditStatus,
+    TableAudit,
+)
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.generalist import GeneralistResult
 from schemas.lead import LeadResult
@@ -122,7 +127,25 @@ def _generalist_result(
         confidence=ConfidenceLevel.MEDIUM,
     )
     return GeneralistResult(
-        audit=AuditResult(status=audit_status, audited_at=_STAMP),
+        audit=AuditResult(
+            status=audit_status,
+            # Evidence-bearing, like a real audit: the table profile and the
+            # stated limitation both cite the executed check behind them.
+            tables=[
+                TableAudit(
+                    table_name="customers",
+                    row_count=1,
+                    evidence_refs=["tool-evidence"],
+                )
+            ],
+            limitations=[
+                AuditObservation(
+                    statement="Only the registered input relations were inspected.",
+                    evidence_refs=["tool-evidence"],
+                )
+            ],
+            audited_at=_STAMP,
+        ),
         candidate=LeadResult(
             objective=_OBJECTIVE,
             answer="Revenue increased by 10 percent in the observed comparison.",
@@ -521,7 +544,25 @@ def test_single_agent_attempt_protocol_matches_the_multi_agent_runner(
 
 async def _fake_auditor(context, objective, *, agent=None):  # noqa: ANN001
     return context.ledger.record_audit(
-        AuditResult(status=AuditStatus.COMPLETE, audited_at=_STAMP)
+        AuditResult(
+            status=AuditStatus.COMPLETE,
+            # Evidence-bearing, like a real audit: the table profile and the
+            # stated limitation both cite the executed check behind them.
+            tables=[
+                TableAudit(
+                    table_name="customers",
+                    row_count=1,
+                    evidence_refs=["tool-evidence"],
+                )
+            ],
+            limitations=[
+                AuditObservation(
+                    statement="Only the registered input relations were inspected.",
+                    evidence_refs=["tool-evidence"],
+                )
+            ],
+            audited_at=_STAMP,
+        )
     )
 
 

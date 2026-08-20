@@ -338,6 +338,9 @@ class FailureCategory(StrEnum):
     VALIDATION = "validation"
     UNRESOLVED_FOLLOW_UP = "unresolved_follow_up"
     DATA_QUALITY = "data_quality"
+    # A strict-schema-valid answer whose citations do not resolve. Named
+    # separately so it is never read as a provider or schema fault.
+    EVIDENCE_PROVENANCE = "evidence_provenance"
     OTHER = "other"
 
 

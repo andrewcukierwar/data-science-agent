@@ -26,6 +26,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from agents.evidence import (
+    EvidenceProvenanceError,
     executed_references,
     finding_reference_aliases,
     resolve_citations,
@@ -50,7 +51,7 @@ MAX_CATALOG_REFS_PER_ENTRY = 8
 MAX_CATALOG_STATEMENT_CHARS = 400
 
 
-class AuditEvidenceError(ValueError):
+class AuditEvidenceError(EvidenceProvenanceError):
     """Raised when material audit claims lack canonical executed provenance."""
 
 

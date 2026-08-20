@@ -28,6 +28,17 @@ from schemas.hypotheses import hypothesis_requires_evidence
 from schemas.run_state import ToolEventStatus
 
 
+class EvidenceProvenanceError(ValueError):
+    """Base class for every semantic citation failure.
+
+    A response that satisfies its output schema but cites evidence that does not
+    resolve is one failure mode with one operational meaning, whichever agent
+    produced it. Sharing a base class is what lets the orchestration boundary
+    classify it by type instead of by matching words in an error message, and
+    keeps a new provenance error from silently landing in ``other``.
+    """
+
+
 def _event_references(event: object) -> set[str]:
     """Return references emitted by one tool event, regardless of status."""
 

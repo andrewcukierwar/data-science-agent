@@ -19,6 +19,7 @@ credentials, or evaluator-only expected values.
 | [0010](0010-hypothesis-evidence-rule.md) | One hypothesis-evidence rule, enforced when the state transition is requested | Accepted |
 | [0011](0011-bounded-evidence-correction.md) | One bounded, tool-less correction attempt for a semantic provenance failure | Accepted |
 | [0012](0012-single-citation-resolution-contract.md) | One lossless citation-resolution contract shared by every provenance boundary | Accepted |
+| [0013](0013-provenance-failure-taxonomy.md) | Semantic citation failures are a named operational outcome, not `other` | Accepted |
 
 The chronological failure history, present run status, operational commands,
 and remaining risks are in [Phase 1 lessons](../phase1-lessons.md).

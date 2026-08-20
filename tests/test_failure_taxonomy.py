@@ -21,6 +21,7 @@ from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 
 from agents.output_contract import AgentOutputContractError
 from benchmark import BenchmarkCellResult, BenchmarkRunner
+from benchmark.aggregation import build_benchmark_report
 from benchmark.runner import category_for_block_reason
 from evaluation.contracts import (
     EvaluatorStatus,
@@ -37,7 +38,12 @@ from orchestration.budgets import (
 from orchestration.generalist_runner import GeneralistRunner
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
-from schemas.audit import AuditResult, AuditStatus
+from schemas.audit import (
+    AuditObservation,
+    AuditResult,
+    AuditStatus,
+    TableAudit,
+)
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.generalist import GeneralistResult
 from schemas.lead import LeadResult
@@ -121,7 +127,25 @@ def _generalist_result(
     follow_up: bool = False,
 ) -> GeneralistResult:
     return GeneralistResult(
-        audit=AuditResult(status=audit_status, audited_at=_STAMP),
+        audit=AuditResult(
+            status=audit_status,
+            # Evidence-bearing, like a real audit: the table profile and the
+            # stated limitation both cite the executed check behind them.
+            tables=[
+                TableAudit(
+                    table_name="customers",
+                    row_count=1,
+                    evidence_refs=["tool-evidence"],
+                )
+            ],
+            limitations=[
+                AuditObservation(
+                    statement="Only the registered input relations were inspected.",
+                    evidence_refs=["tool-evidence"],
+                )
+            ],
+            audited_at=_STAMP,
+        ),
         candidate=_candidate(follow_up=follow_up),
         validation=ValidationResult(
             status=validation_status,
@@ -150,10 +174,24 @@ def _workspace(tmp_path: Path, run_id: str) -> Workspace:
         inputs_source=inputs_source,
         docs_source=docs_source,
     )
+    _seed_executed_evidence(workspace, run_id)
+    return workspace
+
+
+def _seed_executed_evidence(workspace: Workspace, run_id: str) -> None:
+    """Record the successful execution the fixture's audit and findings cite.
+
+    Both the audit and the candidate are evidence-bearing, so the workspace has
+    to actually contain the execution they name — an empty audit would have hid
+    the audit-to-Lead handoff these lifecycle tests are meant to cover.
+    """
+
     evidence = workspace.working / "queries" / "evidence.sql"
     evidence.parent.mkdir(parents=True, exist_ok=True)
     evidence.write_text("SELECT COUNT(*) FROM customers;\n", encoding="utf-8")
     ledger = AnalysisLedger(workspace, run_id=run_id, objective=_OBJECTIVE)
+    if any(event.id == "tool-evidence" for event in ledger.tool_events):
+        return
     ledger.append_tool_event(
         ToolEvent(
             id="tool-evidence",
@@ -165,7 +203,6 @@ def _workspace(tmp_path: Path, run_id: str) -> Workspace:
             artifact_refs=["working/queries/evidence.sql"],
         )
     )
-    return workspace
 
 
 def _sdk_run(final_output: object, *, raises: BaseException | None = None):
@@ -207,7 +244,25 @@ def _multi_agent_run(
     async def auditor(context, objective, *, agent=None):  # noqa: ANN001
         context.record_sdk_usage(_usage())
         return context.ledger.record_audit(
-            AuditResult(status=audit_status, audited_at=_STAMP)
+            AuditResult(
+                status=audit_status,
+                # Evidence-bearing, like a real audit: the table profile and the
+                # stated limitation both cite the executed check behind them.
+                tables=[
+                    TableAudit(
+                        table_name="customers",
+                        row_count=1,
+                        evidence_refs=["tool-evidence"],
+                    )
+                ],
+                limitations=[
+                    AuditObservation(
+                        statement="Only the registered input relations were inspected.",
+                        evidence_refs=["tool-evidence"],
+                    )
+                ],
+                audited_at=_STAMP,
+            )
         )
 
     async def lead(
@@ -506,7 +561,25 @@ def test_blocked_record_is_not_published_as_a_budget_failure(
     # The benchmark builds its own workspace, so use a candidate that cites no
     # evidence and isolates the block path under test.
     revise_result = GeneralistResult(
-        audit=AuditResult(status=AuditStatus.COMPLETE, audited_at=_STAMP),
+        audit=AuditResult(
+            status=AuditStatus.COMPLETE,
+            # Evidence-bearing, like a real audit: the table profile and the
+            # stated limitation both cite the executed check behind them.
+            tables=[
+                TableAudit(
+                    table_name="customers",
+                    row_count=1,
+                    evidence_refs=["tool-evidence"],
+                )
+            ],
+            limitations=[
+                AuditObservation(
+                    statement="Only the registered input relations were inspected.",
+                    evidence_refs=["tool-evidence"],
+                )
+            ],
+            audited_at=_STAMP,
+        ),
         candidate=LeadResult(
             objective=_OBJECTIVE,
             answer="The observed change is described by the available evidence.",
@@ -522,6 +595,7 @@ def test_blocked_record_is_not_published_as_a_budget_failure(
     )
 
     def execute(cell, workspace):
+        _seed_executed_evidence(workspace, cell.run_id)
         runner = GeneralistRunner(
             workspace_base_dir=cell.workspace_path.parent,
             model=_MODEL,
@@ -593,6 +667,55 @@ def test_blocked_and_cancelled_runs_stay_in_operational_denominators(
     assert aggregate.failure_taxonomy["lifecycle:unresolved_follow_up"] == 1
     assert aggregate.failure_taxonomy["lifecycle:budget"] == 1
     assert "missing" not in aggregate.failure_taxonomy
+
+
+def test_provenance_failures_reach_benchmark_records_and_aggregation(
+    tmp_path: Path,
+) -> None:
+    """A named provenance failure must survive every reporting boundary."""
+
+    def execute(cell, workspace):  # noqa: ANN001
+        reason = RunBlockReason.EVIDENCE_PROVENANCE
+        detail = "lead outputs cite no executed evidence: hypothesis:H2"
+        ledger = AnalysisLedger(
+            workspace,
+            run_id=cell.run_id,
+            objective=cell.scenario.metadata.user_question,
+        )
+        ledger.begin_attempt()
+        ledger.record_elapsed(1.0)
+        ledger.mark_failed(detail, reason=reason, detail=detail)
+        ledger.finish_attempt("failed", error=detail)
+        return SimpleNamespace(
+            status=RunStatus.FAILED,
+            workspace=workspace,
+            state=ledger.state,
+            error=detail,
+            block_reason=reason,
+            block_detail=detail,
+        )
+
+    runner, manifest_path = _benchmark(tmp_path, execute, repetitions=1)
+    summary = runner.execute(manifest_path)
+
+    record = summary.manifest.run_records[0]
+    assert record.lifecycle.failure_category is FailureCategory.EVIDENCE_PROVENANCE
+    assert record.lifecycle.failure_category is not FailureCategory.OTHER
+    # The attempt history carries the same typed cause, not only prose.
+    ledger = AnalysisLedger(
+        Path(record.workspace_path) / "state" / "analysis_ledger.json"
+    )
+    assert ledger.attempt_history[-1].block_reason is RunBlockReason.EVIDENCE_PROVENANCE
+    aggregate = summary.manifest.aggregates[0]
+    assert aggregate.failure_taxonomy["lifecycle:evidence_provenance"] == 1
+    # It stays an operational observation rather than an analytical score.
+    assert record.evaluator_result.status is EvaluatorStatus.NOT_EVALUATED
+
+    report = build_benchmark_report(summary.manifest)
+    assert any(
+        "lifecycle:evidence_provenance" in row.failure_taxonomy
+        for row in report.table_rows
+    )
 
 
 def test_aggregate_taxonomy_reproduces_the_per_record_categories_exactly(

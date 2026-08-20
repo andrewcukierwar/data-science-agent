@@ -8,6 +8,7 @@ from typing import Final
 
 from agents import Agent
 from agents.evidence import (
+    EvidenceProvenanceError,
     executed_references,
     finding_reference_aliases,
     resolve_citations,
@@ -146,7 +147,7 @@ Procedural skill guidance:
 """
 
 
-class StatisticianEvidenceError(ValueError):
+class StatisticianEvidenceError(EvidenceProvenanceError):
     """Raised when a statistical finding lacks executed evidence."""
 
 

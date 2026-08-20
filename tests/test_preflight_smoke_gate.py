@@ -24,7 +24,12 @@ from benchmark.preflight import (
 from orchestration.generalist_runner import GeneralistRunner
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
-from schemas.audit import AuditResult, AuditStatus
+from schemas.audit import (
+    AuditObservation,
+    AuditResult,
+    AuditStatus,
+    TableAudit,
+)
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.generalist import GeneralistResult
 from schemas.lead import LeadResult
@@ -98,7 +103,25 @@ def _generalist_result() -> GeneralistResult:
         confidence=ConfidenceLevel.MEDIUM,
     )
     return GeneralistResult(
-        audit=AuditResult(status=AuditStatus.COMPLETE, audited_at=_STAMP),
+        audit=AuditResult(
+            status=AuditStatus.COMPLETE,
+            # Evidence-bearing, like a real audit: the table profile and the
+            # stated limitation both cite the executed check behind them.
+            tables=[
+                TableAudit(
+                    table_name="customers",
+                    row_count=1,
+                    evidence_refs=["tool-evidence"],
+                )
+            ],
+            limitations=[
+                AuditObservation(
+                    statement="Only the registered input relations were inspected.",
+                    evidence_refs=["tool-evidence"],
+                )
+            ],
+            audited_at=_STAMP,
+        ),
         candidate=LeadResult(
             objective=_OBJECTIVE,
             answer="Revenue increased by 10 percent in the observed comparison.",
@@ -170,7 +193,25 @@ def _multi_agent_run(tmp_path: Path, run_id: str):
     async def auditor(context, objective, *, agent=None):  # noqa: ANN001
         context.record_sdk_usage(_usage())
         return context.ledger.record_audit(
-            AuditResult(status=AuditStatus.COMPLETE, audited_at=_STAMP)
+            AuditResult(
+                status=AuditStatus.COMPLETE,
+                # Evidence-bearing, like a real audit: the table profile and the
+                # stated limitation both cite the executed check behind them.
+                tables=[
+                    TableAudit(
+                        table_name="customers",
+                        row_count=1,
+                        evidence_refs=["tool-evidence"],
+                    )
+                ],
+                limitations=[
+                    AuditObservation(
+                        statement="Only the registered input relations were inspected.",
+                        evidence_refs=["tool-evidence"],
+                    )
+                ],
+                audited_at=_STAMP,
+            )
         )
 
     async def lead(

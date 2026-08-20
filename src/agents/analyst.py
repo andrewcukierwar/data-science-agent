@@ -8,6 +8,7 @@ from typing import Final
 
 from agents import Agent
 from agents.evidence import (
+    EvidenceProvenanceError,
     executed_references,
     finding_reference_aliases,
     resolve_citations,
@@ -158,7 +159,7 @@ Procedural skill guidance:
 """
 
 
-class AnalystEvidenceError(ValueError):
+class AnalystEvidenceError(EvidenceProvenanceError):
     """Raised when a material Analyst finding cites unexecuted evidence."""
 
 

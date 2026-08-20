@@ -1,7 +1,8 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-20
-**Implementation:** Tasks 1–9, R1–R19, and R20–R24 complete; R25 open
+**Implementation:** Tasks 1–9 and R1–R25 complete; R6 open on the paid live
+canaries only
 
 **Remediation:** R13–R19 are all implemented. The reopened R6 deterministic
 preflight and benchmark-validity review were rerun at this revision. Fresh paid
@@ -15,8 +16,10 @@ R22 adds one shared hypothesis-evidence rule, enforced when the transition is
 requested rather than after the final model response, and R23 adds one bounded,
 tool-less correction attempt for a strict-schema-valid response whose citations
 do not resolve, and R24 replaces four drifted provenance implementations with
-one lossless citation-resolution contract. R25 remains open and R6 remains open
-until it closes and its complete preflight is rerun.
+one lossless citation-resolution contract, and R25 names semantic citation
+failures and retains the canary as a deterministic regression. The complete
+deterministic R6 preflight has been rerun at this revision. R6 remains open on
+its two paid live architecture canaries, which have not been run.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -123,7 +126,7 @@ dry-run—was rerun successfully at this revision. The benchmark-validity review
 is also complete. The failed multi-agent canary subsequently opened R20–R25, so
 Task 10 is blocked until those tasks and a fresh complete R6 preflight close.
 
-## Phase 2 Live-Canary Provenance Remediation: R20–R24 closed, R25 open
+## Phase 2 Live-Canary Provenance Remediation: R20–R25 closed
 
 The 2026-08-20 provider-backed R6 run passed the single-agent canary but failed
 the multi-agent canary after valid strict output. The Data Auditor's successful
@@ -140,7 +143,7 @@ acceptance criteria.
 | R22 — Align hypothesis evidence contracts and validate state transitions | P1 | Complete | `hypothesis_requires_evidence` is the one shared predicate for the contract, state tool, final Lead validation, and offline evaluation; `record_hypothesis` refuses an unsupported resolution before touching the ledger and returns an actionable typed error; open hypotheses stay usable; the append-only history is checked offline |
 | R23 — Add bounded correction for semantic provenance failures | P1 | Complete | `evidence_correction_attempts` is validated `ge=0, le=1`; the correction agent has no tools and one turn; the request names the invalid field IDs and a bounded citable-evidence catalog; the corrected response passes the identical persistence boundary; both calls, their usage, and their outcomes bind to the active attempt; a second invalid response terminates. Both architectures get the same allowance |
 | R24 — Make citation resolution lossless and consistent | P1 | Complete | `resolve_citations` returns resolved and unresolved explicitly and `canonical_references` drops nothing; a claim is supported only when every citation resolves; `material_claims` is one shared definition; the Lead's private resolver is deleted and the Critic now checks resolution; qualitative-finding and source-lineage rules apply offline too |
-| R25 — Classify provenance failures and close the live regression gap | P2 | Open | Named provenance taxonomy; production-shaped deterministic audit-to-Lead fixture; complete post-R25 R6 rerun and both live canaries pass |
+| R25 — Classify provenance failures and close the live regression gap | P2 | Complete (deterministic) | `EvidenceProvenanceError` is the shared base; `RunBlockReason.EVIDENCE_PROVENANCE` and `FailureCategory.EVIDENCE_PROVENANCE` propagate through attempt history, benchmark records, aggregation, failure reports, and canonical offline rescore; the 2026-08-20 handoff is reproduced deterministically; lifecycle fixtures use evidence-bearing audits. The two paid live canaries have **not** been run |
 
 R20–R25 must preserve R2 and R7: the solution may carry and validate provenance
 across agent boundaries, but it may not accept an audit merely because a role
@@ -746,6 +749,51 @@ recoverable. Decision record
 [0012](decisions/0012-single-citation-resolution-contract.md) holds the
 rationale and `tests/test_citation_resolution.py` holds the 25 regressions.
 
+### 19. Provenance failures are named, and the canary is retained (R25)
+
+R18 gave every non-completion a typed reason. Semantic citation failures were
+the gap it left: a run that ended because a well-formed answer cited evidence
+that did not resolve fell through to `RunBlockReason.OTHER` and was published as
+`FailureCategory.OTHER` — indistinguishable from a crash. That is the single
+most likely failure mode of this system, and the 2026-08-20 canary is the proof;
+a benchmark that cannot separate "the model made an unsupported claim" from
+"something broke" cannot report reliability.
+
+Every semantic citation failure now inherits
+`agents.evidence.EvidenceProvenanceError`. Classification is by type, so a
+provenance error added at a new boundary inherits the taxonomy instead of
+landing in `other`, and no keyword matching is involved. The new reason is
+checked before the generic `ModelBehaviorError` branch, because a response whose
+citations do not resolve is a semantic failure of a well-formed answer, not a
+malformed one — calling it a schema failure would misattribute it to the output
+contract.
+
+`AttemptRecord` gained a typed `block_reason`, and `finish_attempt` inherits the
+run-level reason `mark_failed`/`mark_blocked`/`mark_cancelled` already set, so
+attempt history carries the same taxonomy as the run state and the benchmark
+record without every call site repeating it. A completed attempt carries no
+reason at all. Regressions follow the category from attempt history through
+benchmark records, aggregation, the report's table rows, and canonical offline
+rescore including the persisted rescored document.
+
+The 2026-08-20 failure is retained as a deterministic regression running the
+real multi-agent lifecycle: an evidence-bearing audit produced through a real
+`inspect_relations` call, and scripted Lead responses citing
+`completed_data_audit`, with no provider call. Siblings pin that the same
+handoff recovers when the R23 correction cites real evidence, and that the
+original pre-R20 shape — an audit with no provenance at all — is now refused at
+the audit boundary before the Lead ever runs.
+
+Lifecycle fixtures that used empty audits now use evidence-bearing ones whose
+claims cite an execution the workspace actually contains. An empty
+`AuditResult` satisfies the provenance contract only because it claims nothing,
+so a lifecycle test built on one stays green while the handoff it is supposed to
+cover is broken — which is exactly what happened. `tests/conftest.py` provides
+the shared builder. Decision record
+[0013](decisions/0013-provenance-failure-taxonomy.md) holds the rationale;
+`tests/test_provenance_failure_taxonomy.py` and `tests/test_failure_taxonomy.py`
+hold the regressions.
+
 ## Verification completed
 
 ### Reopened R6 preflight and validity review, rerun at this revision
@@ -945,6 +993,48 @@ still load. The 60-cell dry-run is unchanged.
 This is deterministic verification of R24 only. The complete R6 preflight and
 both live canaries remain R25's work.
 
+### Complete deterministic R6 preflight, rerun after R20–R25
+
+```text
+673 passed, 16 deselected
+```
+
+Ruff lint reported `All checks passed!` and format reported 161 files already
+formatted. Every declared preflight category was run as an explicit selection
+rather than being inferred from the whole-suite result:
+
+| Category | Result |
+| --- | --- |
+| Adversarial provenance suites (R20–R25) | 164 passed |
+| Architecture-neutral evaluator and tool-mix fixtures | 24 passed |
+| Workspace identity, evaluator errors, offline outputs | 23 passed |
+| Lifecycle, interruption, attempt history | 48 passed |
+| Failure taxonomy, outcome gate, pilot calibration, usage, pricing | 80 passed |
+| Scenario-document integrity and catalog | 72 passed |
+| Strict output contracts | 38 passed |
+| Docker-backed integrations | 3 passed, real containers |
+
+The complete 10 × 2 × 3 declaration produced 60 cells with 60 unique run IDs and
+60 unique workspace paths, and the R19 pilot set still partitions them by
+architecture. Every retained `.runs/` artifact still loads — 10 benchmark
+manifests, 4 reports, and 18 ledger states.
+
+**The two paid live architecture canaries were not run.** They require
+`OPENAI_API_KEY` and `OPENAI_DEFAULT_MODEL`, which are absent from this
+environment, and they spend real money on provider calls. R6 therefore remains
+open on exactly that step, and no claim is made that the gate has passed. Run
+them explicitly with:
+
+```bash
+uv run --env-file .env pytest -m live \
+  tests/test_strict_output_canary_live.py -v
+```
+
+Both `test_multi_agent_live_strict_output_canary` and
+`test_single_agent_live_strict_output_canary` must pass, under the R17 shared
+outcome gate, before a Task 10 manifest is frozen. A failed canary must be
+dispositioned rather than retried.
+
 ### Scenario-document integrity is now a code invariant (R6)
 
 One generated document is shared by the clean baseline and by every scenario
@@ -1126,31 +1216,23 @@ Before another paid attempt:
    `tests/test_failure_taxonomy.py`, and
    `tests/test_pilot_set_calibration.py`. No evaluator rule was altered to
    mask the retained failures.
-2. The prior deterministic half of the reopened R6 preflight and the
-   benchmark-validity review have been rerun at this revision — strict-schema
-   checks, failure-path accounting, lifecycle and taxonomy fixtures,
-   scenario-document integrity, Docker integrations, Ruff, retained-artifact
-   rescoring, all 60 dry-run cells, and seven new validity regressions.
-3. R20–R24 are implemented — audit contract 2.0, one validating persistence
+2. R20–R25 are implemented: audit contract 2.0 with one validating persistence
    boundary, the Lead's bounded `AuditEvidenceCatalog`, persisted-state version
-   `1.1`, offline enforcement of the same provenance boundary at catalog
-   evaluator version `1.2`, one shared hypothesis-evidence rule enforced at the
-   transition, and one bounded tool-less correction attempt available to both
-   architectures, and one lossless citation-resolution contract shared by
-   every provenance boundary — with their regressions in
-   `tests/test_audit_provenance.py`, `tests/test_audit_provenance_scoring.py`,
-   `tests/test_hypothesis_transitions.py`,
-   `tests/test_evidence_correction.py`, and
-   `tests/test_citation_resolution.py`, and their rationale in decision records
-   0009 through 0012. Implement R25 next, preserving R2/R7 and
-   continuing to version failure taxonomy and output fingerprints deliberately.
-   The audit-contract, hypothesis-contract, evaluator-version, and
-   correction-allowance changes already invalidate any existing pilot estimate,
-   so a new manifest version is required regardless.
-4. Rerun the complete R6 preflight from the new revision: full deterministic
-   suite, Ruff, Docker integrations, architecture-equivalence and adversarial
-   provenance fixtures, retained-artifact checks, 60-cell dry-run, and both
-   bounded paid live canaries. Do not retry a failed canary without disposition.
+   `1.1`, offline enforcement at catalog evaluator version `1.2`, one shared
+   hypothesis-evidence rule enforced at the transition, one bounded tool-less
+   correction attempt available to both architectures, one lossless
+   citation-resolution contract, and a named provenance failure taxonomy with
+   the 2026-08-20 canary retained as a deterministic regression. Their
+   rationale is in decision records 0009 through 0013.
+3. The complete deterministic R6 preflight has been rerun at this revision —
+   673 tests, Ruff, every declared category as an explicit selection, real
+   Docker containers, all 60 dry-run cells, and every retained artifact.
+4. Run the two paid live architecture canaries, which are the only open step
+   of the R6 gate. They were **not** run at this revision because they require
+   provider credentials and spend real money:
+   `uv run --env-file .env pytest -m live tests/test_strict_output_canary_live.py -v`.
+   Both must pass under the R17 outcome gate. Do not retry a failed canary
+   without disposition.
 5. Recheck variable presence without printing the key and confirm Docker access.
 6. Select the compatible model and freeze a new manifest before any paid execution.
 7. Review the declared ten-scenario × two-architecture × three-repetition matrix,

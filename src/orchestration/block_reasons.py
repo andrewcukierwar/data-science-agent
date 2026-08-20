@@ -19,6 +19,7 @@ from agents.exceptions import (
     UserError,
 )
 
+from agents.evidence import EvidenceProvenanceError
 from agents.output_contract import AgentOutputContractError
 from orchestration.budgets import BudgetExhaustedError
 from schemas.run_state import RunBlockReason
@@ -45,8 +46,9 @@ def classify_exception(error: BaseException) -> RunBlockReason:
     """Map an exception raised during orchestration to its typed reason.
 
     Only genuine run-budget exhaustion is classified as a budget outcome. A
-    turn-limit stop is an agent bound, not the configured resource budget, and
-    a structured-output violation is a schema failure.
+    turn-limit stop is an agent bound, not the configured resource budget, a
+    structured-output violation is a schema failure, and a well-formed response
+    whose citations do not resolve is a provenance failure rather than either.
     """
 
     if isinstance(error, BudgetExhaustedError):
@@ -55,6 +57,11 @@ def classify_exception(error: BaseException) -> RunBlockReason:
         return RunBlockReason.DATA_QUALITY
     if isinstance(error, AgentOutputContractError):
         return RunBlockReason.SCHEMA_FAILURE
+    # Checked before the generic ModelBehaviorError branch below: a citation
+    # that does not resolve is a semantic failure of a well-formed response,
+    # not a malformed one.
+    if isinstance(error, EvidenceProvenanceError):
+        return RunBlockReason.EVIDENCE_PROVENANCE
     if isinstance(error, MaxTurnsExceeded):
         return RunBlockReason.AGENT_FAILURE
     if isinstance(error, ModelRefusalError):
@@ -85,6 +92,9 @@ _REASON_DESCRIPTIONS: dict[RunBlockReason, str] = {
     RunBlockReason.SANDBOX_FAILURE: "a sandbox failure",
     RunBlockReason.WORKSPACE_FAILURE: "a workspace failure",
     RunBlockReason.DATA_QUALITY: "a blocking data-quality condition",
+    RunBlockReason.EVIDENCE_PROVENANCE: (
+        "cited evidence that does not resolve to executed evidence"
+    ),
     RunBlockReason.TIMEOUT: "a timeout",
     RunBlockReason.INTERRUPTED: "an interruption",
     RunBlockReason.OTHER: "a bounded execution failure",

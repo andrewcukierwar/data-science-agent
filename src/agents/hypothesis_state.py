@@ -15,6 +15,7 @@ evidence.
 from __future__ import annotations
 
 from agents.evidence import (
+    EvidenceProvenanceError,
     executed_references,
     finding_reference_aliases,
     resolve_citations,
@@ -27,7 +28,7 @@ from schemas.run_state import Hypothesis, HypothesisStatus, hypothesis_requires_
 MAX_SUGGESTED_REFERENCES = 20
 
 
-class HypothesisEvidenceError(ValueError):
+class HypothesisEvidenceError(EvidenceProvenanceError):
     """Raised when a resolved hypothesis does not cite executed evidence.
 
     The typed attributes carry everything a caller needs to explain the refusal

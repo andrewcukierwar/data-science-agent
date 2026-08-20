@@ -19,6 +19,7 @@ from agents.audit_evidence import (
 )
 from agents.correction import run_bounded_evidence_correction
 from agents.evidence import (
+    EvidenceProvenanceError,
     executed_references,
     finding_reference_aliases,
     has_source_lineage,
@@ -251,7 +252,7 @@ def record_open_question(
         return _sdk_response(ToolResponse.failed(tool_name, "state_error", str(error)))
 
 
-class LeadEvidenceError(ValueError):
+class LeadEvidenceError(EvidenceProvenanceError):
     """Raised when a Lead result cites evidence that was not executed.
 
     The response satisfied the strict output schema, so this is a semantic

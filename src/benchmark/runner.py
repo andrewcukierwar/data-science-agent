@@ -683,6 +683,7 @@ _BLOCK_REASON_CATEGORIES: dict[RunBlockReason, FailureCategory] = {
     RunBlockReason.SANDBOX_FAILURE: FailureCategory.SANDBOX,
     RunBlockReason.WORKSPACE_FAILURE: FailureCategory.WORKSPACE,
     RunBlockReason.DATA_QUALITY: FailureCategory.DATA_QUALITY,
+    RunBlockReason.EVIDENCE_PROVENANCE: FailureCategory.EVIDENCE_PROVENANCE,
     RunBlockReason.TIMEOUT: FailureCategory.TIMEOUT,
     RunBlockReason.INTERRUPTED: FailureCategory.INTERRUPTED,
     RunBlockReason.OTHER: FailureCategory.OTHER,

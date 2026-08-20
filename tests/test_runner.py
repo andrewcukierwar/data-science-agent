@@ -1,7 +1,6 @@
 """Deterministic lifecycle tests for the application-level AnalysisRunner."""
 
 import asyncio
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,8 +18,6 @@ from schemas.run_state import (
     RunBlockReason,
     RunBudget,
     RunStatus,
-    ToolEvent,
-    ToolEventStatus,
 )
 from schemas.validation import (
     ValidationIssue,
@@ -28,6 +25,7 @@ from schemas.validation import (
     ValidationSeverity,
     ValidationStatus,
 )
+from tests.conftest import evidence_bearing_audit
 from tools.artifacts import ArtifactManager
 from tools.workspace import WorkspaceManager
 
@@ -47,13 +45,19 @@ def _audit() -> AuditResult:
     return AuditResult(status=AuditStatus.COMPLETE)
 
 
+def _lifecycle_audit(context) -> AuditResult:  # noqa: ANN001
+    """An evidence-bearing audit, recorded the way a real auditor produces one."""
+
+    return evidence_bearing_audit(context.ledger, event_id="audit-evidence")
+
+
 def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
     tmp_path: Path,
 ) -> None:
     events: list[str] = []
     lead_calls = 0
     critic_calls = 0
-    audit = _audit()
+    recorded_audit: list[AuditResult] = []
     hypothesis = Hypothesis(
         id="H001",
         statement="Acquisition efficiency declined.",
@@ -65,19 +69,10 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
         events.append("audit")
         # A real auditor establishes its facts with an approved tool call, and
         # the Lead cites that execution rather than the audit itself.
-        stamp = datetime.now(UTC)
-        context.ledger.append_tool_event(
-            ToolEvent(
-                id="audit-evidence",
-                tool_name="inspect_relations",
-                status=ToolEventStatus.SUCCEEDED,
-                started_at=stamp,
-                completed_at=stamp,
-                arguments={"include_row_counts": True},
-            )
-        )
+        recorded = _lifecycle_audit(context)
+        recorded_audit.append(recorded)
         context.record_sdk_usage(_usage())
-        return audit
+        return recorded
 
     async def fake_lead(context, objective, *, business_context, audit, agent):  # noqa: ANN001
         nonlocal lead_calls
@@ -86,6 +81,7 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
         assert context.agent_role is AgentRole.LEAD
         assert context.run_config.turn_limit == 16
         assert audit.status is AuditStatus.COMPLETE
+        assert audit.tables[0].evidence_refs == ["audit-evidence"]
         if lead_calls == 1:
             context.ledger.update_investigation_plan(
                 ["Read definitions", "Test the primary profitability drivers"]
@@ -163,7 +159,7 @@ def test_runner_enforces_audit_remediation_critic_and_report_lifecycle(
     assert (result.workspace.outputs / "report.md").exists()
     assert result.ledger is not None
     assert result.ledger.state.status is RunStatus.COMPLETED
-    assert result.ledger.audit == audit
+    assert result.ledger.audit == recorded_audit[0]
     assert result.ledger.state.investigation_plan == [
         "Read definitions",
         "Test the primary profitability drivers",

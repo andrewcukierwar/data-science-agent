@@ -317,6 +317,7 @@ class AnalysisLedger(ToolEventLedger):
         *,
         error: str | Exception | None = None,
         finished_at: datetime | None = None,
+        block_reason: RunBlockReason | None = None,
     ) -> AttemptRecord | None:
         """Persist the terminal outcome of the active attempt exactly once."""
 
@@ -330,6 +331,9 @@ class AnalysisLedger(ToolEventLedger):
         message = None
         if error is not None:
             message = str(error).strip() or error.__class__.__name__
+        # The run-level reason is set by mark_failed/mark_blocked/mark_cancelled
+        # before the attempt is closed, so the attempt inherits the same typed
+        # cause rather than requiring every call site to repeat it.
         terminal = current.model_copy(
             update={
                 "status": terminal_status,
@@ -340,6 +344,11 @@ class AnalysisLedger(ToolEventLedger):
                     note="Cost was not finalized for this attempt.",
                 ),
                 "error": message,
+                "block_reason": (
+                    None
+                    if terminal_status is AttemptStatus.COMPLETED
+                    else block_reason or self._state.block_reason
+                ),
             }
         )
         if terminal.cost is not None and (

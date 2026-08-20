@@ -2,22 +2,24 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-20 — Phase 2 Tasks 1–9, R1–R19, and R20–R24 are
-implemented.
+**Revision:** 2026-08-20 — Phase 2 Tasks 1–9 and R1–R25 are implemented.
 The deterministic portion of the reopened R6 gate and its benchmark-validity
 review are complete. Fresh paid canaries were run: the single-agent architecture
 passed, while the multi-agent architecture failed its executed-evidence gate.
-The resulting audit/Lead provenance gaps are tracked as R20–R25. R20–R24 are
-now closed: audit contract 2.0 makes every material audit claim
+The resulting audit/Lead provenance gaps are tracked as R20–R25, all now
+closed: audit contract 2.0 makes every material audit claim
 evidence-bearing, one persistence boundary refuses an unsupported completed
 audit, the Lead receives a bounded typed audit evidence catalog, offline scoring
 enforces the same provenance boundary at catalog evaluator version 1.2, one
 shared hypothesis-evidence rule is enforced when the state transition is
 requested, and a strict-schema-valid response whose citations do not resolve
 gets one bounded tool-less correction attempt, and one lossless
-citation-resolution contract is shared by every provenance boundary. R25 remains
-open. Task 10 remains blocked before the paid matrix; no benchmark result is
-published.
+citation-resolution contract is shared by every provenance boundary, and
+semantic citation failures carry a named operational taxonomy with the
+2026-08-20 canary retained as a deterministic regression. The complete
+deterministic R6 preflight has been rerun; R6 remains open only on its two paid
+live architecture canaries, which have not been run. Task 10 remains blocked
+before the paid matrix; no benchmark result is published.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1480,9 +1482,10 @@ bound to the frozen manifest. The post-R19 deterministic preflight and
 benchmark-validity review are complete. Fresh paid canaries ran on 2026-08-20:
 the single-agent architecture passed, while the multi-agent architecture failed
 because Lead hypothesis `H2` cited `completed_data_audit` rather than executed
-evidence. A focused review opened R20–R25. R20–R24
-are implemented; R25 remains open, and R6 must be rerun after it and therefore
-remains open.
+evidence. A focused review opened R20–R25, all of
+which are now implemented. The complete deterministic R6 preflight has been
+rerun at this revision; R6 remains open only on its two paid live architecture
+canaries.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
 rescores and aggregate reports are retained under
@@ -1502,7 +1505,7 @@ constraints are recorded in `docs/phase2-status.md`.
 | 7 | Complete | Bounded generalist architecture sharing runtime, provenance, tools, and report contracts without specialist delegation |
 | 8 | Complete | Immutable resumable matrix runner, paid opt-in, cost pilot gate, failure isolation, and offline rescoring |
 | 9 | Complete | Deterministic denominator-preserving aggregation, uncertainty, paired comparisons, cost/latency, and failure reporting |
-| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R25 and a fresh final R6 preflight must close before a new 60-cell matrix is started |
+| 10 | Attempted / blocked | Four versioned pilot attempts were retained, but none completed the pilot gate; R1–R25 are complete and the deterministic R6 preflight has been rerun, but the two paid live canaries must still pass before a new 60-cell matrix is started |
 
 ### Phase 2 implementation order
 
@@ -1749,9 +1752,11 @@ this revision after R13–R19. The fresh paid single-agent canary passed on
 2026-08-20, but the multi-agent canary failed the production evidence gate. R20
 and R21 have since closed the audit-provenance half of that failure at runtime
 and offline, R22 closed the hypothesis-transition half, and R23 added the one
-bounded correction attempt, and R24 unified citation resolution. R25 must close
-before the complete R6 preflight and both live canaries are rerun, so R6 remains
-open.
+bounded correction attempt, R24 unified citation resolution, and R25 named the
+failure and retained the canary deterministically. The complete deterministic
+preflight has been rerun; R6 remains open only on the two paid live canaries,
+which were not run because they require provider credentials and spend real
+money.
 
 Scenario-document integrity is now enforced in code rather than only in a test.
 The shared generated document is inherited unchanged by the clean baseline and
@@ -2307,8 +2312,8 @@ references, and resolved hypothesis `H2` using the invented reference
 
 R20–R25 close the cross-agent provenance contract rather than weakening that
 gate or retrying until a favorable model output appears. All six tasks must be
-implemented before another complete R6 preflight or Task 10 manifest. R20–R24
-are implemented; R25 remains open.
+implemented before another complete R6 preflight or Task 10 manifest. All six
+are implemented.
 
 #### R20 — Preserve typed audit provenance across architecture boundaries [P0] — Implemented
 
@@ -2572,7 +2577,7 @@ exists to make the stricter gate recoverable. Decision record
 `docs/decisions/0012-single-citation-resolution-contract.md` holds the rationale
 and `tests/test_citation_resolution.py` holds the regressions.
 
-#### R25 — Classify provenance failures and close the live regression gap [P2]
+#### R25 — Classify provenance failures and close the live regression gap [P2] — Implemented (live canaries outstanding)
 
 Give semantic evidence failures an explicit operational taxonomy and retain the
 2026-08-20 canary failure as a deterministic regression. Replace keyword-only
@@ -2592,6 +2597,41 @@ Acceptance:
 - after R20–R24, all deterministic tests, Ruff, Docker integrations, adversarial
   provenance suites, the 60-cell dry-run, retained-artifact checks, and both
   paid live architecture canaries pass in one fresh R6 preflight.
+
+Implemented, apart from the two paid live canaries. Every semantic citation
+failure inherits `agents.evidence.EvidenceProvenanceError`, so classification is
+by type rather than by keyword and a provenance error added at a new boundary
+inherits the taxonomy instead of landing in `other`.
+`RunBlockReason.EVIDENCE_PROVENANCE` and `FailureCategory.EVIDENCE_PROVENANCE`
+are checked before the generic `ModelBehaviorError` branch, because a response
+whose citations do not resolve is a semantic failure of a well-formed answer
+rather than a malformed one.
+
+`AttemptRecord` gained a typed `block_reason` and `finish_attempt` inherits the
+run-level reason, so attempt history carries the same taxonomy as run state and
+benchmark records; a completed attempt carries none. Regressions follow the
+category through attempt history, benchmark records, aggregation, report table
+rows, and canonical offline rescore including the persisted document.
+
+The 2026-08-20 failure is retained as a deterministic regression over the real
+multi-agent lifecycle — an evidence-bearing audit from a real
+`inspect_relations` call and scripted Lead responses citing
+`completed_data_audit` — with no provider call. Siblings pin that the same
+handoff recovers when the R23 correction cites real evidence, and that the
+pre-R20 provenance-free audit is refused before the Lead runs. Lifecycle
+fixtures now use evidence-bearing audits citing executions their workspaces
+actually contain; an empty `AuditResult` passes the contract only because it
+claims nothing, which is how those fixtures stayed green while the handoff was
+broken.
+
+The complete deterministic R6 preflight was rerun at this revision: 673 tests,
+Ruff, every declared category as an explicit selection, real Docker containers,
+all 60 dry-run cells with unique run IDs and workspaces, and every retained
+`.runs/` artifact. The two paid live architecture canaries were **not** run —
+they require `OPENAI_API_KEY`/`OPENAI_DEFAULT_MODEL` and spend real money — so
+R6 remains open on exactly that step. Decision record
+`docs/decisions/0013-provenance-failure-taxonomy.md` holds the rationale and
+`tests/test_provenance_failure_taxonomy.py` holds the regressions.
 
 #### Task 10 — Execute and publish the Phase 2 benchmark
 
