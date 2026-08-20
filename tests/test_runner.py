@@ -30,6 +30,27 @@ from tools.artifacts import ArtifactManager
 from tools.workspace import WorkspaceManager
 
 
+def test_visualization_requirement_is_explicit_and_word_bounded() -> None:
+    assert (
+        AnalysisRunner._objective_requests_visualization(
+            "Summarize revenue by channel."
+        )
+        is False
+    )
+    assert (
+        AnalysisRunner._objective_requests_visualization(
+            "Compare customer demographics."
+        )
+        is False
+    )
+    assert (
+        AnalysisRunner._objective_requests_visualization(
+            "Summarize revenue and create a chart by channel."
+        )
+        is True
+    )
+
+
 def _usage():  # noqa: ANN202
     return SimpleNamespace(
         requests=1,

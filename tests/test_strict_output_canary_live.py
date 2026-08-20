@@ -153,3 +153,13 @@ def test_live_canaries_cover_every_production_output_type() -> None:
         AuditResult,
         ValidationResult,
     }
+
+
+def test_canary_does_not_invent_a_visualization_requirement() -> None:
+    assert AnalysisRunner._objective_requests_visualization(_CANARY_OBJECTIVE) is False
+    assert (
+        AnalysisRunner._objective_requests_visualization(
+            "Summarize revenue and create a chart by channel."
+        )
+        is True
+    )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -341,7 +342,9 @@ class AnalysisRunner:
                 completion_candidate = self._candidate(
                     objective,
                     lead_result,
-                    require_visualization=True,
+                    require_visualization=self._objective_requests_visualization(
+                        objective
+                    ),
                 )
                 completion_validation = candidate_completeness_validation(
                     completion_candidate,
@@ -383,7 +386,9 @@ class AnalysisRunner:
                 candidate = self._candidate(
                     objective,
                     lead_result,
-                    require_visualization=True,
+                    require_visualization=self._objective_requests_visualization(
+                        objective
+                    ),
                 )
                 active_agent = (critic_agent.name, AgentRole.CRITIC, objective)
                 active_agent_recorded = False
@@ -801,6 +806,18 @@ class AnalysisRunner:
             evidence_refs=list(dict.fromkeys(evidence_refs)),
             structured_metrics_required=structured_metrics_required,
             visualization_requested=require_visualization,
+        )
+
+    @staticmethod
+    def _objective_requests_visualization(objective: str) -> bool:
+        """Return whether the user explicitly requested a visual deliverable."""
+
+        return bool(
+            re.search(
+                r"\b(?:charts?|graphs?|plots?|visuali[sz](?:e|ation|ations|ing))\b",
+                objective,
+                flags=re.IGNORECASE,
+            )
         )
 
     @staticmethod

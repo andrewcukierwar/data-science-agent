@@ -14,7 +14,7 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
 Rate = Annotated[float, Field(ge=0.0, le=1.0)]
@@ -68,7 +68,10 @@ class AuditObservation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     statement: NonEmptyString
-    evidence_refs: list[NonEmptyString] = Field(default_factory=list)
+    evidence_refs: list[NonEmptyString] = Field(
+        default_factory=list,
+        json_schema_extra={"minItems": 1},
+    )
 
 
 def _coerce_observations(value: Any) -> Any:
@@ -91,7 +94,10 @@ class DataQualityIssue(BaseModel):
     severity: IssueSeverity
     message: NonEmptyString
     table_name: NonEmptyString | None = None
-    evidence_refs: list[NonEmptyString] = Field(default_factory=list)
+    evidence_refs: list[NonEmptyString] = Field(
+        default_factory=list,
+        json_schema_extra={"minItems": 1},
+    )
     recommendation: NonEmptyString | None = None
 
 
@@ -117,14 +123,15 @@ class TableAudit(BaseModel):
     primary_key_candidates: list[NonEmptyString] = Field(default_factory=list)
     relationships: list[NonEmptyString] = Field(default_factory=list)
     warnings: list[AuditObservation] = Field(default_factory=list)
-    evidence_refs: list[NonEmptyString] = Field(default_factory=list)
+    evidence_refs: list[NonEmptyString] = Field(
+        default_factory=list,
+        json_schema_extra={"minItems": 1},
+    )
 
-    @model_validator(mode="before")
+    @field_validator("warnings", mode="before")
     @classmethod
     def accept_legacy_warning_strings(cls, value: Any) -> Any:
-        if isinstance(value, dict) and "warnings" in value:
-            value = {**value, "warnings": _coerce_observations(value["warnings"])}
-        return value
+        return _coerce_observations(value)
 
 
 class AuditResult(BaseModel):
@@ -138,12 +145,10 @@ class AuditResult(BaseModel):
     limitations: list[AuditObservation] = Field(default_factory=list)
     audited_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
-    @model_validator(mode="before")
+    @field_validator("limitations", mode="before")
     @classmethod
     def accept_legacy_limitation_strings(cls, value: Any) -> Any:
-        if isinstance(value, dict) and "limitations" in value:
-            value = {**value, "limitations": _coerce_observations(value["limitations"])}
-        return value
+        return _coerce_observations(value)
 
     @model_validator(mode="after")
     def audited_at_is_timezone_aware(self) -> "AuditResult":

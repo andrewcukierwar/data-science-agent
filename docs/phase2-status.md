@@ -1,8 +1,7 @@
 # Phase 2 implementation status and benchmark handoff
 
 **Status date:** 2026-08-20
-**Implementation:** Tasks 1–9 and R1–R25 complete; R6 open on the paid live
-canaries only
+**Implementation:** Tasks 1–9 and R1–R25 complete; final R6 gate closed
 
 **Remediation:** R13–R19 are all implemented. The reopened R6 deterministic
 preflight and benchmark-validity review were rerun at this revision. Fresh paid
@@ -17,12 +16,16 @@ requested rather than after the final model response, and R23 adds one bounded,
 tool-less correction attempt for a strict-schema-valid response whose citations
 do not resolve, and R24 replaces four drifted provenance implementations with
 one lossless citation-resolution contract, and R25 names semantic citation
-failures and retains the canary as a deterministic regression. The complete
-deterministic R6 preflight has been rerun at this revision. R6 remains open on
-its two paid live architecture canaries, which have not been run.
+failures and retains the canary as a deterministic regression. The complete R6
+preflight is now closed: 677 deterministic tests including three Docker
+integrations, Ruff, retained-artifact validation, all 60 dry-run cells, and both
+provider-backed architecture canaries passed at the final revision. The live
+gate also exposed and closed valid-JSON datetime parsing, an unconditional
+multi-agent visualization requirement, and provider-visible empty audit
+provenance lists.
 
-**Experiment:** Task 10 attempted; blocked before the paid matrix; no
-analytical results published
+**Experiment:** Historical Task 10 attempts retained; new manifest/pilot ready;
+paid matrix not executed; no analytical results published
 
 This document records the Phase 2 work, the required pre-benchmark remediation,
 the attempted paid pilots, and the exact boundary between tested infrastructure
@@ -55,7 +58,7 @@ erase that historical verification, but they reopen the final R6 gate.
    state or explicit attempt IDs with cumulative accounting on resume; require
    known pricing or an explicit `unknown-cost` acknowledgement beyond the
    pilot; and remove the misleading `configured-model` CLI default.
-6. **R6 — Fix scenario-document integrity + full preflight (gate reopened).** Remove the false
+6. **R6 — Fix scenario-document integrity + full preflight (complete).** Remove the false
    model-visible clean/no-injection assertion, test that injected scenarios do
    not retain baseline-only assertions, and run the complete deterministic
    preflight: tests, Ruff, architecture-neutral fixtures, workspace mismatch,
@@ -95,7 +98,7 @@ erase that historical verification, but they reopen the final R6 gate.
 | R3 | Verified | Identity mismatch and source-tamper regressions |
 | R4 | Verified | Evaluator-error denominator and taxonomy regressions |
 | R5 | Verified | Explicit model, pricing gate, cumulative resume, and pilot semantics |
-| R6 | Reopened; R20–R25 and fresh full rerun required | The post-R19 deterministic gate passed. On 2026-08-20 single-agent passed live; multi-agent failed because Lead hypothesis `H2` cited no executed evidence. The complete gate must run again after R20–R25 |
+| R6 | Verified / closed | After R20–R25, 677 deterministic tests including Docker, Ruff, retained artifacts, the 60-cell dry run, and both provider-backed architecture canaries passed; three live integration defects were dispositioned and fixed before the final green run |
 | R7 | Verified | Capability/tool-mix and architecture-equivalence regressions |
 | R8 | Verified | Identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
 | R9 | Verified | Multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
@@ -124,7 +127,8 @@ The deterministic half of that preflight—Ruff, the full suite, the adversarial
 suites, Docker integrations, retained-artifact rescoring, and the 60-cell
 dry-run—was rerun successfully at this revision. The benchmark-validity review
 is also complete. The failed multi-agent canary subsequently opened R20–R25, so
-Task 10 is blocked until those tasks and a fresh complete R6 preflight close.
+Task 10 was blocked until those tasks and a fresh complete R6 preflight closed;
+both conditions are now satisfied.
 
 ## Phase 2 Live-Canary Provenance Remediation: R20–R25 closed
 
@@ -143,7 +147,7 @@ acceptance criteria.
 | R22 — Align hypothesis evidence contracts and validate state transitions | P1 | Complete | `hypothesis_requires_evidence` is the one shared predicate for the contract, state tool, final Lead validation, and offline evaluation; `record_hypothesis` refuses an unsupported resolution before touching the ledger and returns an actionable typed error; open hypotheses stay usable; the append-only history is checked offline |
 | R23 — Add bounded correction for semantic provenance failures | P1 | Complete | `evidence_correction_attempts` is validated `ge=0, le=1`; the correction agent has no tools and one turn; the request names the invalid field IDs and a bounded citable-evidence catalog; the corrected response passes the identical persistence boundary; both calls, their usage, and their outcomes bind to the active attempt; a second invalid response terminates. Both architectures get the same allowance |
 | R24 — Make citation resolution lossless and consistent | P1 | Complete | `resolve_citations` returns resolved and unresolved explicitly and `canonical_references` drops nothing; a claim is supported only when every citation resolves; `material_claims` is one shared definition; the Lead's private resolver is deleted and the Critic now checks resolution; qualitative-finding and source-lineage rules apply offline too |
-| R25 — Classify provenance failures and close the live regression gap | P2 | Complete (deterministic) | `EvidenceProvenanceError` is the shared base; `RunBlockReason.EVIDENCE_PROVENANCE` and `FailureCategory.EVIDENCE_PROVENANCE` propagate through attempt history, benchmark records, aggregation, failure reports, and canonical offline rescore; the 2026-08-20 handoff is reproduced deterministically; lifecycle fixtures use evidence-bearing audits. The two paid live canaries have **not** been run |
+| R25 — Classify provenance failures and close the live regression gap | P2 | Complete | `EvidenceProvenanceError` is the shared base; `RunBlockReason.EVIDENCE_PROVENANCE` and `FailureCategory.EVIDENCE_PROVENANCE` propagate through attempt history, benchmark records, aggregation, failure reports, and canonical offline rescore; the 2026-08-20 handoff is reproduced deterministically; lifecycle fixtures use evidence-bearing audits; both paid live canaries pass at the final R6 revision |
 
 R20–R25 must preserve R2 and R7: the solution may carry and validate provenance
 across agent boundaries, but it may not accept an audit merely because a role
@@ -993,15 +997,18 @@ still load. The 60-cell dry-run is unchanged.
 This is deterministic verification of R24 only. The complete R6 preflight and
 both live canaries remain R25's work.
 
-### Complete deterministic R6 preflight, rerun after R20–R25
+### Complete R6 preflight, closed after R20–R25
 
 ```text
-673 passed, 16 deselected
+674 passed, 3 Docker-permission skips, 17 live tests deselected
+3 Docker-backed integrations passed with container access
+4 final live-preflight tests passed in 81.07 seconds
 ```
 
-Ruff lint reported `All checks passed!` and format reported 161 files already
-formatted. Every declared preflight category was run as an explicit selection
-rather than being inferred from the whole-suite result:
+That is 677 deterministic passes when the separately authorized Docker tests
+are included. Ruff lint reported `All checks passed!` and format reported 163
+files already formatted. Every declared preflight category was run as an
+explicit selection rather than being inferred from the whole-suite result:
 
 | Category | Result |
 | --- | --- |
@@ -1011,29 +1018,49 @@ rather than being inferred from the whole-suite result:
 | Lifecycle, interruption, attempt history | 48 passed |
 | Failure taxonomy, outcome gate, pilot calibration, usage, pricing | 80 passed |
 | Scenario-document integrity and catalog | 72 passed |
-| Strict output contracts | 38 passed |
+| Strict output contracts | 37 passed at the final revision |
 | Docker-backed integrations | 3 passed, real containers |
 
 The complete 10 × 2 × 3 declaration produced 60 cells with 60 unique run IDs and
 60 unique workspace paths, and the R19 pilot set still partitions them by
 architecture. Every retained `.runs/` artifact still loads — 10 benchmark
-manifests, 4 reports, and 18 ledger states.
+manifests, 4 reports, and 18 ledger states; every retained JSON artifact parses.
 
-**The two paid live architecture canaries were not run.** They require
-`OPENAI_API_KEY` and `OPENAI_DEFAULT_MODEL`, which are absent from this
-environment, and they spend real money on provider calls. R6 therefore remains
-open on exactly that step, and no claim is made that the gate has passed. Run
-them explicitly with:
+The first authorized live run failed both architectures because valid ISO-8601
+JSON timestamps were revalidated with Python-object strictness after a
+model-level legacy coercion validator. Replacing those model-level coercions
+with field-level validators preserved legacy loading and restored the JSON
+datetime contract. The next run passed single-agent but left multi-agent
+blocked because orchestration marked every objective as requiring a chart; the
+flag now derives from explicit visualization language in the objective. A
+subsequent multi-agent run correctly refused an audit whose limitations had
+empty provenance. The runtime boundary stayed unchanged and terminal, while
+the provider-visible strict schemas for `AuditObservation`,
+`DataQualityIssue`, and `TableAudit` now require at least one candidate
+reference. The resolver still proves that every supplied reference is a
+successful execution or verified artifact. These changes advanced
+`output_schema_fingerprint()` to
+`126195be58dea108393095556d38de2c90c316ebc1a6cda0664d21d866ac6bfc`, so no
+historical pilot can authorize the next matrix.
 
-```bash
-uv run --env-file .env pytest -m live \
-  tests/test_strict_output_canary_live.py -v
-```
+After those failures were dispositioned, the final provider-backed suite passed
+four tests in 81.07 seconds. The multi-agent canary completed with validation
+`pass`, 18 requests, 84,300 tokens, 56.98 seconds, and known estimated cost
+`$0.00767636`; its successful role trace included Data Auditor, Analyst, Lead,
+and Critic. The single-agent canary completed with validation `pass`, 6
+requests, 36,032 tokens, 21.53 seconds, and known estimated cost `$0.00371480`;
+its trace contained only the Generalist. Both had one reconciled completed
+attempt, no run error or block reason, and a persisted readable report. The
+multi-agent trace retained one failed exploratory SQL event, but no claim used
+it as evidence and the validated run completed; this is expected R2 evidence
+isolation rather than a hidden retry or erased failure.
 
-Both `test_multi_agent_live_strict_output_canary` and
-`test_single_agent_live_strict_output_canary` must pass, under the R17 shared
-outcome gate, before a Task 10 manifest is frozen. A failed canary must be
-dispositioned rather than retried.
+The final benchmark-validity review found no remaining code-level Task 10
+blocker. R6 is closed. This does not publish a benchmark result: Task 10 must
+still freeze a new clean-revision manifest, run the R19 stratified pilot, and
+execute the declared matrix without changing rules mid-experiment. Decision record
+[0014](decisions/0014-final-r6-live-contract-stabilization.md) preserves the
+final live-contract changes.
 
 ### Scenario-document integrity is now a code invariant (R6)
 
@@ -1224,31 +1251,29 @@ Before another paid attempt:
    citation-resolution contract, and a named provenance failure taxonomy with
    the 2026-08-20 canary retained as a deterministic regression. Their
    rationale is in decision records 0009 through 0013.
-3. The complete deterministic R6 preflight has been rerun at this revision —
-   673 tests, Ruff, every declared category as an explicit selection, real
-   Docker containers, all 60 dry-run cells, and every retained artifact.
-4. Run the two paid live architecture canaries, which are the only open step
-   of the R6 gate. They were **not** run at this revision because they require
-   provider credentials and spend real money:
-   `uv run --env-file .env pytest -m live tests/test_strict_output_canary_live.py -v`.
-   Both must pass under the R17 outcome gate. Do not retry a failed canary
-   without disposition.
-5. Recheck variable presence without printing the key and confirm Docker access.
-6. Select the compatible model and freeze a new manifest before any paid execution.
-7. Review the declared ten-scenario × two-architecture × three-repetition matrix,
+3. The complete R6 preflight is closed at this revision — 677 deterministic
+   tests including real Docker containers, Ruff, every declared category as an
+   explicit selection, all 60 dry-run cells, every retained artifact, and both
+   paid live architecture canaries under the R17 outcome gate. Every observed
+   live failure was dispositioned before retry.
+4. Recheck variable presence without printing the key and confirm Docker access.
+5. Select the compatible model and freeze a new clean-revision manifest before
+   any paid execution. The final output-schema fingerprint invalidates every
+   historical pilot.
+6. Review the declared ten-scenario × two-architecture × three-repetition matrix,
    budgets, evaluator versions, code revision, and output paths.
-8. Run and retain the R19 pilot set, including at least one cell per architecture.
-9. Decide whether the declared repetition count remains affordable. If it must
+7. Run and retain the R19 pilot set, including at least one cell per architecture.
+8. Decide whether the declared repetition count remains affordable. If it must
    change, create a new manifest/version and record the justification before the
    full run.
-10. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
+9. Resume the immutable matrix with `--allow-paid`; do not use `--force` or
     overwrite workspaces.
-11. Evaluate every persisted workspace offline using the frozen evaluator rules.
-12. Inspect failures without changing rules mid-experiment. If code or evaluator
+10. Evaluate every persisted workspace offline using the frozen evaluator rules.
+11. Inspect failures without changing rules mid-experiment. If code or evaluator
     changes are required, version the benchmark and rerun the affected declared
     matrix rather than silently patching scores.
-13. Generate and retain raw manifests, run records, evaluator results, pilot
+12. Generate and retain raw manifests, run records, evaluator results, pilot
     report, and aggregate report.
-14. Publish real results and limitations, including denominators, failed runs,
+13. Publish real results and limitations, including denominators, failed runs,
     sample size, model specificity, evaluator limitations, uncertainty, cost,
     and latency—regardless of which architecture performs better.

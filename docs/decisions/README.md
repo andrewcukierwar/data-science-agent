@@ -20,6 +20,7 @@ credentials, or evaluator-only expected values.
 | [0011](0011-bounded-evidence-correction.md) | One bounded, tool-less correction attempt for a semantic provenance failure | Accepted |
 | [0012](0012-single-citation-resolution-contract.md) | One lossless citation-resolution contract shared by every provenance boundary | Accepted |
 | [0013](0013-provenance-failure-taxonomy.md) | Semantic citation failures are a named operational outcome, not `other` | Accepted |
+| [0014](0014-final-r6-live-contract-stabilization.md) | Final live-schema, provenance, and objective-driven visualization contracts that close R6 | Accepted |
 
 The chronological failure history, present run status, operational commands,
 and remaining risks are in [Phase 1 lessons](../phase1-lessons.md).

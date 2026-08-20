@@ -197,6 +197,18 @@ def test_strict_schema_declares_dimensions_as_typed_objects() -> None:
     assert comparison["properties"]["dimensions"]["type"] == "array"
 
 
+@pytest.mark.parametrize("output_type", [AuditResult, GeneralistResult])
+def test_strict_schema_requires_a_reference_for_every_audit_claim(
+    output_type: type,
+) -> None:
+    schema = strict_output_type(output_type).json_schema()
+
+    for definition in ("AuditObservation", "DataQualityIssue", "TableAudit"):
+        assert (
+            schema["$defs"][definition]["properties"]["evidence_refs"]["minItems"] == 1
+        )
+
+
 def test_strict_output_type_rejects_an_open_ended_output() -> None:
     from pydantic import BaseModel, ConfigDict
 
@@ -364,6 +376,16 @@ def test_valid_strict_fixture_parses_for_every_output_type() -> None:
     }
     for output_type, payload in fixtures.items():
         assert isinstance(output_type.model_validate_json(payload), output_type)
+
+
+def test_sdk_strict_parser_accepts_json_datetime_representation() -> None:
+    """Strict JSON must not apply Python-object strictness after coercion."""
+
+    audit = AuditResult(status=AuditStatus.COMPLETE, audited_at=_STAMP)
+
+    parsed = strict_output_type(AuditResult).validate_json(audit.model_dump_json())
+
+    assert parsed == audit
 
 
 @pytest.mark.parametrize(
