@@ -12,7 +12,8 @@ architecture canaries), R14 (failure-safe usage and cost accounting), R15
 cells), R17 (outcome-sensitive preflight gate), R18 (explicit block reasons and
 accurate failure taxonomy), and R19 (stratified pilot-set calibration) are all
 complete. The deterministic R6 rerun and benchmark-validity review are also
-complete; only fresh paid live canaries remain open. The paid matrix remains
+complete. On 2026-08-20 the fresh single-agent canary passed, but the
+multi-agent canary failed its executed-evidence gate. The paid matrix remains
 blocked, the final R6 gate is open, and no complete benchmark result is claimed. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
 verification record, retained run artifacts, and the blocked live-run report.
@@ -123,9 +124,11 @@ The reopened R6 preflight has been rerun at this revision: the 508-test
 deterministic suite, Ruff, every declared adversarial suite, the Docker-backed
 integration tests, all 60 declared dry-run cells, and a benchmark-validity code
 review pass. That review closed pilot selection, pilot-partition, repository
-identity, failure-taxonomy, and incomplete-accounting gaps. Only the two paid
-opt-in live architecture canaries remain before another Task 10 manifest is
-frozen; this environment does not provide their required API key and model.
+identity, failure-taxonomy, and incomplete-accounting gaps. A fresh paid run on
+2026-08-20 passed the single-agent canary and coverage assertion but failed the
+multi-agent canary because Lead hypothesis `H2` cited no executed evidence.
+That multi-agent release blocker must be resolved before another Task 10
+manifest is frozen.
 
 Task 10 execution is currently blocked before the paid matrix. Four immutable
 attempts were retained under `.runs/phase2-task10-20260819/`: three attempts

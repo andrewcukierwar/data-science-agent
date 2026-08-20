@@ -2,11 +2,12 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-19 — Phase 2 Tasks 1–9 and R1–R19 are implemented. The
+**Revision:** 2026-08-20 — Phase 2 Tasks 1–9 and R1–R19 are implemented. The
 deterministic portion of the reopened R6 gate and its benchmark-validity review
-are complete. A fresh paid live canary for each architecture remains required.
-Task 10 was attempted but remains blocked before the paid matrix; no benchmark
-result is published.
+are complete. Fresh paid canaries were run: the single-agent architecture
+passed, while the multi-agent architecture failed its executed-evidence gate.
+Task 10 remains blocked before the paid matrix; no benchmark result is
+published.
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1466,9 +1467,10 @@ R18 is complete: every non-completion persists a typed reason and detail, and
 only genuine budget exhaustion is categorized as budget. R19 is complete: the
 pilot is a declared per-architecture set with a stratified, ranged estimate
 bound to the frozen manifest. The post-R19 deterministic preflight and
-benchmark-validity review are complete. The only remaining R6 acceptance item
-is a fresh paid live canary for each architecture; both require provider
-credentials that are absent from the current environment.
+benchmark-validity review are complete. Fresh paid canaries ran on 2026-08-20:
+the single-agent architecture passed, while the multi-agent architecture failed
+because Lead hypothesis `H2` cited `completed_data_audit` rather than executed
+evidence. R6 therefore remains open.
 Task 10 was attempted with four versioned manifests, but no paid cost pilot
 completed and the declared matrix was not started. Failure-only offline
 rescores and aggregate reports are retained under
@@ -1731,8 +1733,9 @@ all later remediation, including R13–R19; an earlier green test run does not
 close R6.
 
 Status: the deterministic preflight and benchmark-validity review were rerun at
-this revision after R13–R19. The gate remains open only because fresh paid live
-canaries cannot run without `OPENAI_API_KEY` and `OPENAI_DEFAULT_MODEL`.
+this revision after R13–R19. The fresh paid single-agent canary passed on
+2026-08-20, but the multi-agent canary failed the production evidence gate, so
+R6 remains open.
 
 Scenario-document integrity is now enforced in code rather than only in a test.
 The shared generated document is inherited unchanged by the clean baseline and
@@ -1789,13 +1792,12 @@ earlier preflight did not exercise:
 
 Rerun at this revision — still open:
 
-- both opt-in live architecture canaries in
-  `tests/test_strict_output_canary_live.py`. They last passed on 2026-08-19,
-  before R14–R19 changed usage accounting, the Generalist attempt lifecycle,
-  interruption persistence, and the outcome gate they now assert against. They
-  are paid and must be run deliberately. The current environment has neither
-  required provider variable, so the canary command selected three tests and
-  skipped all three without making an API call.
+- the multi-agent canary in `tests/test_strict_output_canary_live.py`. The
+  2026-08-20 provider-backed run reached Docker and the configured model but
+  failed with `LeadEvidenceError: lead outputs cite no executed evidence:
+  hypothesis:H2`; the Lead cited `completed_data_audit` rather than a successful
+  execution or verified artifact. The single-agent canary and the deterministic
+  canary-coverage assertion passed in the same run (`1 failed, 2 passed`).
 
 The earlier 369-test preflight remains historical evidence only.
 

@@ -1,13 +1,12 @@
 # Phase 2 implementation status and benchmark handoff
 
-**Status date:** 2026-08-19
+**Status date:** 2026-08-20
 **Implementation:** Tasks 1–9, R1–R12, and R13–R19 complete
 
 **Remediation:** R13–R19 are all implemented. The reopened R6 deterministic
-preflight and benchmark-validity review were rerun at this revision. Only the
-two opt-in live architecture canaries keep the gate open: they are paid, last
-passed before R14–R19 changed lifecycle accounting, and cannot run because this
-environment lacks the required provider key and model selection.
+preflight and benchmark-validity review were rerun at this revision. Fresh paid
+canaries ran on 2026-08-20: single-agent passed; multi-agent failed its
+executed-evidence gate. R6 remains open on that multi-agent failure.
 
 **Experiment:** Task 10 attempted; blocked before the paid matrix; no
 analytical results published
@@ -83,7 +82,7 @@ historical verification, but they reopen the final R6 gate.
 | R3 | Verified | Identity mismatch and source-tamper regressions |
 | R4 | Verified | Evaluator-error denominator and taxonomy regressions |
 | R5 | Verified | Explicit model, pricing gate, cumulative resume, and pilot semantics |
-| R6 | Deterministic preflight and validity review complete; live gate open | Document integrity is a code invariant; 508 tests, Ruff, all adversarial suites, Docker integrations, 60 dry-run cells, retained-artifact checks, and the benchmark-validity review passed. Outstanding: one fresh paid live canary per architecture |
+| R6 | Deterministic preflight and validity review complete; live gate open | 508 tests, Ruff, adversarial suites, Docker integrations, 60 dry-run cells, retained-artifact checks, and validity review passed. On 2026-08-20 single-agent passed live; multi-agent failed because Lead hypothesis `H2` cited no executed evidence |
 | R7 | Verified | Capability/tool-mix and architecture-equivalence regressions |
 | R8 | Verified | Identity mismatch, source-tamper, corrupt/missing, and non-completed rescore refusals |
 | R9 | Verified | Multi-record evaluator-crash, lifecycle, denominator, aggregate, and paired-comparison regressions |
@@ -402,8 +401,9 @@ R14 and R15 fixed.
 
 R17's deterministic acceptance evidence is complete. At this revision Ruff,
 the Docker-backed integration tests, the adversarial fixtures, and the 60-cell
-dry-run all pass; the two opt-in live canaries have not been rerun since R14–R19
-changed lifecycle accounting and remain the final R6 release-gate evidence.
+dry-run all pass. The 2026-08-20 live rerun passed single-agent and failed
+multi-agent at the executed-evidence check, proving the shared gate rejects a
+semantically unsupported Lead output.
 
 ### 12. Explicit block reasons and accurate failure taxonomy (R18)
 
@@ -503,10 +503,15 @@ interrupt exits that could leave usage marked complete, incomplete usage being
 accepted as pilot evidence, and continued pilot spending after a failed
 stratum. Seven new regressions cover these cases.
 
-One R6 item remains open: the paid opt-in live canaries, one per architecture.
-The command selected three live tests at this revision, including its coverage
-assertion, but all three skipped because `OPENAI_API_KEY` and
-`OPENAI_DEFAULT_MODEL` are absent. No API call or paid run occurred.
+One R6 item remains open: the multi-agent live canary. After an initial
+Docker-permission skip inside the restricted sandbox, the elevated
+provider-backed run completed in 72.06 seconds with `1 failed, 2 passed`. The
+single-agent canary and canary-coverage assertion passed. Multi-agent failed
+with `LeadEvidenceError: lead outputs cite no executed evidence: hypothesis:H2`:
+its supported `H2` cited `completed_data_audit`, which is neither a successful
+tool execution nor a verified artifact. The retained ledger recorded 14 model
+requests, 62,039 tokens, the successful audit and analyst events, three
+successful SQL executions, and the failed Lead event.
 
 ### Scenario-document integrity is now a code invariant (R6)
 
@@ -691,13 +696,12 @@ Before another paid attempt:
    checks, failure-path accounting, lifecycle and taxonomy fixtures,
    scenario-document integrity, Docker integrations, Ruff, retained-artifact
    rescoring, all 60 dry-run cells, and seven new validity regressions.
-3. Rerun the two bounded live strict-output canaries in
-   `tests/test_strict_output_canary_live.py` (one per architecture), which
-   require completion, report persistence, usage accounting, and attempt
-   history through the R17 gate. They passed for R13 on 2026-08-19, before
-   R14–R19 changed usage accounting, the Generalist attempt lifecycle, and
-   interruption persistence, so that result no longer covers this revision.
-   These are paid runs.
+3. Resolve the multi-agent evidence-reference failure without weakening R2/R7,
+   then rerun `tests/test_strict_output_canary_live.py`. The 2026-08-20 paid run
+   passed single-agent but rejected multi-agent hypothesis `H2` because
+   `completed_data_audit` did not identify executed evidence. Version any
+   production contract or orchestration change before freezing a Task 10
+   manifest.
 4. Recheck variable presence without printing the key and confirm Docker access.
 5. Select the compatible model and freeze a new manifest before any paid execution.
 6. Review the declared ten-scenario × two-architecture × three-repetition matrix,
