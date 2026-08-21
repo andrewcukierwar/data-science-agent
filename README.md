@@ -2,30 +2,16 @@
 
 Foundation for an evidence-backed, multi-agent business analytics system.
 
-Phase 0 deterministic infrastructure and the Phase 1 multi-agent MVP are
-complete. Phase 2 Tasks 1–9 and remediations R1–R26 are implemented. Task
-10—the paid single-agent versus five-agent benchmark—was attempted on
-2026-08-19, but the retained pilots exposed additional release blockers tracked
-as R13–R19. R13 (strict analytical output schemas, including both live
-architecture canaries), R14 (failure-safe usage and cost accounting), R15
-(single-agent attempt lifecycle), R16 (retained and resumable interrupted
-cells), R17 (outcome-sensitive preflight gate), R18 (explicit block reasons and
-accurate failure taxonomy), and R19 (stratified pilot-set calibration) are all
-complete. R26 was added after the renewed paid pilot exposed an unbounded
-provider invocation; every agent run now has a frozen 300-second wall-clock
-limit. That change reopens R6 for Docker and provider-backed verification.
-On 2026-08-20 the provider-backed gate exposed and then closed three final live
-integration defects: valid JSON datetimes were parsed with Python-object
-strictness, every multi-agent objective was incorrectly marked as requesting a
-visualization, and the provider-visible audit schema allowed empty provenance
-lists that the runtime correctly refused. After those fixes, both architecture
-canaries completed and passed the shared R17 outcome gate at the preceding
-revision. The R26 deterministic gates pass, but the current environment denied
-the required Docker/live reruns after exhausting its tool allowance. A new
-clean-revision manifest/pilot is therefore not yet authorized; the paid matrix has not been run,
-and no complete benchmark result is claimed. See
+Phase 0 deterministic infrastructure, the Phase 1 multi-agent MVP, and Phase 2
+evaluation and reliability are complete. The declared single-agent versus
+five-agent benchmark ran on 2026-08-20/21 and executed all 60 cells; results and
+limitations are published in [`docs/phase2-results.md`](docs/phase2-results.md).
+
+The short version: no cell in either architecture passed the evaluator rubric,
+and the only statistically supported differences were cost and latency, both
+favoring the single-agent baseline. See
 [`docs/phase2-status.md`](docs/phase2-status.md) for the implementation ledger,
-verification record, retained run artifacts, and historical live-run report.
+remediation history, and retained run artifacts.
 
 ## Development
 
@@ -45,20 +31,44 @@ Implementation decisions and the Phase 1 hardening handoff are recorded in
 
 ## Phase 2 status
 
-The repository now contains versioned evaluation contracts, a zero-API offline
-evaluation engine, ten deterministic scenarios, calibrated correct and
-adversarial fixtures, a bounded generalist baseline, an immutable resumable
-benchmark runner, and deterministic aggregation/reporting. The latest full
-deterministic verification completed with **687 passed** when the three
-Docker-backed integrations are included (**684 passed, 3 Docker-permission
-skips, and 17 live tests deselected** in the restricted run, followed by **3
-passed** with Docker access). Ruff lint and formatting checks passed, and the
-10 × 2 × 3 matrix dry-run produced 60 unique cells. The final provider-backed
-suite then passed **4 tests in 80.92 seconds**, including one completed canary
-per architecture. R6 is closed; Task 10 is ready for a new frozen manifest and
-stratified cost pilot.
+Phase 2 is complete. The declared benchmark ran on 2026-08-20/21: 60 of 60
+cells executed and recorded under manifest `phase2-task10-20260820-v8`, frozen
+at code revision `b7ca12c`, for a measured total of `$2.9719`. Full results,
+limitations, and raw-evidence pointers are in
+[`docs/phase2-results.md`](docs/phase2-results.md).
 
-Before Task 10, review the twenty-six documented remediation tasks in
+**Headline result: no cell in either architecture passed the evaluator rubric.**
+Of 60 cells, 18 completed and were evaluated, and all 18 scored `fail`; the
+other 42 did not complete and are `not_evaluated` with no analytical score. The
+only statistically supported differences between the architectures are cost and
+latency, both favoring the single-agent baseline. No analytical-quality metric
+produced a supported difference in either direction.
+
+| Architecture | Completed | Task success | Mean score (completed) | Mean cost | Mean latency |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Single agent | 12/30 (40%) | 0/30 | 0.745 (n=12) | `$0.0112` | 73.8 s |
+| Multi-agent (five-agent) | 6/30 (20%) | 0/30 | 0.780 (n=6) | `$0.0989` | 378.2 s |
+
+The multi-agent architecture cost about 8.8x more per cell and took about 5.1x
+longer. Numerical correctness is the binding analytical constraint for both
+(dimension means 0.00 and 0.03). The two completed-cell subsets cover different
+scenarios — multi-agent completed only A/B experiment scenarios — so their
+per-dimension means are not a head-to-head quality comparison. See the results
+document for the full dimension table, failure taxonomy, and caveats.
+
+An independent offline rescore reproduced all 60 inline evaluator results with
+zero disagreements.
+
+The latest deterministic verification completed with **695 passed** including
+the three Docker-backed integrations, Ruff lint and formatting passed across
+168 files, the 10 x 2 x 3 dry-run produced 60 unique cells, and the
+provider-backed live canaries passed for both architectures.
+
+Twenty-one architecture decisions are recorded in
+[`docs/decisions/`](docs/decisions/README.md). The remediation history behind
+this run is summarized in [`docs/phase2-status.md`](docs/phase2-status.md).
+
+Twenty-six remediation tasks preceded the benchmark and are documented in
 [`PROJECT_PLAN.md`](PROJECT_PLAN.md): architecture-neutral evaluation (R1),
 hardened evidence provenance (R2), scenario-bound workspaces (R3), explicit
 evaluator errors (R4), hardened benchmark execution semantics (R5), and
@@ -85,8 +95,14 @@ taxonomy plus final regression closure (R25, P2, complete).
 
 R26 bounds every complete model invocation to 300 seconds, freezes that limit
 in the manifest, and retains timeouts as operational outcomes with incomplete
-usage and unavailable cost where necessary. Its deterministic verification is
-complete; R6 awaits only the Docker and provider-backed reruns at this revision.
+usage and unavailable cost where necessary. Five benchmark cells hit that bound
+and are retained in the reliability denominators.
+
+Three further defects were found and closed while running the benchmark itself:
+deterministic completeness gates consumed paid Critic review loops (decision
+0019), the pilot cost gate demanded the analytical success the benchmark exists
+to measure (decision 0020), and the CLI could not exit while uncancellable tool
+threads ran (decision 0021).
 
 R13 replaces every open-ended dimension map with a typed `MetricDimension`
 list, so all six production agent output types compile through the Agents SDK
@@ -267,10 +283,13 @@ substitutes for its results. R6 now passes, so the next execution must freeze a
 new manifest version and R19 pilot set; the final output-schema fingerprint
 prevents any historical pilot from authorizing that run.
 
-### Task 10 historical execution record
+### Task 10 historical attempts, superseded by the completed benchmark
 
-The attempted manifests and reports are local evidence, not benchmark results.
-The runner's `multi-agent` label denotes the planned five-agent architecture.
+These 2026-08-19 attempts all failed before the paid matrix and are retained as
+historical evidence only. They are superseded by the completed
+`phase2-task10-20260820-v8` run reported in
+[`docs/phase2-results.md`](docs/phase2-results.md). The runner's `multi-agent`
+label denotes the five-agent architecture.
 
 | Manifest | Model | Persisted observations | Outcome |
 | --- | --- | ---: | --- |
@@ -341,10 +360,11 @@ Planning writes the manifest before any workspace or agent execution:
 uv run python scripts/run_benchmark.py plan benchmark.json --model gpt-5.6-luna
 ```
 
-R6 is closed, so these paid commands are now ready for a newly frozen manifest.
 R19 replaced the single first-cell estimate with a declared pilot set containing
 at least one cell per architecture before the remaining immutable cells can
-resume:
+resume. Per decision 0020 the pilot gate requires a reconciled cost observation
+rather than a completed analysis, so a bounded blocked cell can authorize the
+matrix while failed and interrupted cells still cannot:
 
 ```bash
 uv run python scripts/run_benchmark.py pilot benchmark.json --allow-paid

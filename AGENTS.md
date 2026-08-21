@@ -4,10 +4,10 @@ See `PROJECT_PLAN.md` for the full architecture, implementation plan, and roadma
 
 ## Current Phase
 
-Phase 2: Evaluation and Reliability.
+Phase 2: Evaluation and Reliability — complete as of 2026-08-21.
 
-Phase 1 is complete. The current objective is to expand the deterministic
-scenario suite, build a fair single-agent baseline, and benchmark reliability.
+Phases 0, 1, and 2 are complete. The declared single-agent versus five-agent
+benchmark ran and its results are published in `docs/phase2-results.md`.
 Do not implement Phase 3 UI, Phase 4 AWS, predictive ML, or other future phases
 unless explicitly requested.
 

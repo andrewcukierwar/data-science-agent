@@ -27,6 +27,7 @@ credentials, or evaluator-only expected values.
 | [0018](0018-bounded-agent-invocation-latency.md) | Frozen end-to-end wall-clock bounds for every live agent invocation | Accepted |
 | [0019](0019-bounded-completion-before-paid-critic-review.md) | Deterministic completeness is resolved by a bounded completion pass before a paid Critic loop | Accepted |
 | [0020](0020-pilot-cost-gate-measures-cost-not-success.md) | The pilot cost gate accepts a bounded blocked cell with reconciled usage | Accepted |
+| [0021](0021-cli-exits-after-artifacts-are-persisted.md) | The benchmark CLI exits without joining uncancellable tool threads | Accepted |
 
 The chronological failure history, present run status, operational commands,
 and remaining risks are in [Phase 1 lessons](../phase1-lessons.md).

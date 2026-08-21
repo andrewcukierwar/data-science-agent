@@ -9,6 +9,7 @@ passed ``--allow-paid``.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -267,5 +268,22 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def _exit(code: int) -> None:
+    """Exit once every artifact is persisted, without joining tool threads.
+
+    The Agents SDK runs synchronous function tools on worker threads. When the
+    frozen ``agent_run_timeout_seconds`` bound fires, asyncio cancels the await
+    but cannot cancel the thread, so an in-flight DuckDB query keeps running and
+    its non-daemon thread blocks interpreter finalization indefinitely while
+    DuckDB's task scheduler spins. Every manifest, report, and workspace is
+    already written and fsynced by the time we get here, so waiting on those
+    orphans only hangs the command.
+    """
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _exit(main())

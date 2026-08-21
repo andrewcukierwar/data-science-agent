@@ -1,67 +1,46 @@
 # Phase 2 implementation status and benchmark handoff
 
-**Status date:** 2026-08-20
-**Implementation:** Tasks 1–9 and R1–R26 complete; R6 external rerun pending
+**Status date:** 2026-08-21
+**Implementation:** Tasks 1–10 and R1–R26 complete. The declared benchmark ran.
 
-**Remediation:** R13–R19 are all implemented. The reopened R6 deterministic
-preflight and benchmark-validity review were rerun at this revision. Fresh paid
-canaries ran on 2026-08-20: single-agent passed; multi-agent failed its
-executed-evidence gate. R20–R25 track the resulting audit/Lead provenance
-defects. R20 and R21 are now implemented: audit contract 2.0 carries typed
-evidence-bearing claims, one persistence boundary refuses unsupported completed
-audits, the Lead receives a bounded typed audit evidence catalog, and offline
-scoring enforces the same provenance boundary at catalog evaluator version 1.2.
-R22 adds one shared hypothesis-evidence rule, enforced when the transition is
-requested rather than after the final model response, and R23 adds one bounded,
-tool-less correction attempt for a strict-schema-valid response whose citations
-do not resolve, and R24 replaces four drifted provenance implementations with
-one lossless citation-resolution contract, and R25 names semantic citation
-failures and retains the canary as a deterministic regression. The complete R6
-preflight is now closed: 687 deterministic tests including three Docker
-integrations, Ruff, retained-artifact validation, all 60 dry-run cells, and both
-provider-backed architecture canaries passed at the final revision. The live
-gate also exposed and closed valid-JSON datetime parsing, an unconditional
-multi-agent visualization requirement, and provider-visible empty audit
-provenance lists.
+**Outcome:** The Phase 2 benchmark is complete. Manifest
+`phase2-task10-20260820-v8`, frozen at code revision `b7ca12c`, executed all 60
+declared cells on 2026-08-20/21 for a measured `$2.9719`. Results, limitations,
+and raw-evidence pointers are published in
+[`phase2-results.md`](phase2-results.md). No cell in either architecture passed
+the evaluator rubric; the only statistically supported differences were cost and
+latency, both favoring the single-agent baseline.
 
-The first post-R6 R19 pilot retained a blocked multi-agent cell after the Critic
-found stale same-scope CAC evidence in a remediated candidate. The cell remains
-operational calibration evidence and no later stratum or matrix cell ran.
-Decision 0015 fixes the three application boundaries it exposed, and the full
-R6 deterministic, Docker, Ruff, and provider-backed gates were rerun before a
-replacement manifest could be frozen.
+This document is the implementation and remediation ledger that preceded that
+run. The historical sections below are retained as the record of how the
+infrastructure reached a runnable state; they are not results.
 
-That replacement pilot retained a second blocked multi-agent cell. Its Critic
-correctly rejected a grain-invalid totals query introduced during the only
-available remediation after the initial pass consumed all 30 SQL executions.
-Decision 0016 leaves the evaluator unchanged and gives each benchmark cell 40
-SQL executions plus three Critic calls: one initial review and at most two
-bounded remediations. The limits apply equally to both architectures and must be
-remeasured by a new stratified pilot.
+**Defects found while running the benchmark.** Three further contract defects
+were exposed by the clean-revision pilots and the matrix itself, each closed
+with a decision record before the run that produced the published results:
 
-The capacity-enabled pilot then completed both analytical remediation cycles but
-its no-tool citation correction could not see the latest LTV query paths because
-the bounded catalog selected alphabetically early references and merged-away
-specialist IDs. Decision 0017 makes catalog selection newest-first from
-append-only specialist results. The same decision applies one bounded audit
-citation correction to both architectures after both live canaries reproduced
-the same fabricated limitation reference. A second invalid correction remains
-terminal and the audit persistence/evaluator boundaries are unchanged.
+- Deterministic completeness gates consumed paid Critic review loops. Because
+  `run_critic` consumes a critic-loop budget unit before short-circuiting, a
+  remediated candidate that re-raised `follow_up_analysis`, or one whose typed
+  margin comparisons were rejected by a literal-phrase matcher, spent the entire
+  review budget without ever obtaining a model review. Decision
+  [0019](decisions/0019-bounded-completion-before-paid-critic-review.md).
+- The pilot cost gate required its declared cell to complete, so one scenario
+  that legitimately blocks made the whole declared matrix unrunnable. The gate
+  now requires a reconciled cost observation instead, accepting a bounded
+  blocked cell while still refusing failed and interrupted ones. Decision
+  [0020](decisions/0020-pilot-cost-gate-measures-cost-not-success.md).
+- The CLI could not exit after a completed run. The frozen invocation timeout
+  cancels an await but cannot cancel the worker thread running a synchronous
+  tool, so in-flight DuckDB queries blocked interpreter finalization for hours.
+  Decision
+  [0021](decisions/0021-cli-exits-after-artifacts-are-persisted.md).
 
-The next R19 pilot then exposed R26: one Critic SDK invocation exceeded thirty
-minutes because per-request transport retries had no end-to-end wall-clock
-bound. The attempt is retained as interrupted with incomplete usage and
-unavailable cost. R26 now imposes and freezes a 300-second bound. Its 689-test
-restricted suite, Ruff, and 60-cell dry-run pass; Docker and provider-backed
-R6 reruns were denied by the execution environment's exhausted tool allowance.
-
-**Experiment:** Historical Task 10 attempts retained; replacement manifest/pilot pending final external R6 rerun;
-paid matrix not executed; no analytical results published
-
-This document records the Phase 2 work, the required pre-benchmark remediation,
-the attempted paid pilots, and the exact boundary between tested infrastructure
-and empirical results. It is a benchmark-attempt and handoff record, not a
-successful architecture-comparison report.
+**Verification at the published revision:** 695 deterministic tests including
+three Docker-backed integrations, Ruff across 168 files, all 60 dry-run cells
+unique, every retained artifact parsing, and both provider-backed architecture
+canaries passing under the shared R17 outcome gate. An independent offline
+rescore reproduced all 60 inline evaluator results with zero disagreements.
 
 ## Completed Phase 2 Pre-Benchmark Remediation: R1–R12
 
@@ -1274,9 +1253,10 @@ the user cache directory. Direct use of `.venv/bin/python` succeeded. This cache
 error did not cause the missing environment variables and should not be confused
 with credential detection.
 
-## Remaining benchmark sequence
+## Benchmark sequence, as executed
 
-Before another paid attempt:
+This sequence was completed; it is retained as the record of the gates the
+published run passed through:
 
 1. R13–R19 are implemented, with their focused deterministic regressions in
    `tests/test_strict_agent_outputs.py`,

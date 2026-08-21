@@ -2,34 +2,26 @@
 
 ## Plan Status
 
-**Revision:** 2026-08-20 — Phase 2 Tasks 1–9 and R1–R26 are implemented. R26
-reopened the final R6 pre-benchmark gate after a renewed R19 pilot exposed an
-unbounded provider invocation. The resulting audit/Lead provenance
-gaps were tracked as R20–R25, all now closed: audit contract 2.0 makes every
-material audit claim
-evidence-bearing, one persistence boundary refuses an unsupported completed
-audit, the Lead receives a bounded typed audit evidence catalog, offline scoring
-enforces the same provenance boundary at catalog evaluator version 1.2, one
-shared hypothesis-evidence rule is enforced when the state transition is
-requested, and a strict-schema-valid response whose citations do not resolve
-gets one bounded tool-less correction attempt, and one lossless
-citation-resolution contract is shared by every provenance boundary, and
-semantic citation failures carry a named operational taxonomy with the
-2026-08-20 canary retained as a deterministic regression. The final preflight
-passed 687 deterministic tests including three Docker integrations, Ruff, all
-60 declared dry-run cells, retained-artifact validation, and both
-provider-backed architecture canaries under the shared R17 outcome gate. The
-live run also found and closed valid-JSON datetime parsing, unconditional chart
-requirements, and provider-visible empty audit-provenance lists. A first
-post-R6 R19 pilot retained a blocked multi-agent cell and exposed stale
-same-scope metric substitution; decision 0015 closes that boundary. Its
-replacement then exposed insufficient benchmark-only correction capacity:
-decision 0016 reserves ten SQL executions for correction and two analytical
-remediation cycles without changing evaluator rules. Decision 0017 makes the
-bounded correction catalog newest-first and applies the same one-shot,
-no-tool citation correction to audit outputs in both architectures. Task 10
-requires a new clean-revision stratified pilot; the paid matrix has not been
-executed and no benchmark result is published.
+**Revision:** 2026-08-21 — Phase 2 is complete. Tasks 1–10 and R1–R26 are
+implemented, and the declared benchmark ran. Manifest
+`phase2-task10-20260820-v8`, frozen at code revision `b7ca12c`, executed all 60
+cells on 2026-08-20/21 for a measured `$2.9719`. Results and limitations are
+published in `docs/phase2-results.md`.
+
+The result: no cell in either architecture passed the evaluator rubric. Of 60
+cells, 18 completed and were evaluated and all 18 scored `fail`; 42 did not
+complete and are `not_evaluated`. The single-agent baseline completed 12/30
+cells against the five-agent architecture's 6/30. The only statistically
+supported differences were cost and latency, both favoring the single-agent
+baseline — about 8.8x cheaper and 5.1x faster per cell. No analytical-quality
+metric produced a supported difference in either direction, and numerical
+correctness was the binding constraint for both architectures.
+
+Three contract defects were found and closed while running the benchmark:
+deterministic completeness gates consumed paid Critic review loops (decision
+0019), the pilot cost gate demanded the analytical success the benchmark exists
+to measure (decision 0020), and the CLI could not exit while uncancellable tool
+threads ran (decision 0021).
 
 The core product thesis and five-agent architecture remain unchanged. Phase 0
 and the Phase 1 multi-agent MVP are complete. This revision scopes Phase 2 as a
@@ -1514,7 +1506,7 @@ constraints are recorded in `docs/phase2-status.md`.
 | 7 | Complete | Bounded generalist architecture sharing runtime, provenance, tools, and report contracts without specialist delegation |
 | 8 | Complete | Immutable resumable matrix runner, paid opt-in, cost pilot gate, failure isolation, and offline rescoring |
 | 9 | Complete | Deterministic denominator-preserving aggregation, uncertainty, paired comparisons, cost/latency, and failure reporting |
-| 10 | Blocked on final external preflight | The latest retained pilot exposed and closed an unbounded provider invocation; R26 deterministic tests, Ruff, and the 60-cell dry-run pass, but Docker/live R6 gates and a replacement clean-revision R19 pilot remain required before any matrix execution |
+| 10 | Complete | All 60 declared cells executed under manifest `phase2-task10-20260820-v8` at revision `b7ca12c` for `$2.9719`; results, limitations, and raw evidence published in `docs/phase2-results.md` |
 
 ### Phase 2 implementation order
 
@@ -2688,8 +2680,15 @@ provider-backed architecture canaries pass at this revision. Decision record
 
 #### Task 10 — Execute and publish the Phase 2 benchmark
 
-Status (2026-08-19): attempted but blocked before the paid matrix. The
-retained manifests are under `.runs/phase2-task10-20260819/`:
+Status (2026-08-21): **complete**. Manifest `phase2-task10-20260820-v8`, frozen
+at code revision `b7ca12c`, executed all 60 declared cells on 2026-08-20/21 for
+a measured `$2.9719`. Raw manifests, the pilot report, the aggregate report, the
+independent offline rescore, and every per-cell workspace are retained under
+`.runs/phase2-task10-20260820-v8/`. Results and limitations are published in
+`docs/phase2-results.md`.
+
+The earlier 2026-08-19 attempts below all failed before the paid matrix and are
+retained as historical evidence only:
 
 - `phase2-task10-20260819-luna-v1`: one failed multi-agent pilot record,
   `ModelBehaviorError: Invalid JSON when parsing model output`; the persisted
@@ -2712,11 +2711,12 @@ records remain operational failures, are `not_evaluated`, and have no
 analytical score; missing cells are not treated as observations. These are
 retained attempt artifacts rather than benchmark results.
 
-After R1–R26 are complete, including a new final R6 preflight after R26,
-freeze a benchmark manifest, run the declared
-single-agent and five-agent matrix, evaluate every persisted workspace offline,
-inspect failures without changing rules mid-experiment, and publish the actual
-results and limitations.
+This was executed as specified: R1–R26 closed, the final R6 preflight passed at
+the frozen revision, the manifest was frozen, the declared matrix ran, every
+persisted workspace was evaluated offline, and the actual results and
+limitations were published. No evaluator rule, tolerance, or budget was changed
+after results existed, and no cell was rerun or excluded because of its
+outcome.
 If a defect requires code/evaluator changes, version the benchmark and rerun the
 affected declared matrix rather than silently patching scores.
 
@@ -2737,14 +2737,21 @@ Build a **single-agent baseline** and compare it with the five-agent architectur
 
 Example future result format:
 
+Measured result (2026-08-20/21, `gpt-5.6-luna`, 30 declared cells per
+architecture; scores are means over completed cells only, and the two completed
+subsets cover different scenarios so they are not a head-to-head comparison):
+
 | Architecture | Task Success | Numerical Accuracy | Unsupported Claims |
 |---|---:|---:|---:|
-| Single Agent | TBD | TBD | TBD |
-| Multi-Agent | TBD | TBD | TBD |
+| Single Agent | 0/30 | 0.03 (n=12) | 0.33 (n=12) |
+| Multi-Agent | 0/30 | 0.00 (n=6) | 0.83 (n=6) |
 
-Do not invent results before running the benchmark.
+No cell passed the evaluator rubric, so task success is zero for both. The only
+statistically supported differences were cost and latency, both favoring the
+single-agent baseline. Full results and limitations are in
+`docs/phase2-results.md`.
 
-### Phase 2 done when
+### Phase 2 done when — all satisfied as of 2026-08-21
 
 - R1–R26 pre-benchmark remediation is complete and the reopened R6 regression
   suite is green;
