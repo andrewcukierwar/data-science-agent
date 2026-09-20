@@ -25,7 +25,7 @@ from pathlib import Path
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import Finding
 from schemas.hypotheses import hypothesis_requires_evidence
-from schemas.run_state import ToolEventStatus
+from schemas.run_state import ToolEvent, ToolEventStatus
 
 
 class EvidenceProvenanceError(ValueError):
@@ -74,21 +74,59 @@ def successful_tool_events(ledger: AnalysisLedger) -> tuple[object, ...]:
     )
 
 
+def event_reference_index(ledger: AnalysisLedger) -> dict[str, tuple[ToolEvent, ...]]:
+    """Index aliases across *all* executions, including failures and attempts.
+
+    An exact event ID is canonical. Other aliases must identify one execution;
+    a later failure makes a reused alias ambiguous, never a fallback to an old
+    success. Verified artifact IDs inherit their path's execution candidates.
+    """
+
+    index: dict[str, list[ToolEvent]] = {}
+    for event in ledger.tool_events:
+        for reference in _event_references(event):
+            index.setdefault(reference, []).append(event)
+    # Artifact IDs and paths are aliases in both directions. Propagate all
+    # candidates, including failures, before selecting unambiguous references.
+    changed = True
+    while changed:
+        changed = False
+        for artifact in ledger.artifacts:
+            candidates = {
+                event.id: event
+                for reference in (artifact.id, artifact.path)
+                for event in index.get(reference, [])
+            }
+            for reference in (artifact.id, artifact.path):
+                existing = index.setdefault(reference, [])
+                known = {event.id for event in existing}
+                additions = [
+                    event for key, event in candidates.items() if key not in known
+                ]
+                if additions:
+                    existing.extend(additions)
+                    changed = True
+    # Empty entries represent standalone artifacts, not failed executions.
+    index = {reference: events for reference, events in index.items() if events}
+    for event in ledger.tool_events:
+        index[event.id] = [event]
+    return {reference: tuple(events) for reference, events in index.items()}
+
+
 def evidence_events(
     ledger: AnalysisLedger,
     references: list[str],
-) -> tuple[object, ...]:
-    """Resolve evidence references to successful tool events only."""
+) -> tuple[ToolEvent, ...]:
+    """Resolve only unambiguous references to successful tool events."""
 
-    reference_set = set(references)
-    reference_set.update(
-        artifact.path for artifact in ledger.artifacts if artifact.id in reference_set
-    )
-    return tuple(
-        event
-        for event in successful_tool_events(ledger)
-        if _event_references(event).intersection(reference_set)
-    )
+    index = event_reference_index(ledger)
+    allowed = executed_references(ledger)
+    resolved = {
+        index[reference][0].id
+        for reference in references
+        if reference in allowed and reference in index
+    }
+    return tuple(event for event in ledger.tool_events if event.id in resolved)
 
 
 def _artifact_is_verified(ledger: AnalysisLedger, artifact: object) -> bool:
@@ -133,29 +171,27 @@ def executed_references(ledger: AnalysisLedger) -> set[str]:
     """Return references backed by successful tools or verified artifacts.
 
     Failed events never contribute event IDs, paths, arguments, or generated
-    evidence. A registered artifact may establish evidence only when its file
-    still verifies and it is not exclusively associated with failed events.
+    evidence. Reused aliases are excluded even when one execution succeeded.
+    Standalone registered artifacts still require file verification.
     """
 
-    successful_events = successful_tool_events(ledger)
-    failed_events = tuple(
-        event
-        for event in ledger.tool_events
-        if event.status is not ToolEventStatus.SUCCEEDED
-    )
-    successful_refs = set().union(
-        *(_event_references(event) for event in successful_events)
-    )
-    failed_refs = set().union(*(_event_references(event) for event in failed_events))
-    references = set(successful_refs)
+    index = event_reference_index(ledger)
+    references = {
+        reference
+        for reference, events in index.items()
+        if len(events) == 1 and events[0].status is ToolEventStatus.SUCCEEDED
+    }
+    event_ids = {event.id for event in ledger.tool_events}
     for artifact in ledger.artifacts:
-        artifact_refs = {artifact.id, artifact.path}
-        if artifact_refs.intersection(failed_refs) and not artifact_refs.intersection(
-            successful_refs
-        ):
-            continue
-        if _artifact_is_verified(ledger, artifact):
-            references.update(artifact_refs)
+        verified = _artifact_is_verified(ledger, artifact)
+        for reference in (artifact.id, artifact.path):
+            if reference in event_ids:
+                continue
+            if reference == artifact.id and not verified:
+                references.discard(reference)
+            elif reference not in index and verified:
+                references.add(reference)
+
     return references
 
 
@@ -188,17 +224,20 @@ def resolve_evidence_reference(
     resolving = set() if resolving is None else resolving
     if reference in resolving:
         return []
-    resolving.add(reference)
+    resolving = resolving | {reference}
     resolved: list[str] = []
     for nested_reference in candidates[0].evidence_refs:
-        resolved.extend(
-            resolve_evidence_reference(
-                nested_reference,
-                executed_refs=executed_refs,
-                aliases=aliases,
-                resolving=resolving,
-            )
+        nested = resolve_evidence_reference(
+            nested_reference,
+            executed_refs=executed_refs,
+            aliases=aliases,
+            resolving=resolving,
         )
+        if not nested:
+            # A finding alias cannot hide a failed or ambiguous dependency
+            # behind another successful execution.
+            return []
+        resolved.extend(nested)
     return list(dict.fromkeys(resolved))
 
 
@@ -424,11 +463,7 @@ def has_source_lineage(ledger: AnalysisLedger, references: list[str]) -> bool:
     known_event_references = set().union(
         *(_event_references(event) for event in ledger.tool_events)
     )
-    events = [
-        event
-        for event in successful_tool_events(ledger)
-        if _event_references(event).intersection(event_references)
-    ]
+    events = evidence_events(ledger, list(event_references))
     has_known_reference = event_references.intersection(known_event_references)
     if (referenced_artifacts or has_known_reference) and not events:
         # A checksum proves file integrity, not that the file was produced by

@@ -77,6 +77,7 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
         {
             "inspect_workspace",
             "read_document",
+            "inspect_evidence",
             "save_artifact",
             "update_investigation_plan",
             "record_hypothesis",
@@ -105,6 +106,7 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
         {
             "inspect_workspace",
             "read_document",
+            "inspect_evidence",
             "inspect_relations",
             "run_sql",
             "run_python",
@@ -114,13 +116,16 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
         {
             "inspect_workspace",
             "read_document",
+            "inspect_evidence",
             "inspect_relations",
             "run_sql",
             "run_python",
             "save_artifact",
         }
     ),
-    AgentRole.STATISTICIAN: frozenset({"read_document", "run_python"}),
+    AgentRole.STATISTICIAN: frozenset(
+        {"read_document", "run_python", "inspect_evidence"}
+    ),
     AgentRole.CRITIC: frozenset(
         {
             "inspect_workspace",

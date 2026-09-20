@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from orchestration.ledger import ToolEventLedger
 from sandbox.executor import DockerSandboxExecutor, SandboxExecutionResult
 from schemas.run_state import ToolEvent, ToolEventStatus
+from tools.results import EXECUTION_RESULT_CONTRACT_VERSION
 from tools.workspace import Workspace
 
 _SCRIPT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
@@ -35,11 +36,16 @@ class PythonExecutionResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    result_contract_version: str = EXECUTION_RESULT_CONTRACT_VERSION
+    tool_event_id: str | None = None
+    attempt_id: str | None = None
     script_id: str = Field(min_length=1)
     script_path: str = Field(min_length=1)
     success: bool
     stdout: str = ""
     stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
     exit_code: int | None = None
     duration_seconds: float = Field(ge=0)
     timed_out: bool = False
@@ -133,12 +139,20 @@ class PythonExecutionService:
             self._generated_evidence() if sandbox_result.success else ([], False)
         )
 
+        event_id = f"tool-python-{uuid.uuid4().hex}"
+        attempt_id = getattr(getattr(self.ledger, "state", None), "attempt_id", None)
+        stdout, stdout_truncated = self._truncate_event_text(sandbox_result.stdout)
+        stderr, stderr_truncated = self._truncate_event_text(sandbox_result.stderr)
         result = PythonExecutionResult(
+            tool_event_id=event_id if self.ledger is not None else None,
+            attempt_id=attempt_id,
             script_id=script_id,
             script_path=relative_path,
             success=sandbox_result.success,
-            stdout=sandbox_result.stdout,
-            stderr=sandbox_result.stderr,
+            stdout=stdout,
+            stderr=stderr,
+            stdout_truncated=stdout_truncated,
+            stderr_truncated=stderr_truncated,
             exit_code=sandbox_result.exit_code,
             duration_seconds=sandbox_result.duration_seconds,
             timed_out=sandbox_result.timed_out,
@@ -146,10 +160,9 @@ class PythonExecutionService:
             generated_evidence=generated_evidence,
             generated_evidence_truncated=generated_evidence_truncated,
         )
-        event_stdout, stdout_truncated = self._truncate_event_text(result.stdout)
-        event_stderr, stderr_truncated = self._truncate_event_text(result.stderr)
         event = ToolEvent(
-            id=f"tool-{script_id}",
+            id=event_id,
+            attempt_id=attempt_id,
             tool_name="run_python",
             status=(
                 ToolEventStatus.SUCCEEDED if result.success else ToolEventStatus.FAILED
@@ -167,8 +180,14 @@ class PythonExecutionService:
                 "pids_limit": getattr(self.executor, "pids_limit", None),
             },
             output={
-                "stdout": event_stdout,
-                "stderr": event_stderr,
+                "result_contract_version": result.result_contract_version,
+                "tool_event_id": result.tool_event_id,
+                "attempt_id": result.attempt_id,
+                "script_id": result.script_id,
+                "script_path": result.script_path,
+                "max_output_chars": self.max_event_output_chars,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
                 "stdout_truncated": stdout_truncated,
                 "stderr_truncated": stderr_truncated,
                 "exit_code": result.exit_code,

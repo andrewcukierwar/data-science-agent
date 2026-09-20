@@ -56,10 +56,11 @@ def test_lead_uses_manager_tools_and_has_no_computational_tools() -> None:
     assert agent.output_type.output_type is LeadResult
     assert agent.output_type.is_strict_json_schema() is True
     assert agent.handoffs == []
-    assert names[:6] == [
+    assert names[:7] == [
         "inspect_workspace",
         "read_document",
         "save_artifact",
+        "inspect_evidence",
         "update_investigation_plan",
         "record_hypothesis",
         "record_open_question",

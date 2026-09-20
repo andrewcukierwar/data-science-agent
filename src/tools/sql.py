@@ -11,6 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orchestration.ledger import ToolEventLedger
 from schemas.run_state import ToolEvent, ToolEventStatus
+from tools.results import (
+    EXECUTION_RESULT_CONTRACT_VERSION,
+    MAX_SQL_RESULT_BYTES,
+    json_result_value,
+    result_json,
+)
 from tools.workspace import Workspace
 
 _QUERY_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
@@ -34,12 +40,19 @@ class QueryExecutionResult(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
+    result_contract_version: str = EXECUTION_RESULT_CONTRACT_VERSION
+    tool_event_id: str | None = None
+    attempt_id: str | None = None
     query_id: str = Field(min_length=1)
     query_path: Path
     success: bool
     columns: list[str] = Field(default_factory=list)
+    column_types: list[str] = Field(default_factory=list)
     rows: list[list[Any]] = Field(default_factory=list)
     row_count: int = Field(default=0, ge=0)
+    retained_row_count: int = Field(default=0, ge=0)
+    row_count_is_lower_bound: bool = False
+    max_result_bytes: int = MAX_SQL_RESULT_BYTES
     max_rows: int = Field(default=_DEFAULT_MAX_ROWS, ge=1)
     truncated: bool = False
     truncation_message: str | None = None
@@ -185,60 +198,84 @@ class DuckDBExecutionService:
         if query_path.exists():
             raise FileExistsError(f"query artifact already exists: {query_path}")
         self._reserve_execution_budget()
-        query_path.write_text(sql, encoding="utf-8")
+        with query_path.open("x", encoding="utf-8") as query_file:
+            query_file.write(sql)
 
         started_at = datetime.now(UTC)
+        event_id = f"tool-sql-{uuid.uuid4().hex}"
+        attempt_id = getattr(getattr(self.ledger, "state", None), "attempt_id", None)
+        identity = {
+            "tool_event_id": event_id if self.ledger is not None else None,
+            "attempt_id": attempt_id,
+            "query_id": query_id,
+            "query_path": query_path,
+            "max_rows": self.max_rows,
+        }
         try:
-            columns, rows, truncated = self._execute_sql(sql)
-            truncation_message = _TRUNCATION_GUIDANCE if truncated else None
-        except Exception as exc:
+            columns, column_types, rows, row_limit_hit = self._execute_sql(sql)
             result = QueryExecutionResult(
-                query_id=query_id,
-                query_path=query_path,
-                success=False,
-                max_rows=self.max_rows,
-                error=f"{type(exc).__name__}: {exc}",
-            )
-            event = self._build_event(
-                query_id=query_id,
-                status=ToolEventStatus.FAILED,
-                started_at=started_at,
-                query_path=query_path,
-                error=result.error,
-            )
-        else:
-            event = self._build_event(
-                query_id=query_id,
-                status=ToolEventStatus.SUCCEEDED,
-                started_at=started_at,
-                query_path=query_path,
-                output={
-                    "columns": columns,
-                    "row_count": len(rows),
-                    "max_rows": self.max_rows,
-                    "truncated": truncated,
-                    "truncation_message": truncation_message,
-                },
-            )
-            result = QueryExecutionResult(
-                query_id=query_id,
-                query_path=query_path,
+                **identity,
                 success=True,
                 columns=columns,
-                rows=rows,
+                column_types=column_types,
                 row_count=len(rows),
-                max_rows=self.max_rows,
-                truncated=truncated,
-                truncation_message=truncation_message,
+                row_count_is_lower_bound=row_limit_hit,
+                truncated=row_limit_hit,
+                truncation_message=_TRUNCATION_GUIDANCE if row_limit_hit else None,
+            )
+            # Reserve room for truncation metadata before retaining whole rows.
+            # A wide cell cannot bypass the row limit to inflate persisted output.
+            overhead = len(result_json(self._result_output(result))) + 512
+            if overhead > MAX_SQL_RESULT_BYTES:
+                raise ValueError(
+                    "SQL result columns exceed the persisted result byte limit"
+                )
+            used = overhead
+            for row in rows:
+                normalized = json_result_value(row)
+                size = len(result_json(normalized)) + 1
+                if used + size > MAX_SQL_RESULT_BYTES:
+                    result.truncated = True
+                    result.truncation_message = (
+                        "The result was truncated by the persisted result byte limit. "
+                        "Aggregate or filter the query. Retained rows are not "
+                        "the complete population."
+                    )
+                    break
+                result.rows.append(normalized)
+                used += size
+            result.retained_row_count = len(result.rows)
+        except Exception as exc:
+            result = QueryExecutionResult(
+                **identity,
+                success=False,
+                error=f"{type(exc).__name__}: {exc}",
             )
 
+        event = self._build_event(
+            event_id=event_id,
+            attempt_id=attempt_id,
+            query_id=query_id,
+            status=ToolEventStatus.SUCCEEDED
+            if result.success
+            else ToolEventStatus.FAILED,
+            started_at=started_at,
+            query_path=query_path,
+            output=self._result_output(result) if result.success else None,
+            error=result.error,
+        )
         self._emit_event(event)
         return result
+
+    def _result_output(self, result: QueryExecutionResult) -> dict[str, Any]:
+        output = result.model_dump(mode="json", exclude={"success", "error"})
+        output["query_path"] = self._artifact_ref(result.query_path)
+        return output
 
     def _execute_sql(
         self,
         sql: str,
-    ) -> tuple[list[str], list[list[Any]], bool]:
+    ) -> tuple[list[str], list[str], list[list[Any]], bool]:
         connection = duckdb.connect(database=":memory:")
         try:
             inputs = self.workspace.inputs.resolve()
@@ -248,9 +285,12 @@ class DuckDBExecutionService:
             connection.execute("SET enable_external_access = false")
             cursor = connection.execute(sql)
             columns = [description[0] for description in cursor.description or ()]
+            column_types = [
+                str(description[1]) for description in cursor.description or ()
+            ]
             rows = [list(row) for row in cursor.fetchmany(self.max_rows + 1)]
             truncated = len(rows) > self.max_rows
-            return columns, rows[: self.max_rows], truncated
+            return columns, column_types, rows[: self.max_rows], truncated
         finally:
             connection.close()
 
@@ -310,6 +350,8 @@ class DuckDBExecutionService:
     def _build_event(
         self,
         *,
+        event_id: str,
+        attempt_id: str | None,
         query_id: str,
         status: ToolEventStatus,
         started_at: datetime,
@@ -318,7 +360,8 @@ class DuckDBExecutionService:
         error: str | None = None,
     ) -> ToolEvent:
         return ToolEvent(
-            id=f"tool-{query_id}",
+            id=event_id,
+            attempt_id=attempt_id,
             tool_name="run_sql",
             status=status,
             started_at=started_at,

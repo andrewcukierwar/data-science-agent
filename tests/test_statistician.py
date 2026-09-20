@@ -18,7 +18,7 @@ from agents import (
     validate_statistician_result,
 )
 from agents.model_usage import Runner
-from agents.statistician import persist_statistician_result
+from agents.statistician import StatisticianArtifactError, persist_statistician_result
 from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.metrics import MetricComparison
@@ -37,7 +37,11 @@ def test_statistician_is_structured_python_only_and_cannot_delegate() -> None:
     assert agent.output_type.output_type is SpecialistResult
     assert agent.output_type.is_strict_json_schema() is True
     assert agent.handoffs == []
-    assert [tool.name for tool in agent.tools] == ["read_document", "run_python"]
+    assert [tool.name for tool in agent.tools] == [
+        "read_document",
+        "run_python",
+        "inspect_evidence",
+    ]
 
 
 def test_statistician_rejects_non_statistician_configuration() -> None:
@@ -168,7 +172,7 @@ def test_statistician_persists_findings_and_artifacts(
     assert context.ledger.budget.specialist_invocations == 1
 
 
-def test_statistician_refreshes_reused_artifact_path_provenance(
+def test_statistician_rejects_reused_artifact_path_without_execution_identity(
     tmp_path: Path,
 ) -> None:
     context = _context(tmp_path)
@@ -199,21 +203,11 @@ def test_statistician_refreshes_reused_artifact_path_provenance(
             artifact_refs=["working/scripts/stats.py"],
         )
     )
-    second = persist_statistician_result(
-        first.model_copy(
-            update={
-                "findings": [
-                    first.findings[0].model_copy(
-                        update={"statement": "The revised estimate is significant."}
-                    )
-                ]
-            }
-        ),
-        context,
-    )
+    with pytest.raises(
+        StatisticianArtifactError, match="not returned by an executed tool"
+    ):
+        persist_statistician_result(first, context)
 
-    assert len(context.ledger.artifacts) == 1
-    assert context.ledger.artifacts[0].id == first_provenance.id
-    assert context.ledger.artifacts[0].sha256 != first_provenance.sha256
-    assert context.ledger.artifacts[0].size_bytes == script.stat().st_size
-    assert context.ledger.findings == second.findings
+    assert context.ledger.artifacts == [first_provenance]
+    assert context.artifact_manager.verify_artifact(first_provenance.id) is False
+    assert context.ledger.findings == first.findings

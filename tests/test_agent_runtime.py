@@ -186,6 +186,7 @@ def test_role_tool_surfaces_preserve_project_plan_permissions() -> None:
         "inspect_workspace",
         "read_document",
         "save_artifact",
+        "inspect_evidence",
     ]
     assert [tool.name for tool in tools_for_role(AgentRole.DATA_AUDITOR)] == [
         "inspect_workspace",
@@ -193,6 +194,7 @@ def test_role_tool_surfaces_preserve_project_plan_permissions() -> None:
         "inspect_relations",
         "run_sql",
         "run_python",
+        "inspect_evidence",
     ]
     assert "run_sql" not in [
         tool.name for tool in tools_for_role(AgentRole.STATISTICIAN)
@@ -206,9 +208,7 @@ def test_role_tool_surfaces_preserve_project_plan_permissions() -> None:
     assert "inspect_evidence" in [
         tool.name for tool in tools_for_role(AgentRole.CRITIC)
     ]
-    assert "inspect_evidence" not in [
-        tool.name for tool in tools_for_role(AgentRole.LEAD)
-    ]
+    assert "inspect_evidence" in [tool.name for tool in tools_for_role(AgentRole.LEAD)]
 
     agent = build_agent("Lead", AgentRole.LEAD, model="test-model")
     assert agent.model == "test-model"
@@ -216,6 +216,7 @@ def test_role_tool_surfaces_preserve_project_plan_permissions() -> None:
         "inspect_workspace",
         "read_document",
         "save_artifact",
+        "inspect_evidence",
     ]
 
 
@@ -358,8 +359,14 @@ def test_critic_inspect_evidence_resolves_events_artifacts_and_safe_paths(
         {"reference": "working/queries/Q-EVIDENCE.sql"},
     )
     assert path_result.success is True
-    assert path_result.data["reference_type"] == "workspace_file"
-    assert path_result.data["path"] == "working/queries/Q-EVIDENCE.sql"
+    assert path_result.data["reference_type"] == "tool_event"
+    assert path_result.data["output"] == event_result.data["output"]
+    source_result = _invoke(
+        inspect_evidence,
+        context,
+        {"reference": "working/queries/Q-EVIDENCE.sql", "view": "source"},
+    )
+    assert source_result.data["content"] == "SELECT 1 AS value;\n"
 
     traversal_result = _invoke(
         inspect_evidence,
@@ -376,7 +383,7 @@ def test_critic_inspect_evidence_resolves_events_artifacts_and_safe_paths(
     )
     assert forbidden.success is False
     assert forbidden.error is not None
-    assert forbidden.error.code == "permission_denied"
+    assert forbidden.error.code == "not_found"
 
 
 def test_save_artifact_enforces_chart_budget_and_records_provenance(

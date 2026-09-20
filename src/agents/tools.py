@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,6 +16,13 @@ from agents import (
     ToolOutputText,
     function_tool,
 )
+from agents.evidence import (
+    event_reference_index,
+    evidence_events,
+    executed_references,
+    finding_reference_aliases,
+    resolve_citations,
+)
 from agents.runtime import (
     AgentRole,
     AgentRunConfig,
@@ -25,7 +32,8 @@ from agents.runtime import (
     allowed_tools_for_role,
 )
 from orchestration.budgets import BudgetResource
-from schemas.run_state import ArtifactKind
+from schemas.run_state import ArtifactKind, ToolEventStatus
+from tools.results import result_json
 from tools.sql import RelationInspectionResult
 
 
@@ -69,6 +77,8 @@ class EvidenceInspection(BaseModel):
     reference: str = Field(min_length=1)
     reference_type: str = Field(min_length=1)
     tool_event_id: str | None = None
+    attempt_id: str | None = None
+    result_available: bool | None = None
     artifact_id: str | None = None
     artifact_kind: ArtifactKind | None = None
     path: str | None = None
@@ -123,15 +133,39 @@ def _truncate_text(value: str, limit: int) -> tuple[str, bool]:
     return value[:limit], True
 
 
-def _bounded_json(value: Any, limit: int) -> dict[str, Any]:
-    """Keep arbitrary persisted event payloads within the model context budget."""
+def _bounded_json(value: Any, limit: int, offset: int = 0) -> dict[str, Any]:
+    """Page a persisted JSON value losslessly within the existing text limit.
+
+    Page truncation is distinct from result truncation. Concatenating
+    preview_json pages in offset order reconstructs the retained result only.
+    """
 
     normalized = _json_safe(value)
-    encoded = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
-    if len(encoded) <= limit and isinstance(normalized, dict):
+    encoded = result_json(normalized)
+    if offset < 0 or offset > len(encoded):
+        raise ValueError("output_offset is outside the retained output")
+    if len(encoded) <= limit and isinstance(normalized, dict) and offset == 0:
         return normalized
-    preview, _ = _truncate_text(encoded, limit)
-    return {"truncated": True, "preview_json": preview}
+    end = min(offset + limit, len(encoded))
+    return {
+        "truncated": True,
+        "preview_json": encoded[offset:end],
+        "offset": offset,
+        "next_offset": end if end < len(encoded) else None,
+        "total_chars": len(encoded),
+        "result_truncated": bool(
+            isinstance(normalized, dict)
+            and any(
+                normalized.get(key, False)
+                for key in (
+                    "truncated",
+                    "stdout_truncated",
+                    "stderr_truncated",
+                    "generated_evidence_truncated",
+                )
+            )
+        ),
+    }
 
 
 def _file_provenance(path: Path) -> tuple[str, int]:
@@ -360,12 +394,21 @@ def read_document(
 def inspect_evidence(
     ctx: RunContextWrapper[AgentRunContext],
     reference: str,
+    view: Literal["result", "source"] = "result",
+    output_offset: int = 0,
 ) -> ToolOutputText:
     """Inspect one cited tool event, registered artifact, or safe evidence path.
 
-    The reference must be a persisted tool-event ID, artifact ID/path, or a
-    workspace-relative file under ``working/`` or ``outputs/``. State, logs,
-    inputs, absolute paths, and traversal paths are never exposed.
+    Event IDs and unambiguous query/script IDs, paths, registered artifact IDs,
+    generated-file references, and finding aliases resolve to executed output.
+    Reused aliases require an explicit event ID. Failed events return failure
+    diagnostics, never successful evidence. Legacy SQL events may lack rows.
+    Use view="source" with a file path or artifact ID to inspect current file
+    contents separately (source code is not execution output). Unexecuted files
+    remain inspectable as files. State, logs, inputs and unsafe paths are blocked.
+    Large outputs return preview_json pages: pass next_offset as output_offset
+    with the returned canonical tool_event_id and concatenate pages to recover
+    retained JSON. A truncated calculation remains incomplete after paging.
     """
 
     tool_name = "inspect_evidence"
@@ -376,15 +419,45 @@ def inspect_evidence(
         if not reference:
             raise ValueError("reference must be a non-empty string")
 
-        event = next(
-            (item for item in context.ledger.tool_events if item.id == reference),
-            None,
-        )
+        if view not in {"result", "source"}:
+            raise ValueError("view must be result or source")
+        if output_offset < 0:
+            raise ValueError("output_offset must be non-negative")
+        index = event_reference_index(context.ledger)
+        executed_refs = executed_references(context.ledger)
+        reference_supported = reference in executed_refs
+        candidates = index.get(reference, ()) if view == "result" else ()
+        if view == "result" and not candidates:
+            aliases = finding_reference_aliases(context.ledger)
+            if reference in aliases:
+                resolution = resolve_citations(
+                    [reference],
+                    executed_refs=executed_refs,
+                    aliases=aliases,
+                )
+                if not resolution.is_supported:
+                    raise ValueError("finding evidence is unresolved or ambiguous")
+                reference_supported = True
+                candidates = evidence_events(context.ledger, list(resolution.resolved))
+                if not candidates:
+                    raise ValueError("finding has no unambiguous execution result")
+        if len(candidates) > 1:
+            raise ValueError(
+                "ambiguous evidence alias; inspect an explicit tool_event_id"
+            )
+        event = candidates[0] if candidates else None
         if event is not None:
             data = EvidenceInspection(
                 reference=reference,
                 reference_type="tool_event",
                 tool_event_id=event.id,
+                attempt_id=event.attempt_id,
+                result_available=(
+                    event.status is ToolEventStatus.SUCCEEDED
+                    and event.output is not None
+                    and (event.tool_name != "run_sql" or "rows" in event.output)
+                ),
+                provenance_verified=reference_supported,
                 tool_name=event.tool_name,
                 status=event.status.value,
                 arguments=_bounded_json(
@@ -392,7 +465,9 @@ def inspect_evidence(
                     context.run_config.max_text_chars,
                 ),
                 output=(
-                    _bounded_json(event.output, context.run_config.max_text_chars)
+                    _bounded_json(
+                        event.output, context.run_config.max_text_chars, output_offset
+                    )
                     if event.output is not None
                     else None
                 ),
@@ -474,7 +549,11 @@ def run_sql(
     Approved Parquet inputs are automatically registered as read-only relation
     names derived from their file stems: ``customers``, ``orders``,
     ``sessions``, and ``marketing_spend`` for the canonical dataset. Use those
-    names directly. Do not use filesystem paths or ``read_parquet``; arbitrary
+    names directly. Cite the returned tool_event_id to inspect retained output
+    without rerunning SQL. row_count is the fetched count (a lower bound when
+    row_count_is_lower_bound is true); retained_row_count counts persisted rows.
+    A truncated result is not the complete population.
+    Do not use filesystem paths or ``read_parquet``; arbitrary
     filesystem access remains blocked by the execution boundary.
 
     Args:
@@ -487,21 +566,20 @@ def run_sql(
         context = _context(ctx)
         context.require_permission(tool_name)
         result = context.sql_service.execute(sql, query_id=query_id)
-        rows = result.rows[: context.run_config.max_result_rows]
-        data = {
-            "query_id": result.query_id,
-            "query_path": result.query_path.relative_to(
-                context.workspace.root
-            ).as_posix(),
-            "columns": result.columns,
-            "rows": _json_safe(rows),
-            "row_count": result.row_count,
-            "max_rows": result.max_rows,
-            "truncated": result.truncated,
-            "model_rows_truncated": len(result.rows)
-            > context.run_config.max_result_rows,
-            "truncation_message": result.truncation_message,
-        }
+        rows = []
+        used_chars = 2
+        for row in result.rows[: context.run_config.max_result_rows]:
+            size = len(result_json(row)) + 1
+            if used_chars + size > context.run_config.max_text_chars:
+                break
+            rows.append(row)
+            used_chars += size
+        data = result.model_dump(mode="json", exclude={"success", "error"})
+        data["query_path"] = result.query_path.relative_to(
+            context.workspace.root
+        ).as_posix()
+        data["rows"] = rows
+        data["model_rows_truncated"] = len(rows) < len(result.rows)
         if not result.success:
             return _sdk_response(
                 ToolResponse.failed(
@@ -527,6 +605,9 @@ def run_python(
 ) -> ToolOutputText:
     """Execute analysis Python through the Docker-backed service.
 
+    Cite the returned tool_event_id to inspect the retained stdout/stderr and
+    generated-file metadata. Truncation flags describe omitted stream content;
+    view="source" in inspect_evidence reads current script/file contents.
     A successful run returns exact ``generated_evidence`` references for new or
     modified files under ``working/`` and ``outputs/``. Copy those references
     verbatim into later finding evidence; do not construct a path manually.
@@ -561,12 +642,17 @@ def run_python(
             context.run_config.max_text_chars,
         )
         data = {
+            "result_contract_version": result.result_contract_version,
+            "tool_event_id": result.tool_event_id,
+            "attempt_id": result.attempt_id,
             "script_id": result.script_id,
             "script_path": result.script_path,
             "stdout": stdout,
             "stderr": stderr,
-            "stdout_truncated": stdout_truncated,
-            "stderr_truncated": stderr_truncated,
+            "stdout_truncated": result.stdout_truncated or stdout_truncated,
+            "stderr_truncated": result.stderr_truncated or stderr_truncated,
+            "model_stdout_truncated": stdout_truncated,
+            "model_stderr_truncated": stderr_truncated,
             "exit_code": result.exit_code,
             "duration_seconds": result.duration_seconds,
             "timed_out": result.timed_out,
