@@ -398,9 +398,9 @@ class CostBreakdown(BaseModel):
         return self
 
 
-# Persisted-state contract version.  ``1.1`` carries audit contract 2.0:
-# evidence-bearing audit observations and per-table audit provenance.
-CURRENT_STATE_SCHEMA_VERSION = "1.1"
+# Persisted state 1.2 adds bound numerical results and selected-only statistics.
+# Earlier versions remain readable without claiming the new guarantees.
+CURRENT_STATE_SCHEMA_VERSION = "1.2"
 
 
 class AnalysisRunState(BaseModel):
@@ -434,6 +434,9 @@ class AnalysisRunState(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     metric_comparisons: list[MetricComparison] = Field(default_factory=list)
     statistical_assessments: list[StatisticalAssessment] = Field(default_factory=list)
+    statistical_assessment_history: list[StatisticalAssessment] = Field(
+        default_factory=list
+    )
     open_questions: list[NonEmptyString] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
     validation_issues: list[ValidationIssue] = Field(default_factory=list)

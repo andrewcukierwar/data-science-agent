@@ -43,7 +43,6 @@ from agents.output_contract import (
     strict_output_type,
 )
 from evaluation.primitives import select_metric_candidates
-from orchestration.ledger import AnalysisLedger
 from scenarios.definitions.models import GroundTruthMetric
 from schemas.audit import AuditResult, AuditStatus
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
@@ -60,6 +59,7 @@ from schemas.metrics import (
 from schemas.run_state import ToolEvent, ToolEventStatus
 from schemas.statistics import StatisticalAssessment
 from schemas.validation import ValidationResult, ValidationStatus
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService

@@ -19,6 +19,7 @@ from agents.output_contract import (
     require_strict_output,
     strict_output_type,
 )
+from agents.result_binding import resolve_outputs
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
@@ -189,6 +190,7 @@ def validate_statistician_result(
 ) -> SpecialistResult:
     """Require every quantitative finding to cite executed evidence."""
 
+    result = resolve_outputs(result, ledger)
     executed_refs = _executed_references(ledger)
     aliases = finding_reference_aliases(ledger)
 

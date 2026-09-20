@@ -19,7 +19,6 @@ from evaluation.canonical import (
     evaluate_canonical_run,
     evaluate_canonical_workspace,
 )
-from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
 from schemas.audit import AuditObservation, AuditResult, TableAudit
@@ -35,6 +34,8 @@ from schemas.run_state import (
     ToolEventStatus,
 )
 from schemas.validation import ValidationResult, ValidationStatus
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
+from tests.legacy_numerical_fixture import mark_legacy_fixture
 from tools.artifacts import ArtifactManager
 from tools.sql import DuckDBExecutionService
 from tools.workspace import WorkspaceManager
@@ -345,6 +346,7 @@ def test_complete_offline_fixture_passes_phase1_acceptance_without_api(
     )
 
     async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        mark_legacy_fixture(context.ledger)
         return _audit_with_executed_provenance(context)
 
     async def fake_lead(context, objective, *, business_context, audit, agent):  # noqa: ANN001

@@ -36,7 +36,6 @@ from agents import (
 from agents.lead import _NestedSpecialistHooks
 from agents.model_usage import ModelUsageHooks, run_agent_with_usage
 from agents.output_contract import AgentOutputContractError
-from orchestration.ledger import AnalysisLedger
 from orchestration.pricing import MODEL_PRICING
 from schemas.audit import AuditResult, AuditStatus
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
@@ -53,6 +52,7 @@ from schemas.validation import (
     ValidationResult,
     ValidationStatus,
 )
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService

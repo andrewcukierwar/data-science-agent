@@ -19,6 +19,7 @@ from agents.output_contract import (
     require_strict_output,
     strict_output_type,
 )
+from agents.result_binding import resolve_outputs
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from orchestration.ledger import AnalysisLedger
@@ -210,6 +211,7 @@ def validate_analyst_result(
 ) -> SpecialistResult:
     """Ensure material findings reference executed tool or artifact evidence."""
 
+    result = resolve_outputs(result, ledger)
     executed_refs = executed_references(ledger)
     aliases = finding_reference_aliases(ledger)
 

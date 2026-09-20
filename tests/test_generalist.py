@@ -18,7 +18,6 @@ from agents import (
     run_generalist,
 )
 from orchestration.generalist_runner import GeneralistRunner
-from orchestration.ledger import AnalysisLedger
 from schemas.audit import AuditResult, AuditStatus
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.generalist import GeneralistResult
@@ -32,6 +31,7 @@ from schemas.statistics import (
     StatisticalConclusion,
 )
 from schemas.validation import ValidationResult, ValidationStatus
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService

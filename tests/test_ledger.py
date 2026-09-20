@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestration.ledger import AnalysisLedger, LedgerConflictError
+from orchestration.ledger import LedgerConflictError
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.metrics import MetricComparison, MetricDimension
 from schemas.run_state import (
@@ -23,6 +23,7 @@ from schemas.run_state import (
     ToolEventStatus,
 )
 from schemas.validation import ValidationIssue, ValidationSeverity
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.workspace import WorkspaceManager
 
 

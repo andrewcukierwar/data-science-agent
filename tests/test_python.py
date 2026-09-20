@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 
 from agents.analyst import validate_analyst_result
-from orchestration.ledger import AnalysisLedger
 from sandbox.executor import SandboxExecutionResult
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.python import PythonExecutionService
 from tools.workspace import WorkspaceManager
 

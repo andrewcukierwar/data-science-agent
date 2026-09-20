@@ -1,11 +1,12 @@
 """Schemas for specialist findings and structured specialist results."""
 
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from schemas.common import NonEmptyString
+from schemas.computation import ComputationBinding
 
 if TYPE_CHECKING:
     from schemas.metrics import MetricComparison
@@ -25,6 +26,9 @@ class Finding(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    numerical_fields: ClassVar[tuple[str, ...]] = ("value",)
+    result_id: NonEmptyString | None = None
+    computation: ComputationBinding | None = None
     id: NonEmptyString
     statement: NonEmptyString
     metric: NonEmptyString | None = None

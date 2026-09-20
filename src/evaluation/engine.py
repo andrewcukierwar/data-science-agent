@@ -267,6 +267,9 @@ def evaluate_workspace(
     )
     status = EvaluatorStatus.FAIL if failures else EvaluatorStatus.PASS
     result = EvaluatorResult(
+        numerical_result_contract_version="1.0"
+        if state.schema_version == "1.2"
+        else None,
         result_id=f"{state.run_id}-{rules.evaluator_version}",
         run_id=state.run_id,
         scenario_id=rules.scenario_id,

@@ -42,7 +42,6 @@ from agents.evidence import (
 from evaluation import primitives as primitives_module
 from evaluation.contracts import EvaluationCheckStatus
 from evaluation.primitives import evaluate_provenance
-from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.lead import LeadRecommendation, LeadResult
 from schemas.metrics import MetricComparison
@@ -53,6 +52,7 @@ from schemas.run_state import (
     ToolEventStatus,
 )
 from schemas.validation import CriticCandidate
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService

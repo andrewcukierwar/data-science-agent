@@ -17,9 +17,9 @@ from agents import (
     validate_analyst_result,
 )
 from agents.model_usage import Runner
-from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.run_state import ToolEvent, ToolEventStatus
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService

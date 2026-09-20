@@ -30,7 +30,6 @@ from agents import (
 from agents.lead import _canonical_specialist_output, _NestedSpecialistHooks
 from agents.model_usage import Runner
 from orchestration.budgets import BudgetExhaustedError
-from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.lead import LeadRecommendation, LeadResult
 from schemas.metrics import MetricComparison
@@ -41,6 +40,7 @@ from schemas.run_state import (
     ToolEvent,
     ToolEventStatus,
 )
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService

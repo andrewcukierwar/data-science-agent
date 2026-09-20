@@ -859,6 +859,9 @@ class AnalysisLedger(ToolEventLedger):
     ) -> MetricComparison:
         """Create or replace a comparison with the same generic identity."""
 
+        from agents.result_binding import resolve_result
+
+        comparison = resolve_result(comparison, self)
         comparison = normalize_metric_comparison(comparison)
         identity = metric_comparison_identity(comparison)
         for index, current in enumerate(self.metric_comparisons):
@@ -878,7 +881,13 @@ class AnalysisLedger(ToolEventLedger):
     ) -> list[MetricComparison]:
         """Persist the canonical final metric set as one source of truth."""
 
-        normalized = [normalize_metric_comparison(item) for item in comparisons]
+        from agents.result_binding import resolve_result, validate_metric_selection
+
+        normalized = [
+            normalize_metric_comparison(resolve_result(item, self))
+            for item in comparisons
+        ]
+        validate_metric_selection(normalized)
         if self._state.metric_comparisons == normalized:
             return self._state.metric_comparisons
         self._state.metric_comparisons = normalized
@@ -891,12 +900,19 @@ class AnalysisLedger(ToolEventLedger):
     ) -> list[StatisticalAssessment]:
         """Persist the canonical typed statistical output for this run."""
 
+        from agents.result_binding import resolve_result, validate_statistical_selection
+
+        assessments = [resolve_result(item, self) for item in assessments]
+        validate_statistical_selection(assessments)
         unique: list[StatisticalAssessment] = []
         for assessment in assessments:
             if assessment not in unique:
                 unique.append(assessment)
         if self._state.statistical_assessments == unique:
             return self._state.statistical_assessments
+        for item in [*self._state.statistical_assessments, *unique]:
+            if item not in self._state.statistical_assessment_history:
+                self._state.statistical_assessment_history.append(item)
         self._state.statistical_assessments = unique
         self.save()
         return self._state.statistical_assessments
@@ -1053,6 +1069,11 @@ class AnalysisLedger(ToolEventLedger):
                 if isinstance(result, SpecialistResult)
                 else SpecialistResult.model_validate(result)
             ),
+        )
+        from agents.result_binding import resolve_outputs
+
+        record = record.model_copy(
+            update={"result": resolve_outputs(record.result, self)}
         )
         record = record.model_copy(
             update={

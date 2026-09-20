@@ -16,7 +16,6 @@ from agents.critic import (
 )
 from agents.evidence import executed_references
 from agents.lead import _reuse_specialist_metric_comparisons, persist_lead_result
-from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
 from schemas.audit import AuditResult, AuditStatus
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
@@ -36,6 +35,8 @@ from schemas.run_state import (
     ToolEventStatus,
 )
 from schemas.validation import CriticCandidate, ValidationResult, ValidationStatus
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
+from tests.legacy_numerical_fixture import mark_legacy_fixture
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService
@@ -680,6 +681,7 @@ def test_lead_gets_one_bounded_completion_pass_before_critic(tmp_path: Path) -> 
         )
 
     async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        mark_legacy_fixture(context.ledger)
         events.append("audit")
         return AuditResult(status=AuditStatus.COMPLETE)
 

@@ -35,7 +35,9 @@ from schemas.statistics import StatisticalExpectation
 
 EVALUATION_CONTRACT_VERSION = "1.0"
 LEGACY_WORKSPACE_VERSION = "legacy"
-SUPPORTED_WORKSPACE_VERSIONS = frozenset({LEGACY_WORKSPACE_VERSION, "1.0", "1.1"})
+SUPPORTED_WORKSPACE_VERSIONS = frozenset(
+    {LEGACY_WORKSPACE_VERSION, "1.0", "1.1", "1.2"}
+)
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
 VersionString = Annotated[str, Field(pattern=r"^\d+\.\d+$", min_length=3)]
@@ -171,6 +173,8 @@ class EvaluatorStatus(StrEnum):
 
 class EvaluatorResult(ContractModel):
     """Versioned offline evaluator output for one persisted run."""
+
+    numerical_result_contract_version: Literal["1.0"] | None = None
 
     contract_version: Literal[EVALUATION_CONTRACT_VERSION] = EVALUATION_CONTRACT_VERSION
     result_id: NonEmptyString

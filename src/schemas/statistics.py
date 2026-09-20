@@ -5,7 +5,9 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from schemas.common import NonEmptyString
+from schemas.computation import BoundNumericalClaim
 from schemas.metrics import (
+    MetricDefinitionContext,
     MetricDimension,
     MetricDimensions,
     coerce_metric_dimensions,
@@ -94,10 +96,23 @@ class StatisticalExpectation(_DimensionedStatistic):
     )
 
 
-class StatisticalAssessment(_DimensionedStatistic):
+class StatisticalAssessment(_DimensionedStatistic, BoundNumericalClaim):
     """Typed statistician output required for a configured expectation."""
 
     model_config = ConfigDict(extra="forbid")
+
+    numerical_fields = (
+        "confidence_level",
+        "estimate",
+        "confidence_interval.lower",
+        "confidence_interval.upper",
+        "p_value",
+        "effect_size",
+        "practical_significance_threshold",
+        "practically_significant",
+    )
+    definition_context: MetricDefinitionContext | None = None
+    caveats: list[NonEmptyString] = Field(default_factory=list)
 
     metric_key: NonEmptyString
     dimensions: MetricDimensions
@@ -106,13 +121,15 @@ class StatisticalAssessment(_DimensionedStatistic):
     method: NonEmptyString
     unit_of_analysis: NonEmptyString
     conclusion: StatisticalConclusion
-    confidence_level: float = Field(gt=0, lt=1)
-    estimate: float = Field(allow_inf_nan=False)
-    confidence_interval: ConfidenceInterval
-    p_value: float = Field(ge=0, le=1, allow_inf_nan=False)
-    effect_size: float = Field(allow_inf_nan=False)
-    practical_significance_threshold: float = Field(ge=0, allow_inf_nan=False)
-    practically_significant: bool
+    confidence_level: float | None = Field(default=None, gt=0, lt=1)
+    estimate: float | None = Field(default=None, allow_inf_nan=False)
+    confidence_interval: ConfidenceInterval | None = None
+    p_value: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    effect_size: float | None = Field(default=None, allow_inf_nan=False)
+    practical_significance_threshold: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False
+    )
+    practically_significant: bool | None = None
     assumptions_checked: tuple[NonEmptyString, ...] = Field(min_length=1)
     causal_interpretation: CausalInterpretation
     evidence_refs: list[NonEmptyString] = Field(min_length=1)

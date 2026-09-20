@@ -102,7 +102,8 @@ use returned event IDs, and request `view="source"` for file contents. Direct SQ
 service consumers now receive JSON-normalized values; direct Python consumers
 receive bounded streams rather than unbounded streams.
 
-P0.2 remains deferred: binding selected metric/statistical fields to computation,
-preventing transcription errors, and carrying selected statistics and limitations
-through Critic, synthesis, and reporting. No analytical operators, retries,
-evaluator changes, scenario mappings, UI, AWS, or paid model calls are included.
+P0.1 does not itself bind numerical claims to the retained output. The subsequent
+[P0.2 binding contract](numerical-result-binding-contract.md) adds field-level
+binding, explicit selection, and propagation through Critic, reports, and offline
+evaluation without changing this execution payload. No analytical operators,
+retries, scenario mappings, UI, AWS, or paid model calls are part of P0.1.

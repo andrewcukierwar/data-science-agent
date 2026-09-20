@@ -589,10 +589,10 @@ def test_new_workspaces_declare_the_audit_contract_state_version(
     workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace("run-v11")
     ledger = AnalysisLedger(workspace, run_id="run-v11", objective="Audit the data.")
 
-    assert CURRENT_STATE_SCHEMA_VERSION == "1.1"
+    assert CURRENT_STATE_SCHEMA_VERSION == "1.2"
     assert ledger.state.schema_version == CURRENT_STATE_SCHEMA_VERSION
     assert CURRENT_STATE_SCHEMA_VERSION in SUPPORTED_WORKSPACE_VERSIONS
-    assert check_workspace_version_compatibility(workspace.root) == "1.1"
+    assert check_workspace_version_compatibility(workspace.root) == "1.2"
 
 
 def test_contract_one_audits_load_without_fabricated_provenance() -> None:

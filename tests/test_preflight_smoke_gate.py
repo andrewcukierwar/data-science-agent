@@ -22,7 +22,6 @@ from benchmark.preflight import (
     check_run_outcome,
 )
 from orchestration.generalist_runner import GeneralistRunner
-from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
 from schemas.audit import (
     AuditObservation,
@@ -41,6 +40,7 @@ from schemas.run_state import (
     ToolEventStatus,
 )
 from schemas.validation import ValidationResult, ValidationStatus
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.workspace import Workspace, WorkspaceManager
 
 _STAMP = datetime(2026, 1, 1, tzinfo=UTC)

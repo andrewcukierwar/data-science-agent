@@ -11,7 +11,6 @@ from agents.critic import (
 )
 from agents.lead import _preserve_metric_definitions
 from evaluation.canonical import _canonical_numeric_ground_truth_failures
-from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
 from schemas.audit import AuditResult, AuditStatus
@@ -21,6 +20,7 @@ from schemas.metrics import (
     compile_metric_comparisons,
 )
 from schemas.validation import CriticCandidate, ValidationStatus
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService

@@ -9,6 +9,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from schemas.common import NonEmptyString
+from schemas.computation import BoundNumericalClaim
 
 
 class MetricComparisonType(StrEnum):
@@ -121,25 +122,27 @@ class MetricDefinitionContext(BaseModel):
     definition_ref: NonEmptyString | None = None
 
 
-class MetricComparison(_DimensionedModel):
+class MetricComparison(_DimensionedModel, BoundNumericalClaim):
     """A reproducible period/segment comparison supporting a conclusion."""
 
     model_config = ConfigDict(extra="forbid")
+
+    numerical_fields = ("value",)
 
     metric_key: NonEmptyString
     dimensions: MetricDimensions
     baseline_period: NonEmptyString
     comparison_period: NonEmptyString
     comparison_type: MetricComparisonType
-    value: float
+    value: float | None = None
     unit: NonEmptyString
     evidence_refs: list[NonEmptyString] = Field(min_length=1)
     definition_context: MetricDefinitionContext | None = None
 
     @field_validator("value")
     @classmethod
-    def value_must_be_finite(cls, value: float) -> float:
-        if not isfinite(value):
+    def value_must_be_finite(cls, value: float | None) -> float | None:
+        if value is not None and not isfinite(value):
             raise ValueError("metric value must be finite")
         return value
 
@@ -586,14 +589,14 @@ def compile_metric_comparisons(
             for index, left in enumerate(group)
             for right in group[index + 1 :]
         )
-        if consistent:
+        if consistent and latest.computation is None:
             latest = latest.model_copy(
                 update={
                     "evidence_refs": _merge_evidence_refs(group),
                     "definition_context": _best_definition_context(group),
                 }
             )
-        else:
+        elif not consistent:
             conflicts.append(
                 MetricConflict(
                     metric_key=latest.metric_key,
@@ -623,6 +626,13 @@ def deduplicate_metric_comparisons(
     for comparison in comparisons:
         comparison = normalize_metric_comparison(comparison)
         identity = metric_comparison_identity(comparison)
+        if comparison.computation is not None:
+            identity = (
+                *identity,
+                comparison.result_id,
+                comparison.computation.model_dump_json(),
+                comparison.value,
+            )
         deduplicated[identity] = comparison
     return list(deduplicated.values())
 

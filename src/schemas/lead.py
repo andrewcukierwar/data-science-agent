@@ -37,6 +37,7 @@ class LeadResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    selected_result_ids: list[NonEmptyString] = Field(default_factory=list)
     objective: NonEmptyString
     answer: NonEmptyString
     findings: list[Finding] = Field(default_factory=list)

@@ -808,7 +808,7 @@ class AnalysisRunner:
             evidence_refs.extend(recommendation.evidence_refs)
         for hypothesis in result.hypotheses:
             evidence_refs.extend(hypothesis.evidence_refs)
-        for comparison in result.metric_comparisons:
+        for comparison in [*result.metric_comparisons, *result.statistical_assessments]:
             evidence_refs.extend(comparison.evidence_refs)
         structured_metrics_required = bool(
             result.metric_comparisons
@@ -822,6 +822,8 @@ class AnalysisRunner:
             answer=result.answer,
             findings=result.findings,
             metric_comparisons=result.metric_comparisons,
+            statistical_assessments=result.statistical_assessments,
+            caveats=result.caveats,
             metric_conflicts=result.metric_conflicts,
             recommendations=recommendations,
             hypotheses=result.hypotheses,
@@ -993,6 +995,15 @@ class AnalysisRunner:
         constraint_reason: str | None,
         ledger: AnalysisLedger,
     ) -> str:
+        from agents.result_binding import (
+            resolve_outputs,
+            validate_metric_selection,
+            validate_statistical_selection,
+        )
+
+        lead_result = resolve_outputs(lead_result, ledger)
+        validate_statistical_selection(lead_result.statistical_assessments)
+        validate_metric_selection(lead_result.metric_comparisons)
         title = "Constrained Analysis Report" if constrained else "Analysis Report"
         lines = [
             f"# {title}",
@@ -1009,7 +1020,12 @@ class AnalysisRunner:
         if lead_result.findings:
             lines.extend(
                 f"- **{finding.id}:** {finding.statement} "
-                f"_(evidence: {', '.join(finding.evidence_refs)})_"
+                + (
+                    f" Value: {finding.value} {finding.value_unit or ''}. "
+                    if finding.value is not None
+                    else ""
+                )
+                + f"_(evidence: {', '.join(finding.evidence_refs)})_"
                 for finding in lead_result.findings
             )
         else:
@@ -1024,29 +1040,81 @@ class AnalysisRunner:
         else:
             lines.append("- No recommendations were returned.")
         lines.extend(["", "## Key Metric Comparisons", ""])
-        if lead_result.metric_comparisons:
-            lines.extend(
-                "- **{metric}:** {value} {unit} ({baseline} to {comparison}; "
-                "{comparison_type}; {dimensions}; evidence: {evidence})".format(
-                    metric=item.metric_key,
-                    value=item.value,
-                    unit=item.unit,
-                    baseline=item.baseline_period,
-                    comparison=item.comparison_period,
-                    comparison_type=item.comparison_type.value,
-                    dimensions=(
-                        ", ".join(
-                            f"{dimension.name}={dimension.value}"
-                            for dimension in item.dimensions
-                        )
-                        or "all segments"
-                    ),
-                    evidence=", ".join(item.evidence_refs),
-                )
-                for item in lead_result.metric_comparisons
+        for item in lead_result.metric_comparisons:
+            dimensions = ", ".join(f"{d.name}={d.value}" for d in item.dimensions)
+            lines.append(
+                f"- **{item.metric_key}:** {item.value} {item.unit} "
+                f"({item.baseline_period} to {item.comparison_period}; "
+                f"{item.comparison_type.value}; {dimensions or 'all segments'}; "
+                f"evidence: {', '.join(item.evidence_refs)})"
             )
-        else:
+            if item.definition_context:
+                lines.append(
+                    f"  - Definition: {item.definition_context.model_dump_json()}"
+                )
+            lines.append(f"  - Result: {item.result_id or 'legacy unbound'}")
+        if not lead_result.metric_comparisons:
             lines.append("- No structured metric comparisons were returned.")
+        lines.extend(["", "## Selected Statistical Assessments", ""])
+        for item in lead_result.statistical_assessments:
+            interval = item.confidence_interval
+            dimensions = ", ".join(f"{d.name}={d.value}" for d in item.dimensions)
+            lines.extend(
+                [
+                    f"- **{item.metric_key}** "
+                    f"({item.baseline_period} to {item.comparison_period})",
+                    f"  - Result: {item.result_id or 'legacy unbound'}",
+                    f"  - Dimensions: {dimensions or 'all segments'}",
+                    f"  - Method: {item.method}; "
+                    f"unit of analysis: {item.unit_of_analysis}",
+                    f"  - Estimate: {item.estimate}; "
+                    f"confidence level: {item.confidence_level}; "
+                    f"confidence interval: [{interval.lower}, {interval.upper}]",
+                    f"  - p-value: {item.p_value}; effect size: {item.effect_size}",
+                    "  - Practical threshold: "
+                    f"{item.practical_significance_threshold}; "
+                    f"practically significant: {item.practically_significant}",
+                    f"  - Conclusion: {item.conclusion.value}; "
+                    f"causal interpretation: {item.causal_interpretation.value}",
+                    f"  - Assumptions checked: {'; '.join(item.assumptions_checked)}",
+                    f"  - Evidence: {', '.join(item.evidence_refs)}",
+                ]
+            )
+            if item.definition_context:
+                lines.append(
+                    f"  - Definition: {item.definition_context.model_dump_json()}"
+                )
+            lines.extend(f"  - Caveat: {caveat}" for caveat in item.caveats)
+        if not lead_result.statistical_assessments:
+            lines.append("- No selected statistical assessments.")
+        lines.extend(["", "## Caveats and Scope", ""])
+        lines.extend(f"- {caveat}" for caveat in lead_result.caveats)
+        for item in [*lead_result.findings, *lead_result.recommendations]:
+            lines.extend(f"- {item.id}: {caveat}" for caveat in item.caveats)
+        from schemas.audit import audit_claims
+
+        lines.extend(["", "## Audit Details", ""])
+        for claim in audit_claims(audit):
+            lines.append(
+                f"- {claim.statement} (evidence: "
+                f"{', '.join(claim.evidence_refs) or 'unbound legacy observation'})"
+            )
+        for table in audit.tables:
+            if table.date_range:
+                lines.append(
+                    f"- {table.table_name} date coverage: "
+                    f"{table.date_range.start} to {table.date_range.end}"
+                )
+            lines.extend(
+                f"- {table.table_name}.{item.column} missingness: {item.rate}"
+                for item in table.missingness
+            )
+            lines.extend(
+                f"- {table.table_name}: {item}" for item in table.relationships
+            )
+        for issue in audit.issues:
+            if issue.recommendation:
+                lines.append(f"- {issue.id}: {issue.recommendation}")
         listed_chart_refs = set(lead_result.artifacts)
         listed_charts = [
             artifact

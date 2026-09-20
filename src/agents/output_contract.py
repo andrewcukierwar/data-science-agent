@@ -26,7 +26,21 @@ STRUCTURED_DIMENSION_GUIDANCE = (
     "Segment dimensions are a list of typed {name, value} objects, for example "
     '[{"name": "channel", "value": "Meta"}]. Use an empty list for an '
     "unsegmented measurement and never repeat a dimension name in one "
-    "measurement."
+    "measurement. For every metric comparison, statistical assessment, and "
+    "Finding.value (when numerical), supply "
+    "computation={tool_event_id, source, fields:[{field, pointer}]}. Use the exact "
+    "execution ID. source=sql_rows addresses retained rows (e.g. /0/0); "
+    "source=python_stdout_json addresses one complete JSON document printed on "
+    "stdout (e.g. /p_value). Every numerical field must have its own pointer, "
+    "including confidence_interval.lower/upper, confidence_level, effect_size, "
+    "practical_significance_threshold and practically_significant for statistics. "
+    "Set numerical fields and result_id to null on first output: application code "
+    "copies computed values and assigns a stable result_id. Qualitative findings "
+    "may leave value and computation null. Never retype numbers. "
+    "Calculations must still derive from approved inputs. Lead can select full "
+    "persisted specialist metrics/statistics using selected_result_ids, without "
+    "recreating their fields. Only explicitly selected statistics are final; "
+    "omit/reject superseded results. Retain material caveats and definition context."
 )
 
 

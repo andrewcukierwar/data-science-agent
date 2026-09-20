@@ -39,6 +39,12 @@ from agents.output_contract import (
     require_strict_output,
     strict_output_type,
 )
+from agents.result_binding import (
+    resolve_outputs,
+    select_results,
+    validate_metric_selection,
+    validate_statistical_selection,
+)
 from agents.runtime import (
     DEFAULT_AGENT_TURN_LIMITS,
     AgentRole,
@@ -522,6 +528,9 @@ def _reuse_specialist_metric_comparisons(
     reused: list[MetricComparison] = []
     for comparison in comparisons:
         normalized = normalize_metric_comparison(comparison)
+        if comparison.computation is not None:
+            reused.append(normalized)
+            continue
         exact = specialist_index.get(metric_comparison_identity(normalized))
         if exact is not None and set(normalized.evidence_refs).intersection(
             exact.evidence_refs
@@ -541,7 +550,7 @@ def _reuse_specialist_metric_comparisons(
         # Lead comparison with the only same-scope value from an unrelated
         # execution silently changes both the measurement and its provenance.
         reused.append(cited_scoped[0] if len(cited_scoped) == 1 else normalized)
-    for finding in findings or []:
+    for finding in (findings or []) if ledger.state.schema_version != "1.2" else []:
         if finding.metric is None:
             continue
         for record in ledger.specialist_results:
@@ -655,6 +664,8 @@ def validate_lead_result(
     apply to the same persisted workspace.
     """
 
+    result = resolve_outputs(select_results(result, ledger), ledger)
+    validate_statistical_selection(result.statistical_assessments)
     executed_refs = executed_references(ledger)
     aliases = finding_reference_aliases(ledger)
 
@@ -709,6 +720,7 @@ def validate_lead_result(
             canonical_metric_comparisons,
             prior_result,
         )
+    validate_metric_selection(canonical_metric_comparisons)
     compilation = compile_metric_comparisons(canonical_metric_comparisons)
     result = result.model_copy(
         update={
@@ -720,6 +732,7 @@ def validate_lead_result(
             "statistical_assessments": canonical_statistical_assessments,
         }
     )
+    result = resolve_outputs(result, ledger)
     unsupported = unsupported_claim_ids(
         resolve_material_claims(
             material_claims(

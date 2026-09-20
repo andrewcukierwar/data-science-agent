@@ -16,12 +16,12 @@ from agents.statistician import (
     persist_statistician_result,
     validate_statistician_result,
 )
-from orchestration.ledger import AnalysisLedger
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.lead import LeadResult
 from schemas.metrics import MetricComparison
 from schemas.run_state import ToolEvent, ToolEventStatus
 from schemas.validation import CriticCandidate, ValidationResult, ValidationStatus
+from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService

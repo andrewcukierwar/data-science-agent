@@ -626,6 +626,7 @@ def validate_candidate_citations(
                 findings=candidate.findings,
                 hypotheses=candidate.hypotheses,
                 metric_comparisons=candidate.metric_comparisons,
+                statistical_assessments=candidate.statistical_assessments,
             ),
             ledger,
         )
@@ -671,7 +672,29 @@ def validate_candidate_evidence_provenance(
 ) -> ValidationResult | None:
     """Reject material claims whose sole SQL evidence is hard-coded output."""
 
+    from agents.result_binding import (
+        ResultBindingError,
+        resolve_outputs,
+        validate_metric_selection,
+        validate_statistical_selection,
+    )
+
     invalid: list[str] = []
+    try:
+        resolved = resolve_outputs(candidate, ledger)
+        if resolved != candidate:
+            raise ResultBindingError(
+                "Critic candidate must contain hydrated bound values"
+            )
+        validate_statistical_selection(candidate.statistical_assessments)
+        validate_metric_selection(candidate.metric_comparisons)
+    except ResultBindingError as error:
+        invalid.append(str(error))
+    invalid.extend(
+        f"statistical_assessment:{item.metric_key}"
+        for item in candidate.statistical_assessments
+        if not has_source_lineage(ledger, item.evidence_refs)
+    )
     for finding in candidate.findings:
         if (
             finding.metric is not None or finding.value is not None

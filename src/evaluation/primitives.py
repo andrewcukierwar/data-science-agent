@@ -758,11 +758,12 @@ def _statistical_assessments(
     """Return unique typed assessments independent of producing architecture."""
 
     assessments = [*state.statistical_assessments]
-    assessments.extend(
-        assessment
-        for record in state.specialist_results
-        for assessment in record.result.statistical_assessments
-    )
+    if state.schema_version != "1.2":
+        assessments.extend(
+            assessment
+            for record in state.specialist_results
+            for assessment in record.result.statistical_assessments
+        )
     unique: list[StatisticalAssessment] = []
     seen: set[str] = set()
     for assessment in assessments:
@@ -975,6 +976,50 @@ def evaluate_provenance(
     # persisted workspace cannot be supported at one boundary and unsupported at
     # the other.
     assessments = _statistical_assessments(state)
+    from agents.result_binding import (
+        ResultBindingError,
+        resolve_result,
+        validate_metric_selection,
+        validate_statistical_selection,
+    )
+
+    numerical_findings = [
+        item
+        for item in state.findings
+        if item.value is not None or item.computation is not None
+    ]
+    for index, item in enumerate(
+        [*state.metric_comparisons, *assessments, *numerical_findings]
+    ):
+        # Preserve legacy scoring; absence of the versioned guarantee is explicit
+        # in the workspace version and evaluator result contract marker.
+        if state.schema_version != "1.2" and item.computation is None:
+            continue
+        try:
+            resolved = resolve_result(item, ledger)
+            valid = resolved == item
+            message = (
+                "computed fields match selected result"
+                if item.computation
+                else "legacy unbound result; no numerical binding verified"
+            )
+        except ResultBindingError as error:
+            valid, message = False, str(error)
+        checks.append(_check(f"{check_prefix}:binding:{index}", valid, message))
+    if state.schema_version == "1.2":
+        try:
+            validate_statistical_selection(list(assessments))
+            validate_metric_selection(state.metric_comparisons)
+            conflict = None
+        except ResultBindingError as error:
+            conflict = str(error)
+        checks.append(
+            _check(
+                f"{check_prefix}:numerical_selection",
+                conflict is None,
+                conflict or "selected numerical results do not conflict",
+            )
+        )
     resolutions = {
         item.claim_id: item.resolution
         for item in resolve_material_claims(
