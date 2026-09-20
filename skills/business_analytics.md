@@ -35,8 +35,13 @@ Use this procedure for evidence-backed KPI investigation:
    quarter inclusion. Never classify every period that is not Q1 as Q2.
    Reconcile derived cohort counts to the customers/acquisition table before
    using them in inference.
-10. Use `inspect_relations` or the registered input relation names (for example
-   `customers`, `orders`, `sessions`, and `marketing_spend`) in SQL. Do not use
+10. Use `inspect_relations` for row counts, schema, missingness, independent
+   source date bounds, and explicit source-lag comparisons. It profiles all
+   DATE/TIMESTAMP columns by type; select columns explicitly when a particular
+   date basis matters. Observed bounds or sparse event dates alone do not
+   establish reporting completeness. Do not join independent fact tables just
+   to compute per-source min/max. Use the registered input relation names
+   (for example `customers`, `orders`, `sessions`, and `marketing_spend`) in SQL. Do not use
    `read_parquet` paths or other filesystem paths when querying approved inputs.
    Use SQL for bounded aggregation and joins. `run_python` executes in a
    separate isolated container and does not inherit the SQL connection or its

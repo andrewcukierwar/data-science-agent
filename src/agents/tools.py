@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
+from contextvars import copy_context
+from functools import partial
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -34,7 +38,12 @@ from agents.runtime import (
 from orchestration.budgets import BudgetResource
 from schemas.run_state import ArtifactKind, ToolEventStatus
 from tools.results import result_json
-from tools.sql import RelationInspectionResult
+from tools.sql import (
+    RelationInspectionError,
+    RelationInspectionResult,
+    RelationProfileRequest,
+    SourceLagRequest,
+)
 
 
 class WorkspaceFileInfo(BaseModel):
@@ -332,25 +341,80 @@ def inspect_workspace(
         return _error_response(tool_name, error)
 
 
-@function_tool
-def inspect_relations(
-    ctx: RunContextWrapper[AgentRunContext],
-) -> ToolOutputText:
-    """Inspect approved input relation names, columns, types, and row counts.
+async def _run_cancellable_sql(operation, **kwargs):
+    """Drain synchronous native work before propagating SDK cancellation."""
 
-    This reads metadata from the same registered DuckDB views used by
-    ``run_sql``. It does not accept filesystem paths or execute model-authored
-    schema SQL. The returned source paths are relative to ``inputs/``.
+    cancel_event = threading.Event()
+    # Keep the executor Future, not an intermediate Task that loop shutdown
+    # can cancel independently and detach from its still-running native thread.
+    worker = asyncio.get_running_loop().run_in_executor(
+        None,
+        copy_context().run,
+        partial(operation, cancel_event=cancel_event, **kwargs),
+    )
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        cancel_event.set()
+        # A second enclosing cancellation still must not abandon the worker.
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not worker.cancelled():
+            worker.exception()  # Observe profile failures; the service persisted them.
+        raise
+
+
+@function_tool
+async def inspect_relations(
+    ctx: RunContextWrapper[AgentRunContext],
+    profiles: list[RelationProfileRequest] | None = None,
+    include_missingness: bool = False,
+    source_lags: list[SourceLagRequest] | None = None,
+) -> ToolOutputText:
+    """Profile sources independently: counts, schema, and temporal min/max.
+
+    Prefer this for date ranges and source freshness; no fact joins are needed.
+    Null profiles discovers all relations and every DATE/TIMESTAMP column by
+    type. Explicit profiles selects relations and temporal columns (null columns
+    discovers all; [] omits temporal bounds). Missingness counts nulls for every
+    visible column if requested, and always for selected temporal columns.
+    source_lags compares explicitly named maxima with matching types: reference
+    maximum minus source maximum, in seconds. No automatic calendar, completeness
+    judgment, or choice between multiple dates. Strings are never guessed as dates.
+    Cite tool_event_id; inspect_evidence retrieves the retained profile without
+    recomputation. One call costs one SQL execution and shares its SQL deadline.
     """
 
     tool_name = "inspect_relations"
     try:
         context = _context(ctx)
         context.require_permission(tool_name)
-        result: RelationInspectionResult = context.sql_service.inspect_relations()
+        result: RelationInspectionResult = await _run_cancellable_sql(
+            context.sql_service.inspect_relations,
+            profiles=profiles,
+            include_missingness=include_missingness,
+            source_lags=source_lags,
+        )
         return _sdk_response(ToolResponse.ok(tool_name, result.model_dump(mode="json")))
-    except (PermissionDeniedError, ValueError, OSError) as error:
-        return _error_response(tool_name, error)
+    except RelationInspectionError as error:
+        return _sdk_response(
+            ToolResponse.failed(
+                tool_name,
+                error.code,
+                str(error),
+                data={
+                    "tool_event_id": error.tool_event_id,
+                    "attempt_id": error.attempt_id,
+                    "timed_out": error.timed_out,
+                    "cancelled": error.cancelled,
+                },
+            )
+        )
     except Exception as error:
         return _error_response(tool_name, error)
 
@@ -539,7 +603,7 @@ def inspect_evidence(
 
 
 @function_tool
-def run_sql(
+async def run_sql(
     ctx: RunContextWrapper[AgentRunContext],
     sql: str,
     query_id: str | None = None,
@@ -552,7 +616,9 @@ def run_sql(
     names directly. Cite the returned tool_event_id to inspect retained output
     without rerunning SQL. row_count is the fetched count (a lower bound when
     row_count_is_lower_bound is true); retained_row_count counts persisted rows.
-    A truncated result is not the complete population.
+    A truncated result is not the complete population. SQL exceeding the configured
+    sql_timeout_seconds is interrupted and fails; its event cannot support evidence.
+    Use inspect_relations for independent source date bounds and source lag.
     Do not use filesystem paths or ``read_parquet``; arbitrary
     filesystem access remains blocked by the execution boundary.
 
@@ -565,7 +631,9 @@ def run_sql(
     try:
         context = _context(ctx)
         context.require_permission(tool_name)
-        result = context.sql_service.execute(sql, query_id=query_id)
+        result = await _run_cancellable_sql(
+            context.sql_service.execute, sql=sql, query_id=query_id
+        )
         rows = []
         used_chars = 2
         for row in result.rows[: context.run_config.max_result_rows]:

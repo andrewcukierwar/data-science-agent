@@ -79,10 +79,11 @@ from orchestration.ledger import AnalysisLedger
 from scenarios import discover_scenarios
 from scenarios.catalog import ScenarioCatalog, ScenarioRegistration
 from schemas.run_state import RunBlockReason, RunBudget
+from tools.sql_deadline import DEFAULT_SQL_TIMEOUT_SECONDS, validate_sql_timeout
 from tools.workspace import Workspace, WorkspaceManager
 
 BENCHMARK_RUNNER_VERSION = "1.0"
-TOOL_CONTRACT_VERSION = "1.0"
+TOOL_CONTRACT_VERSION = "1.1"
 DEFAULT_ARCHITECTURES = ("multi-agent", "single-agent")
 DEFAULT_REPETITIONS = 3
 _RUN_ID_SAFE = re.compile(r"[^A-Za-z0-9_-]+")
@@ -789,6 +790,7 @@ class BenchmarkRunner:
             "budget",
             "agent_turn_limits",
             "agent_run_timeout_seconds",
+            "sql_timeout_seconds",
         }
         conflicts = frozen_option_names.intersection(self.runner_options)
         if conflicts:
@@ -812,6 +814,7 @@ class BenchmarkRunner:
         budgets: BudgetConfiguration | None = None,
         repetition_justification: str | None = None,
         pilot_set: PilotSetDeclaration | None = None,
+        sql_timeout_seconds: float = DEFAULT_SQL_TIMEOUT_SECONDS,
     ) -> BenchmarkManifest:
         """Create a frozen matrix declaration without generating data or agents."""
 
@@ -883,6 +886,7 @@ class BenchmarkRunner:
                     if run_id in cell_ids.values():
                         raise BenchmarkError(f"duplicate immutable run ID: {run_id}")
                     cell_ids[key] = run_id
+        sql_timeout_seconds = validate_sql_timeout(sql_timeout_seconds)
         parameters: dict[str, object] = {
             "benchmark_runner_version": BENCHMARK_RUNNER_VERSION,
             "cost_pilot_required": True,
@@ -894,6 +898,7 @@ class BenchmarkRunner:
             # This is part of the estimand: a cell's operational outcome must
             # be measured under a frozen end-to-end agent invocation bound.
             "agent_run_timeout_seconds": DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
+            "sql_timeout_seconds": sql_timeout_seconds,
             "cell_run_ids": cell_ids,
         }
         if repetition_justification:
@@ -997,6 +1002,22 @@ class BenchmarkRunner:
                 raise BenchmarkError(
                     "live benchmark manifest is missing a valid frozen "
                     "agent_run_timeout_seconds; freeze a new manifest version"
+                )
+            try:
+                validate_sql_timeout(
+                    manifest.run_configuration.parameters.get("sql_timeout_seconds")
+                )
+            except ValueError as exc:
+                raise BenchmarkError(
+                    "live benchmark requires valid frozen sql_timeout_seconds; "
+                    "freeze a new manifest"
+                ) from exc
+            if (
+                manifest.run_configuration.tool_contract_version
+                != TOOL_CONTRACT_VERSION
+            ):
+                raise BenchmarkError(
+                    "tool contract changed; freeze a new manifest/code identity"
                 )
             self._require_paid_access(
                 manifest,
@@ -1668,6 +1689,9 @@ class BenchmarkRunner:
                     "critic",
                 }
             },
+            "sql_timeout_seconds": manifest.run_configuration.parameters[
+                "sql_timeout_seconds"
+            ],
             "agent_run_timeout_seconds": manifest.run_configuration.parameters[
                 "agent_run_timeout_seconds"
             ],

@@ -18,6 +18,7 @@ from orchestration.ledger import AnalysisLedger
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService
+from tools.sql_deadline import DEFAULT_SQL_TIMEOUT_SECONDS, validate_sql_timeout
 from tools.workspace import Workspace
 
 
@@ -187,6 +188,13 @@ class AgentRunConfig(BaseModel):
         le=3_600,
     )
 
+    sql_timeout_seconds: float = DEFAULT_SQL_TIMEOUT_SECONDS
+
+    @field_validator("sql_timeout_seconds", mode="before")
+    @classmethod
+    def validate_sql_timeout_seconds(cls, value: float) -> float:
+        return validate_sql_timeout(value)
+
     @field_validator("agent_turn_limits", mode="before")
     @classmethod
     def validate_agent_turn_limits(
@@ -308,6 +316,8 @@ class AgentRunContext:
             service_ledger = getattr(service, "ledger", None)
             if service_ledger is not self.ledger:
                 raise ValueError(f"{service_name} must use this run's ledger")
+        if self.sql_service.sql_timeout_seconds != self.run_config.sql_timeout_seconds:
+            raise ValueError("SQL service must use run_config.sql_timeout_seconds")
         if self.run_config.run_id != self.ledger.state.run_id:
             raise ValueError("run_config.run_id must match the ledger run_id")
         if (

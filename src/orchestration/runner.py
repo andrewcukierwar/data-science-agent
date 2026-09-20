@@ -52,6 +52,7 @@ from schemas.validation import CriticCandidate, ValidationResult, ValidationStat
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService
+from tools.sql_deadline import DEFAULT_SQL_TIMEOUT_SECONDS, validate_sql_timeout
 from tools.workspace import Workspace, WorkspaceManager
 
 AuditorRunner = Callable[..., Awaitable[AuditResult]]
@@ -110,6 +111,7 @@ class AnalysisRunner:
         budget: RunBudget | None = None,
         agent_turn_limits: Mapping[AgentRole | str, int] | None = None,
         agent_run_timeout_seconds: float = DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
+        sql_timeout_seconds: float = DEFAULT_SQL_TIMEOUT_SECONDS,
         input_cost_per_1k_tokens: float | None = None,
         cached_input_cost_per_1k_tokens: float | None = None,
         output_cost_per_1k_tokens: float | None = None,
@@ -137,6 +139,7 @@ class AnalysisRunner:
                 "agent_run_timeout_seconds must be greater than 0 and at most 3600"
             )
         self.agent_run_timeout_seconds = float(agent_run_timeout_seconds)
+        self.sql_timeout_seconds = validate_sql_timeout(sql_timeout_seconds)
         legacy_rates = (
             input_cost_per_1k_tokens,
             cached_input_cost_per_1k_tokens,
@@ -753,11 +756,14 @@ class AnalysisRunner:
             model_provider=self.model_provider,
             agent_turn_limits=self.agent_turn_limits,
             agent_run_timeout_seconds=self.agent_run_timeout_seconds,
+            sql_timeout_seconds=self.sql_timeout_seconds,
         )
         context = AgentRunContext(
             workspace=workspace,
             ledger=ledger,
-            sql_service=DuckDBExecutionService(workspace, ledger),
+            sql_service=DuckDBExecutionService(
+                workspace, ledger, sql_timeout_seconds=self.sql_timeout_seconds
+            ),
             python_service=PythonExecutionService(
                 workspace,
                 ledger,

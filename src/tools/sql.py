@@ -1,10 +1,11 @@
 """DuckDB execution over approved, read-only workspace inputs."""
 
 import re
+import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import duckdb
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,6 +17,14 @@ from tools.results import (
     MAX_SQL_RESULT_BYTES,
     json_result_value,
     result_json,
+)
+from tools.sql_deadline import (
+    DEFAULT_SQL_TIMEOUT_SECONDS,
+    SQLCancelledError,
+    SQLTimeoutError,
+    bounded_connection,
+    check_sql_cancelled,
+    validate_sql_timeout,
 )
 from tools.workspace import Workspace
 
@@ -35,6 +44,18 @@ class InputRelationError(ValueError):
     """Raised when an input Parquet file cannot safely become a relation."""
 
 
+class RelationInspectionError(ValueError):
+    """A persisted profile failure with inspectable diagnostic identity."""
+
+    def __init__(self, error: Exception, event_id: str | None, attempt_id: str | None):
+        super().__init__(f"{type(error).__name__}: {error}")
+        self.tool_event_id = event_id
+        self.attempt_id = attempt_id
+        self.timed_out = isinstance(error, SQLTimeoutError)
+        self.cancelled = isinstance(error, SQLCancelledError)
+        self.code = getattr(error, "code", "execution_failed")
+
+
 class QueryExecutionResult(BaseModel):
     """Result or captured error from one DuckDB query execution."""
 
@@ -46,6 +67,9 @@ class QueryExecutionResult(BaseModel):
     query_id: str = Field(min_length=1)
     query_path: Path
     success: bool
+    timed_out: bool = False
+    cancelled: bool = False
+    sql_timeout_seconds: float = DEFAULT_SQL_TIMEOUT_SECONDS
     columns: list[str] = Field(default_factory=list)
     column_types: list[str] = Field(default_factory=list)
     rows: list[list[Any]] = Field(default_factory=list)
@@ -66,6 +90,35 @@ class RelationColumnMetadata(BaseModel):
 
     name: str = Field(min_length=1)
     data_type: str = Field(min_length=1)
+    nullable: bool | None = None
+    null_count: int | None = Field(default=None, ge=0)
+    temporal_profiled: bool = False
+    minimum: str | None = None
+    maximum: str | None = None
+
+
+class RelationProfileRequest(BaseModel):
+    """Choose a relation and explicit temporal columns; null discovers all."""
+
+    model_config = ConfigDict(extra="forbid")
+    relation_name: str = Field(min_length=1)
+    temporal_columns: list[str] | None = Field(default=None, max_length=256)
+
+
+class SourceLagRequest(BaseModel):
+    """Compare maxima only for explicitly named, compatible temporal columns."""
+
+    model_config = ConfigDict(extra="forbid")
+    relation_name: str
+    column_name: str
+    reference_relation: str
+    reference_column: str
+
+
+class SourceLagResult(SourceLagRequest):
+    """Reference maximum minus source maximum; null if either has no values."""
+
+    lag_seconds: float | None = None
 
 
 class RelationMetadata(BaseModel):
@@ -78,6 +131,9 @@ class RelationMetadata(BaseModel):
     columns: list[RelationColumnMetadata] = Field(default_factory=list)
     columns_truncated: bool = False
     row_count: int | None = Field(default=None, ge=0)
+    temporal_status: Literal[
+        "profiled", "no_temporal_columns", "not_requested", "schema_truncated"
+    ] = "not_requested"
 
 
 class RelationInspectionResult(BaseModel):
@@ -85,6 +141,16 @@ class RelationInspectionResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    result_contract_version: str = EXECUTION_RESULT_CONTRACT_VERSION
+    profile_contract_version: str = "1.0"
+    attempt_id: str | None = None
+    sql_timeout_seconds: float = DEFAULT_SQL_TIMEOUT_SECONDS
+    source_lags: list[SourceLagResult] = Field(default_factory=list)
+    coverage_caveat: str = (
+        "Observed bounds do not establish reporting completeness or expected cadence. "
+        "Sparse events can legitimately omit dates; "
+        "source lag does not establish causality."
+    )
     relations: list[RelationMetadata] = Field(default_factory=list)
     total_relations: int = Field(ge=0)
     relation_limit: int = Field(ge=1)
@@ -112,10 +178,12 @@ class DuckDBExecutionService:
         ledger: SQLExecutionLedger | None = None,
         *,
         max_rows: int = _DEFAULT_MAX_ROWS,
+        sql_timeout_seconds: float = DEFAULT_SQL_TIMEOUT_SECONDS,
     ) -> None:
         self.workspace = workspace
         self.ledger = ledger
         self.max_rows = self._validate_max_rows(max_rows)
+        self.sql_timeout_seconds = validate_sql_timeout(sql_timeout_seconds)
         self._validate_workspace_layout()
         self._input_relations = self._discover_input_relations()
 
@@ -129,53 +197,73 @@ class DuckDBExecutionService:
         self,
         *,
         include_row_counts: bool = True,
+        include_missingness: bool = False,
+        profiles: list[RelationProfileRequest] | None = None,
+        source_lags: list[SourceLagRequest] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> RelationInspectionResult:
-        """Inspect the schemas of the approved registered input relations.
+        """Profile independent sources independently, under one SQL deadline.
 
-        Metadata is derived from the same temporary DuckDB views used by
-        :meth:`execute`. The method never accepts a path or model-authored
-        relation name, and only returns bounded metadata rather than rows.
+        Discover every DATE/TIMESTAMP column by type, or select named columns.
+        No string-to-date guessing, implicit date choice, expected calendar, or
+        cross-relation fact joins. One call consumes one SQL budget unit.
         """
 
         started_at = datetime.now(UTC)
         event_id = f"tool-inspect-relations-{uuid.uuid4().hex}"
+        attempt_id = getattr(getattr(self.ledger, "state", None), "attempt_id", None)
+        arguments = {
+            "include_row_counts": include_row_counts,
+            "include_missingness": include_missingness,
+            "profiles": [p.model_dump() for p in profiles]
+            if profiles is not None
+            else None,
+            "source_lags": [p.model_dump() for p in source_lags or []],
+            "relation_limit": _MAX_RELATIONS_IN_INSPECTION,
+            "sql_timeout_seconds": self.sql_timeout_seconds,
+        }
         try:
             self._reserve_execution_budget()
-            result = self._inspect_relations(include_row_counts=include_row_counts)
+            result = self._inspect_relations(
+                include_row_counts=include_row_counts,
+                include_missingness=include_missingness,
+                profiles=profiles,
+                source_lags=source_lags or [],
+                cancel_event=cancel_event,
+            )
+            check_sql_cancelled(cancel_event)
+            result.tool_event_id = event_id if self.ledger is not None else None
+            result.attempt_id = attempt_id
+            if len(result_json(result.model_dump(mode="json"))) > MAX_SQL_RESULT_BYTES:
+                raise ValueError(
+                    "profile exceeds the persisted result byte limit; "
+                    "select fewer relations/columns"
+                )
         except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
             self._emit_event(
                 ToolEvent(
                     id=event_id,
+                    attempt_id=attempt_id,
                     tool_name="inspect_relations",
                     status=ToolEventStatus.FAILED,
                     started_at=started_at,
                     completed_at=datetime.now(UTC),
-                    arguments={
-                        "include_row_counts": include_row_counts,
-                        "relation_limit": _MAX_RELATIONS_IN_INSPECTION,
-                    },
-                    error=error,
+                    arguments=arguments,
+                    error=f"{type(exc).__name__}: {exc}",
                 )
             )
-            raise
-
-        if self.ledger is None:
-            # Without a ledger the event is never persisted, so advertising a
-            # reference for it would hand the model unresolvable provenance.
-            return result
-        result = result.model_copy(update={"tool_event_id": event_id})
+            raise RelationInspectionError(
+                exc, event_id if self.ledger is not None else None, attempt_id
+            ) from exc
         self._emit_event(
             ToolEvent(
                 id=event_id,
+                attempt_id=attempt_id,
                 tool_name="inspect_relations",
                 status=ToolEventStatus.SUCCEEDED,
                 started_at=started_at,
                 completed_at=datetime.now(UTC),
-                arguments={
-                    "include_row_counts": include_row_counts,
-                    "relation_limit": _MAX_RELATIONS_IN_INSPECTION,
-                },
+                arguments=arguments,
                 output=result.model_dump(mode="json"),
             )
         )
@@ -186,6 +274,7 @@ class DuckDBExecutionService:
         sql: str,
         *,
         query_id: str | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> QueryExecutionResult:
         """Save and execute SQL, returning rows or a structured error."""
 
@@ -210,9 +299,12 @@ class DuckDBExecutionService:
             "query_id": query_id,
             "query_path": query_path,
             "max_rows": self.max_rows,
+            "sql_timeout_seconds": self.sql_timeout_seconds,
         }
         try:
-            columns, column_types, rows, row_limit_hit = self._execute_sql(sql)
+            columns, column_types, rows, row_limit_hit = self._execute_sql(
+                sql, cancel_event=cancel_event
+            )
             result = QueryExecutionResult(
                 **identity,
                 success=True,
@@ -245,10 +337,13 @@ class DuckDBExecutionService:
                 result.rows.append(normalized)
                 used += size
             result.retained_row_count = len(result.rows)
+            check_sql_cancelled(cancel_event)
         except Exception as exc:
             result = QueryExecutionResult(
                 **identity,
                 success=False,
+                timed_out=isinstance(exc, SQLTimeoutError),
+                cancelled=isinstance(exc, SQLCancelledError),
                 error=f"{type(exc).__name__}: {exc}",
             )
 
@@ -275,9 +370,10 @@ class DuckDBExecutionService:
     def _execute_sql(
         self,
         sql: str,
+        *,
+        cancel_event: threading.Event | None = None,
     ) -> tuple[list[str], list[str], list[list[Any]], bool]:
-        connection = duckdb.connect(database=":memory:")
-        try:
+        with bounded_connection(self.sql_timeout_seconds, cancel_event) as connection:
             inputs = self.workspace.inputs.resolve()
             allowed_directories = self._sql_literal(str(inputs))
             connection.execute(f"SET allowed_directories = [{allowed_directories}]")
@@ -291,61 +387,145 @@ class DuckDBExecutionService:
             rows = [list(row) for row in cursor.fetchmany(self.max_rows + 1)]
             truncated = len(rows) > self.max_rows
             return columns, column_types, rows[: self.max_rows], truncated
-        finally:
-            connection.close()
 
     def _inspect_relations(
         self,
         *,
         include_row_counts: bool,
+        include_missingness: bool,
+        profiles: list[RelationProfileRequest] | None,
+        source_lags: list[SourceLagRequest],
+        cancel_event: threading.Event | None,
     ) -> RelationInspectionResult:
-        """Read bounded schema metadata from the approved DuckDB views."""
-
-        connection = duckdb.connect(database=":memory:")
-        try:
+        requests = (
+            profiles
+            if profiles is not None
+            else [
+                RelationProfileRequest(relation_name=name)
+                for name in self._input_relations
+            ]
+        )
+        names = [p.relation_name for p in requests]
+        if len(set(names)) != len(names):
+            raise ValueError("duplicate profile relation")
+        if set(names) - self._input_relations.keys():
+            raise ValueError("unknown profile relation")
+        if profiles is not None and len(profiles) > _MAX_RELATIONS_IN_INSPECTION:
+            raise ValueError("too many requested profile relations")
+        if len(source_lags) > _MAX_RELATIONS_IN_INSPECTION:
+            raise ValueError("too many source lag comparisons")
+        with bounded_connection(self.sql_timeout_seconds, cancel_event) as connection:
             inputs = self.workspace.inputs.resolve()
-            allowed_directories = self._sql_literal(str(inputs))
-            connection.execute(f"SET allowed_directories = [{allowed_directories}]")
+            connection.execute(
+                f"SET allowed_directories = [{self._sql_literal(str(inputs))}]"
+            )
             self._register_input_views(connection)
             connection.execute("SET enable_external_access = false")
-
-            relation_items = list(self._input_relations.items())
-            visible_items = relation_items[:_MAX_RELATIONS_IN_INSPECTION]
-            relations: list[RelationMetadata] = []
-            for relation, path in visible_items:
+            relations = []
+            bounds = {}
+            for request in requests[:_MAX_RELATIONS_IN_INSPECTION]:
+                relation = request.relation_name
                 description = connection.execute(
                     f"DESCRIBE {self._quote_identifier(relation)}"
                 ).fetchmany(_MAX_COLUMNS_PER_RELATION + 1)
-                columns_truncated = len(description) > _MAX_COLUMNS_PER_RELATION
                 columns = [
-                    RelationColumnMetadata(name=row[0], data_type=row[1])
+                    RelationColumnMetadata(
+                        name=row[0],
+                        data_type=row[1],
+                        nullable=row[2] == "YES",
+                    )
                     for row in description[:_MAX_COLUMNS_PER_RELATION]
                 ]
-                row_count = None
-                if include_row_counts:
-                    row_count = int(
-                        connection.execute(
-                            f"SELECT COUNT(*) FROM {self._quote_identifier(relation)}"
-                        ).fetchone()[0]
+                temporal = {
+                    c.name
+                    for c in columns
+                    if c.data_type == "DATE" or c.data_type.startswith("TIMESTAMP")
+                }
+                selected = (
+                    temporal
+                    if request.temporal_columns is None
+                    else set(request.temporal_columns)
+                )
+                if not selected <= temporal:
+                    raise ValueError(
+                        "requested temporal column is absent, not DATE/TIMESTAMP, "
+                        "or outside the column limit"
                     )
+                expressions = (
+                    ["COUNT(*)"]
+                    if (include_row_counts or include_missingness or selected)
+                    else []
+                )
+                for column in columns:
+                    quoted = self._quote_identifier(column.name)
+                    if include_missingness or column.name in selected:
+                        expressions.append(f"COUNT(*) - COUNT({quoted})")
+                    if column.name in selected:
+                        expressions.extend([f"MIN({quoted})", f"MAX({quoted})"])
+                values = iter(
+                    connection.execute(
+                        f"SELECT {', '.join(expressions)} "
+                        f"FROM {self._quote_identifier(relation)}"
+                    ).fetchone()
+                    if expressions
+                    else []
+                )
+                count = int(next(values)) if expressions else None
+                for column in columns:
+                    if include_missingness or column.name in selected:
+                        column.null_count = int(next(values))
+                    if column.name in selected:
+                        minimum, maximum = next(values), next(values)
+                        column.temporal_profiled = True
+                        column.minimum = json_result_value(minimum)
+                        column.maximum = json_result_value(maximum)
+                        bounds[(relation, column.name)] = (column.data_type, maximum)
                 relations.append(
                     RelationMetadata(
                         relation_name=relation,
-                        source_path=path.relative_to(inputs).as_posix(),
+                        source_path=self._input_relations[relation]
+                        .relative_to(inputs)
+                        .as_posix(),
                         columns=columns,
-                        columns_truncated=columns_truncated,
-                        row_count=row_count,
+                        columns_truncated=len(description) > _MAX_COLUMNS_PER_RELATION,
+                        row_count=count if include_row_counts else None,
+                        temporal_status="schema_truncated"
+                        if len(description) > _MAX_COLUMNS_PER_RELATION
+                        else "profiled"
+                        if selected
+                        else ("not_requested" if temporal else "no_temporal_columns"),
                     )
                 )
+            lags = []
+            for request in source_lags:
+                source = bounds.get((request.relation_name, request.column_name))
+                reference = bounds.get(
+                    (request.reference_relation, request.reference_column)
+                )
+                if source is None or reference is None:
+                    raise ValueError(
+                        "source lag requires explicitly profiled temporal columns"
+                    )
+                if source[0] != reference[0]:
+                    raise ValueError(
+                        "source lag requires matching temporal types; "
+                        "no implicit time-zone conversion"
+                    )
+                lag = (
+                    None
+                    if source[1] is None or reference[1] is None
+                    else (reference[1] - source[1]).total_seconds()
+                )
+                lags.append(SourceLagResult(**request.model_dump(), lag_seconds=lag))
             return RelationInspectionResult(
                 relations=relations,
-                total_relations=len(relation_items),
+                source_lags=lags,
+                total_relations=len(self._input_relations),
                 relation_limit=_MAX_RELATIONS_IN_INSPECTION,
-                truncated=len(relation_items) > _MAX_RELATIONS_IN_INSPECTION,
+                truncated=len(requests) > _MAX_RELATIONS_IN_INSPECTION,
                 row_counts_included=include_row_counts,
+                sql_timeout_seconds=self.sql_timeout_seconds,
             )
-        finally:
-            connection.close()
 
     def _build_event(
         self,
@@ -370,6 +550,7 @@ class DuckDBExecutionService:
                 "query_id": query_id,
                 "query_path": self._artifact_ref(query_path),
                 "max_rows": self.max_rows,
+                "sql_timeout_seconds": self.sql_timeout_seconds,
             },
             output=output,
             error=error,

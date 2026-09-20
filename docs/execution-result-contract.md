@@ -41,8 +41,9 @@ normalized recursively; non-string-keyed maps use sorted tagged entries.
 `column_types` preserves DuckDB type information. Unsupported value conversions
 fail capture rather than saving arbitrary object representations.
 
-This bounds retained output, not SQL execution cost or fetch-time memory.
-Cancellation and execution-resource controls belong to P0.3.
+This bounds retained output, not fetch-time memory. P0.3 adds a separate
+[SQL execution deadline and native cancellation](sql-profiling-cancellation-contract.md)
+without changing the successful SQL row/binding contract.
 
 ## Python output
 

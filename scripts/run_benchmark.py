@@ -32,6 +32,7 @@ from evaluation.output import (  # noqa: E402
     ensure_output_is_new,
     write_exclusive_text,
 )
+from tools.sql_deadline import DEFAULT_SQL_TIMEOUT_SECONDS  # noqa: E402
 
 
 def _common_matrix_arguments(parser: argparse.ArgumentParser) -> None:
@@ -49,6 +50,9 @@ def _common_matrix_arguments(parser: argparse.ArgumentParser) -> None:
         help="Architecture to include; repeat for a subset (default: both).",
     )
     parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument(
+        "--sql-timeout-seconds", type=float, default=DEFAULT_SQL_TIMEOUT_SECONDS
+    )
     parser.add_argument(
         "--model",
         required=True,
@@ -148,6 +152,7 @@ def _build_manifest(args: argparse.Namespace):
         scenario_ids=args.scenario_ids,
         architectures=tuple(args.architectures or ("multi-agent", "single-agent")),
         repetitions=args.repetitions,
+        sql_timeout_seconds=args.sql_timeout_seconds,
         model=args.model,
         model_provider=args.model_provider,
         execution_mode=ExecutionMode(args.execution_mode),
