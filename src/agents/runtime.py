@@ -96,6 +96,7 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
             "inspect_relations",
             "run_sql",
             "run_python",
+            "run_analytical",
             "save_artifact",
             "inspect_evidence",
             "update_investigation_plan",
@@ -111,6 +112,7 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
             "inspect_relations",
             "run_sql",
             "run_python",
+            "run_analytical",
         }
     ),
     AgentRole.ANALYST: frozenset(
@@ -121,11 +123,12 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
             "inspect_relations",
             "run_sql",
             "run_python",
+            "run_analytical",
             "save_artifact",
         }
     ),
     AgentRole.STATISTICIAN: frozenset(
-        {"read_document", "run_python", "inspect_evidence"}
+        {"read_document", "run_python", "run_analytical", "inspect_evidence"}
     ),
     AgentRole.CRITIC: frozenset(
         {
@@ -140,10 +143,39 @@ _TOOL_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
 }
 
 
+_ANALYTICAL_OPERATION_PERMISSIONS: dict[AgentRole, frozenset[str]] = {
+    AgentRole.LEAD: frozenset(),
+    AgentRole.GENERALIST: frozenset(
+        {
+            "coverage",
+            "entity_aggregate",
+            "ratio",
+            "contrast",
+            "reconciliation",
+            "binary_experiment",
+        }
+    ),
+    AgentRole.DATA_AUDITOR: frozenset({"coverage"}),
+    AgentRole.ANALYST: frozenset(
+        {"entity_aggregate", "ratio", "contrast", "reconciliation"}
+    ),
+    AgentRole.STATISTICIAN: frozenset({"binary_experiment"}),
+    AgentRole.CRITIC: frozenset(),
+}
+
+
 def allowed_tools_for_role(role: AgentRole | str) -> frozenset[str]:
     """Return the immutable tool permission set for an agent role."""
 
     return _TOOL_PERMISSIONS[AgentRole(role)]
+
+
+def allowed_analytical_operations_for_role(
+    role: AgentRole | str,
+) -> frozenset[str]:
+    """Return the deterministic analytical operations assigned to one role."""
+
+    return _ANALYTICAL_OPERATION_PERMISSIONS[AgentRole(role)]
 
 
 # A strict-schema-valid candidate whose citations do not resolve may receive one
@@ -397,6 +429,15 @@ class AgentRunContext:
 
         if tool_name not in self.allowed_tools():
             raise PermissionDeniedError(self.agent_role, tool_name)
+
+    def require_analytical_operation(self, operation: str) -> None:
+        """Enforce the operation-level boundary behind ``run_analytical``."""
+
+        self.require_permission("run_analytical")
+        if operation not in allowed_analytical_operations_for_role(self.agent_role):
+            raise PermissionDeniedError(
+                self.agent_role, f"run_analytical[{operation}]"
+            )
 
     def check_budget(self, resource: BudgetResource | str) -> BudgetSnapshot:
         """Check capacity before a service performs a counted operation."""

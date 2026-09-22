@@ -26,6 +26,7 @@ from agents.lead import (
 )
 from agents.model_usage import run_agent_with_usage
 from agents.output_contract import (
+    DETERMINISTIC_ANALYTICAL_GUIDANCE,
     STRUCTURED_DIMENSION_GUIDANCE,
     require_strict_output,
     strict_output_type,
@@ -103,6 +104,8 @@ Required behavior:
 The candidate answer is later rendered by the shared deterministic report
 contract. Never invent evidence, numbers, scenario conclusions, or evaluator-only
 fields. {STRUCTURED_DIMENSION_GUIDANCE}
+
+{DETERMINISTIC_ANALYTICAL_GUIDANCE}
 """
 
 

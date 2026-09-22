@@ -15,6 +15,7 @@ from agents.evidence import (
 )
 from agents.model_usage import run_agent_with_usage
 from agents.output_contract import (
+    DETERMINISTIC_ANALYTICAL_GUIDANCE,
     STRUCTURED_DIMENSION_GUIDANCE,
     require_strict_output,
     strict_output_type,
@@ -157,6 +158,8 @@ Return only a valid SpecialistResult. Keep findings concise and decision-useful.
 
 Procedural skill guidance:
 {_skill_guidance()}
+
+{DETERMINISTIC_ANALYTICAL_GUIDANCE}
 """
 
 

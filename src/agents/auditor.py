@@ -8,7 +8,11 @@ from agents import Agent
 from agents.audit_evidence import AuditEvidenceError, persist_audit_result
 from agents.correction import run_bounded_evidence_correction
 from agents.model_usage import run_agent_with_usage
-from agents.output_contract import require_strict_output, strict_output_type
+from agents.output_contract import (
+    DETERMINISTIC_ANALYTICAL_GUIDANCE,
+    require_strict_output,
+    strict_output_type,
+)
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from schemas.audit import AuditResult
@@ -106,6 +110,9 @@ answer and must not include unsupported business explanations.
 
 Procedural skill guidance:
 {_skill_guidance()}
+
+Use run_analytical only for expected-grid coverage checks.
+{DETERMINISTIC_ANALYTICAL_GUIDANCE}
 """
 
 AUDITOR_OBJECTIVE = DATA_AUDITOR_OBJECTIVE

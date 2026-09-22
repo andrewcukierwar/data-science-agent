@@ -15,6 +15,7 @@ from agents.evidence import (
 )
 from agents.model_usage import run_agent_with_usage
 from agents.output_contract import (
+    DETERMINISTIC_ANALYTICAL_GUIDANCE,
     STRUCTURED_DIMENSION_GUIDANCE,
     require_strict_output,
     strict_output_type,
@@ -145,6 +146,12 @@ design or data cannot support a strong conclusion.
 
 Procedural skill guidance:
 {_skill_guidance()}
+
+Use run_analytical only for binary_experiment. Use Python for other inferential
+procedures. Because this role has no SQL tool, use only a canonical complete SQL
+source prepared in the shared ledger by the Lead-assigned Analyst or Data Auditor;
+inspect that retained event before executing the primitive.
+{DETERMINISTIC_ANALYTICAL_GUIDANCE}
 """
 
 

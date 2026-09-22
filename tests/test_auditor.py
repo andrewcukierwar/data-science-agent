@@ -43,6 +43,7 @@ def test_data_auditor_is_structured_and_cannot_delegate() -> None:
         "inspect_relations",
         "run_sql",
         "run_python",
+        "run_analytical",
         "inspect_evidence",
     ]
 

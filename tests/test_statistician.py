@@ -29,7 +29,7 @@ from tools.sql import DuckDBExecutionService
 from tools.workspace import WorkspaceManager
 
 
-def test_statistician_is_structured_python_only_and_cannot_delegate() -> None:
+def test_statistician_is_structured_with_binary_primitive_and_cannot_delegate() -> None:
     agent = build_statistician_agent(model="test-model")
 
     assert agent.name == "Statistician"
@@ -40,6 +40,7 @@ def test_statistician_is_structured_python_only_and_cannot_delegate() -> None:
     assert [tool.name for tool in agent.tools] == [
         "read_document",
         "run_python",
+        "run_analytical",
         "inspect_evidence",
     ]
 

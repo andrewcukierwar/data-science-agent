@@ -36,7 +36,14 @@ from agents.runtime import (
     allowed_tools_for_role,
 )
 from orchestration.budgets import BudgetResource
+from schemas.analytical import (
+    AnalyticalBindingPointer,
+    AnalyticalRequest,
+    AnalyticalResultSummary,
+    AnalyticalToolOutput,
+)
 from schemas.run_state import ArtifactKind, ToolEventStatus
+from tools.analytical import AnalyticalExecutionError, AnalyticalExecutionService
 from tools.results import result_json
 from tools.sql import (
     RelationInspectionError,
@@ -748,6 +755,131 @@ def run_python(
         return _error_response(tool_name, error)
 
 
+@function_tool(strict_mode=False)
+def run_analytical(
+    ctx: RunContextWrapper[AgentRunContext],
+    request: AnalyticalRequest,
+) -> ToolOutputText:
+    """Run one typed deterministic analytical primitive on retained evidence.
+
+    The operation discriminator selects coverage, entity_aggregate, ratio,
+    contrast, reconciliation, or binary_experiment. Role guards allow coverage
+    for Data Auditor; entity_aggregate, ratio, contrast, and reconciliation for
+    Analyst; binary_experiment for Statistician; and that exact union for the
+    Generalist. Lead and Critic cannot execute this tool.
+
+    Source operations accept only canonical successful, complete, untruncated
+    run_sql tool_event_id values. Derived operations accept canonical
+    run_analytical event IDs and retained quantity names. The response includes
+    the canonical tool event ID, a distinct analytical record ID, and published
+    /value pointers. The full typed record is included when it fits the configured
+    model limit; otherwise explicit truncation flags, typed result summaries, and
+    inspect_reference identify the retained record for inspect_evidence paging.
+    Inspect the result scopes, quantities, warnings, and details before authoring a
+    claim. For a bound
+    metric or statistical assessment, use the analytical_record source and the
+    returned pointer for every numerical field; leave numerical fields and the
+    claim result_id null so application finalization copies exact values and
+    assigns the separate persisted claim ID.
+
+    Specify business semantics explicitly: source, grain, date/cohort,
+    population, period/window, dimensions, numerator, denominator, aggregation,
+    expected grid/cadence, reconciliation tolerances, or experiment arms,
+    outcome, confidence level, practical threshold, and design assumptions as
+    applicable. A post-join row count is not an entity count. Sparse event dates
+    are not missing reporting dates without an explicit expectation.
+
+    Args:
+        request: One strictly validated request selected by its operation field.
+    """
+
+    tool_name = "run_analytical"
+    try:
+        context = _context(ctx)
+        context.require_analytical_operation(request.operation)
+        record = AnalyticalExecutionService(context.ledger).execute(request)
+        pointers = tuple(
+            AnalyticalBindingPointer(
+                result_index=result_index,
+                quantity=quantity_name,
+                pointer=(
+                    f"/results/{result_index}/quantities/"
+                    f"{quantity_name.replace('~', '~0').replace('/', '~1')}/value"
+                ),
+                value_available=quantity.value is not None,
+            )
+            for result_index, result in enumerate(record.results)
+            for quantity_name, quantity in result.quantities.items()
+        )
+        output = AnalyticalToolOutput(
+            tool_event_id=record.tool_event_id,
+            analytical_record_id=record.result_id,
+            operation=record.operation,
+            inspect_reference=record.tool_event_id,
+            record=record,
+            record_included=True,
+            result_count=len(record.results),
+            result_summaries=(),
+            result_summaries_truncated=False,
+            binding_pointers=pointers,
+            binding_pointers_truncated=False,
+        )
+        if len(output.model_dump_json()) > context.run_config.max_text_chars:
+            summaries: list[AnalyticalResultSummary] = []
+            visible_pointers: list[AnalyticalBindingPointer] = []
+            output = output.model_copy(
+                update={
+                    "record": None,
+                    "record_included": False,
+                    "binding_pointers": (),
+                    "binding_pointers_truncated": bool(pointers),
+                    "result_summaries_truncated": bool(record.results),
+                }
+            )
+            for result_index, result in enumerate(record.results):
+                summary = AnalyticalResultSummary(
+                    result_index=result_index,
+                    scope=result.scope,
+                    method=result.method,
+                    quantities=result.quantities,
+                    warnings=result.warnings,
+                )
+                result_pointers = [
+                    pointer
+                    for pointer in pointers
+                    if pointer.result_index == result_index
+                ]
+                candidate = output.model_copy(
+                    update={
+                        "result_summaries": (*summaries, summary),
+                        "result_summaries_truncated": (
+                            result_index + 1 < len(record.results)
+                        ),
+                        "binding_pointers": (*visible_pointers, *result_pointers),
+                        "binding_pointers_truncated": (
+                            len(visible_pointers) + len(result_pointers) < len(pointers)
+                        ),
+                    }
+                )
+                if len(candidate.model_dump_json()) > context.run_config.max_text_chars:
+                    break
+                summaries.append(summary)
+                visible_pointers.extend(result_pointers)
+                output = candidate
+        return _sdk_response(ToolResponse.ok(tool_name, output.model_dump(mode="json")))
+    except AnalyticalExecutionError as error:
+        return _sdk_response(
+            ToolResponse.failed(
+                tool_name,
+                error.code,
+                str(error),
+                data={"tool_event_id": error.tool_event_id},
+            )
+        )
+    except Exception as error:
+        return _error_response(tool_name, error)
+
+
 @function_tool
 def save_artifact(
     ctx: RunContextWrapper[AgentRunContext],
@@ -796,6 +928,7 @@ _ALL_TOOLS: tuple[FunctionTool, ...] = (
     inspect_relations,
     run_sql,
     run_python,
+    run_analytical,
     save_artifact,
     inspect_evidence,
 )
@@ -869,6 +1002,7 @@ __all__ = [
     "inspect_evidence",
     "read_document",
     "run_python",
+    "run_analytical",
     "run_sql",
     "save_artifact",
     "tools_for_role",

@@ -40,6 +40,7 @@ def test_analyst_is_structured_and_cannot_delegate() -> None:
         "inspect_relations",
         "run_sql",
         "run_python",
+        "run_analytical",
         "save_artifact",
         "inspect_evidence",
     ]

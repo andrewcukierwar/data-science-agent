@@ -40,8 +40,36 @@ STRUCTURED_DIMENSION_GUIDANCE = (
     "Calculations must still derive from approved inputs. Lead can select full "
     "persisted specialist metrics/statistics using selected_result_ids, without "
     "recreating their fields. Only explicitly selected statistics are final; "
-    "omit/reject superseded results. Retain material caveats and definition context."
+    "omit/reject superseded results. Retain material caveats and definition context. "
+    "A run_analytical analytical_record_id identifies computation evidence; it is "
+    "not a claim result_id and must not be placed in selected_result_ids."
 )
+
+
+DETERMINISTIC_ANALYTICAL_GUIDANCE = """Deterministic analytical workflow:
+
+1. Inspect relation schemas and business definitions before choosing an operation.
+2. Use narrow SQL projections and legitimate filters to create clean, complete
+   retained sources with canonical tool_event_id references. Preserve the intended
+   population. Never treat a truncated/sample result as complete, raise capture
+   caps, or recombine hidden partitions. If the complete source cannot fit, disclose
+   the limitation and use bounded SQL/Python that preserves provenance.
+3. State the source, grain, date/cohort field, population, period, observation
+   window, dimensions, numerator, denominator, aggregation, expected grid/cadence,
+   reconciliation tolerances, or experiment arms/outcome/practical threshold as
+   applicable, then call the role-approved run_analytical operation. Prefer it over
+   manual arithmetic when it supports the requested calculation; retain SQL/Python
+   for exploration, source construction, and unsupported calculations.
+4. Inspect every returned scope, quantity, warning, and detail before using it.
+   Entity counts must come from the entity-first operation, not post-join row counts.
+   Include zero-activity entities when the estimand requires them. Missing dates
+   require an explicit expected date/grid or cadence; sparse event data alone does
+   not establish a reporting gap.
+5. For a MetricComparison, StatisticalAssessment, or numerical Finding, bind every
+   numerical field to the returned analytical_record /value pointer. Leave model
+   numerical fields and result_id null. Application persistence hydrates the exact
+   values and assigns a separate specialist claim result_id; Lead selects those
+   persisted claim IDs, and the generalist uses the same finalizer."""
 
 
 class AgentOutputContractError(ModelBehaviorError):
@@ -114,6 +142,7 @@ PRODUCTION_AGENT_OUTPUT_TYPES: MappingProxyType[AgentRole, type[BaseModel]] = (
 
 
 __all__ = [
+    "DETERMINISTIC_ANALYTICAL_GUIDANCE",
     "PRODUCTION_AGENT_OUTPUT_TYPES",
     "STRUCTURED_DIMENSION_GUIDANCE",
     "AgentOutputContractError",

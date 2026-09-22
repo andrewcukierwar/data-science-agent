@@ -17,6 +17,7 @@ from analytics.primitives import (
 from orchestration.ledger import AnalysisLedger
 from schemas.analytical import (
     AnalyticalRecord,
+    AnalyticalRequest,
     AnalyticalResult,
     BinaryExperimentRequest,
     ContrastRequest,
@@ -32,14 +33,15 @@ from schemas.computation import ComputationBinding, ComputedField
 from schemas.run_state import ToolEvent, ToolEventStatus
 from tools.results import MAX_SQL_RESULT_BYTES, result_json
 
-AnalyticalRequest = (
-    CoverageRequest
-    | EntityAggregateRequest
-    | ContrastRequest
-    | RatioRequest
-    | ReconciliationRequest
-    | BinaryExperimentRequest
-)
+
+class AnalyticalExecutionError(ValueError):
+    """A failed analytical execution whose canonical event was retained."""
+
+    code = "analytical_execution_failed"
+
+    def __init__(self, message: str, tool_event_id: str) -> None:
+        self.tool_event_id = tool_event_id
+        super().__init__(message)
 
 
 def digest(value):
@@ -149,8 +151,9 @@ def _compatible(left, right, *, same_period, same_measure):
 class AnalyticalExecutionService:
     """One native, bounded-input computation and one terminal ledger event.
 
-    Not registered with the Agents SDK. Input acquisition remains the existing
-    bounded SQL service; no hidden SQL, model calls, or source rewrites occur.
+    The agent adapter calls this same library boundary. Input acquisition remains
+    the existing bounded SQL service; no hidden SQL, model calls, or source
+    rewrites occur.
     """
 
     def __init__(self, ledger: AnalysisLedger):
@@ -375,7 +378,7 @@ class AnalyticalExecutionService:
                     error=f"{type(exc).__name__}: {exc}",
                 )
             )
-            raise
+            raise AnalyticalExecutionError(str(exc), event_id) from exc
         self.ledger.append_tool_event(
             ToolEvent(
                 id=event_id,

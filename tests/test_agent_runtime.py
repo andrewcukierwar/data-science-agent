@@ -194,6 +194,7 @@ def test_role_tool_surfaces_preserve_project_plan_permissions() -> None:
         "inspect_relations",
         "run_sql",
         "run_python",
+        "run_analytical",
         "inspect_evidence",
     ]
     assert "run_sql" not in [

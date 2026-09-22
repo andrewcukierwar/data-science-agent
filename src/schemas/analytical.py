@@ -2,7 +2,7 @@
 
 from datetime import date
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -276,3 +276,49 @@ class AnalyticalRecord(AnalyticalModel):
     request: dict[str, Any]
     inputs: tuple[InputBinding, ...]
     results: tuple[AnalyticalResult, ...]
+
+
+AnalyticalRequest = Annotated[
+    CoverageRequest
+    | EntityAggregateRequest
+    | ContrastRequest
+    | RatioRequest
+    | ReconciliationRequest
+    | BinaryExperimentRequest,
+    Field(discriminator="operation"),
+]
+
+
+class AnalyticalBindingPointer(AnalyticalModel):
+    """A pointer to one published analytical quantity value."""
+
+    result_index: int = Field(ge=0)
+    quantity: NonEmptyString
+    pointer: NonEmptyString
+    value_available: bool
+
+
+class AnalyticalResultSummary(AnalyticalModel):
+    """Model-visible result fields; large diagnostic details stay inspectable."""
+
+    result_index: int = Field(ge=0)
+    scope: Scope
+    method: NonEmptyString
+    quantities: dict[str, Quantity]
+    warnings: tuple[str, ...] = ()
+
+
+class AnalyticalToolOutput(AnalyticalModel):
+    """Model-visible execution result with distinct evidence and claim identities."""
+
+    tool_event_id: NonEmptyString
+    analytical_record_id: NonEmptyString
+    operation: NonEmptyString
+    inspect_reference: NonEmptyString
+    record: AnalyticalRecord | None
+    record_included: bool
+    result_count: int = Field(ge=0)
+    result_summaries: tuple[AnalyticalResultSummary, ...]
+    result_summaries_truncated: bool
+    binding_pointers: tuple[AnalyticalBindingPointer, ...]
+    binding_pointers_truncated: bool

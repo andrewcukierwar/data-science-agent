@@ -159,6 +159,7 @@ def test_generalist_has_all_primitives_but_no_specialist_surface() -> None:
         "inspect_relations",
         "run_sql",
         "run_python",
+        "run_analytical",
         "save_artifact",
         "inspect_evidence",
         "update_investigation_plan",
