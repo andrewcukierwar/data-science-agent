@@ -1,5 +1,14 @@
 # P0.2: numerical result binding and selection (contract 1.0)
 
+P1.1a addendum (2026-09-22): the library-only deterministic analytical layer adds
+`analytical_record` as an output source. Its bindings address only published
+quantity values, validate retained record/input identities, and use the same
+exact-value and successful-provenance checks described below. It introduces no
+agent tool registration or prompt adoption. See the
+[analytical primitives contract](analytical-primitives-contract.md) for the
+explicit fixed-point projection policy and API. The remainder of this document
+records the original P0.2 implementation and verification.
+
 P0.2 uses the unchanged P0.1 execution payloads. A `ComputationBinding` names
 one canonical `tool_event_id`, an output source, and an explicit mapping from
 **each numerical claim field** to its supplying JSON pointer. Merely citing an

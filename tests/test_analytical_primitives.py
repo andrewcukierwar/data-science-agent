@@ -803,3 +803,101 @@ def test_production_analytical_modules_have_no_hidden_dependencies():
             token in path.read_text()
             for token in ("Meta", "Google", "Affiliate", '"Q1"', '"Q2"')
         )
+
+
+def test_retained_record_is_inspectable_without_recomputation(tmp_path):
+    from agents import inspect_evidence
+    from tests.test_agent_runtime import _invoke
+    from tests.test_result_binding import _context
+
+    context = _context(tmp_path)
+    source = context.sql_service.execute(
+        "SELECT 1 AS id, DATE '2032-02-10' AS when, revenue AS n FROM orders"
+    )
+    assert source.success
+    service = AnalyticalExecutionService(context.ledger)
+    record = service.execute(
+        aggregate_request(
+            TableInput(tool_event_id=source.tool_event_id, relation="orders"),
+            denominator=None,
+            aggregation="sum",
+            unit="credit",
+        )
+    )
+    context.ledger = AnalysisLedger(context.ledger.state_path)
+    context.run_config = context.run_config.model_copy(
+        update={"max_text_chars": 100_000}
+    )
+    before = context.ledger.budget.model_dump()
+    inspected = _invoke(inspect_evidence, context, {"reference": record.tool_event_id})
+    assert inspected.success and inspected.data["result_available"]
+    assert inspected.data["provenance_verified"]
+    assert inspected.data["output"]["record"] == record.model_dump(mode="json")
+    assert context.ledger.budget.model_dump() == before
+    assert len(context.ledger.tool_events) == 2
+
+
+def test_large_fixed_point_integer_is_not_silently_rounded_for_binding(tmp_path):
+    service, refs, _ = setup(
+        tmp_path,
+        {
+            "raw": {
+                "id": [1],
+                "when": [day(0)],
+                "n": [Decimal("9007199254740993")],
+            }
+        },
+    )
+    record = service.execute(
+        aggregate_request(
+            refs["raw"], denominator=None, aggregation="sum", unit="credit"
+        )
+    )
+    assert quantity(record) == 9007199254740993
+    assert rational(record) == Fraction(9007199254740993)
+    claim = MetricComparison(
+        metric_key="total",
+        baseline_period="period",
+        comparison_period="period",
+        comparison_type="level",
+        unit="credit",
+        evidence_refs=[record.tool_event_id],
+        computation=analytical_binding(record, {"value": "value"}),
+    )
+    with pytest.raises(ResultBindingError, match="represented exactly"):
+        resolve_result(claim, service.ledger)
+
+
+def test_component_and_indicator_ratio_building_blocks(tmp_path):
+    service, refs, _ = setup(
+        tmp_path,
+        {
+            "raw": {
+                "id": [1, 2],
+                "when": [day(0), day(1)],
+                "n": [2, 9],
+                "d": [10, 30],
+                "responded": [0, 1],
+            }
+        },
+    )
+    request = aggregate_request(refs["raw"])
+    components = service.execute(request)
+    assert rational(components) == Fraction(11, 40)
+    response = service.execute(
+        request.model_copy(
+            update={
+                "numerator": Measure(
+                    kind="entity_value",
+                    column="responded",
+                    semantic_key="responded",
+                    unit="responses",
+                ),
+                "denominator": Measure(
+                    kind="entity_count", semantic_key="eligible units", unit="entities"
+                ),
+                "unit": "fraction",
+            }
+        )
+    )
+    assert rational(response) == Fraction(1, 2)

@@ -197,6 +197,13 @@ def coverage(request: CoverageRequest, table: Table):
                 semantics={
                     "operation": "coverage",
                     "cadence": request.cadence,
+                    "expected_date_offsets": sorted(
+                        (day - request.period.start).days
+                        for day in request.expected_dates
+                    )
+                    if request.expected_dates is not None
+                    else None,
+                    "dimension_field": request.dimension_field,
                     "expected_dimensions": request.expected_dimensions,
                 },
             ),
@@ -432,6 +439,12 @@ def reconciliation(request: ReconciliationRequest, table: Table):
                 request,
                 semantics={
                     "operation": "linear_reconciliation",
+                    "result_column": request.result_column,
+                    "components": {
+                        column: str(coefficient)
+                        for column, coefficient in request.components.items()
+                    },
+                    "intercept": str(request.intercept),
                     "unit": request.unit,
                     "absolute_tolerance": str(request.absolute_tolerance),
                     "relative_tolerance": str(request.relative_tolerance),
@@ -532,6 +545,8 @@ def binary_experiment(request: BinaryExperimentRequest, table: Table):
                     "control": request.control,
                     "treatment": request.treatment,
                     "direction": "treatment-minus-control",
+                    "confidence_level": request.confidence_level,
+                    "practical_threshold": str(request.practical_threshold),
                     "design_assumptions": request.design_assumptions,
                 },
             ),

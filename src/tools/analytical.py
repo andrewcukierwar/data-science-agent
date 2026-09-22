@@ -124,6 +124,9 @@ def _compatible(left, right, *, same_period, same_measure):
         or a.dimensions != b.dimensions
     ):
         raise ValueError("incompatible population/grain/dimensions")
+    for choice in ("date_policy", "include_zero_activity"):
+        if a.semantics.get(choice) != b.semantics.get(choice):
+            raise ValueError("incompatible population/date selection policy")
     if same_period and a.period != b.period:
         raise ValueError("incompatible periods")
     if (a.period.end - a.period.start) != (b.period.end - b.period.start):
@@ -263,7 +266,21 @@ class AnalyticalExecutionService:
                     )
                 results = [
                     AnalyticalResult(
-                        scope=target.scope,
+                        scope=target.scope.model_copy(
+                            update={
+                                "semantics": {
+                                    "operation": "contrast",
+                                    "comparison_type": request.comparison_type,
+                                    "quantity": request.baseline.quantity,
+                                    "baseline_scope": a.scope.model_dump(mode="json"),
+                                    "comparison_scope": target.scope.model_dump(
+                                        mode="json"
+                                    )
+                                    if request.comparison is not None
+                                    else None,
+                                }
+                            }
+                        ),
                         method=request.comparison_type,
                         quantities=quantities,
                         warnings=tuple(dict.fromkeys(warnings)),
@@ -300,6 +317,13 @@ class AnalyticalExecutionService:
                                     "semantic_key": request.semantic_key,
                                     "numerator": a.scope.semantics,
                                     "denominator": b.scope.semantics,
+                                    "numerator_quantity": request.numerator.quantity,
+                                    "denominator_quantity": (
+                                        request.denominator.quantity
+                                    ),
+                                    "numerator_unit": qa.unit,
+                                    "denominator_unit": qb.unit,
+                                    "zero_denominator": request.zero_denominator,
                                 }
                             }
                         ),
