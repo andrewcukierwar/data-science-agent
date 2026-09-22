@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
@@ -97,6 +98,24 @@ def resolve_result[Claim: MetricComparison | StatisticalAssessment | Finding](
             if output.get("stdout_truncated", False):
                 raise ValueError("cannot bind truncated Python stdout")
             document = json.loads(output["stdout"], object_pairs_hook=_unique_object)
+        elif (
+            binding.source == "analytical_record"
+            and event.tool_name == "run_analytical"
+        ):
+            from tools.analytical import validate_analytical_record
+
+            document = validate_analytical_record(ledger, event.id).model_dump(
+                mode="json"
+            )
+            # Only published quantity values are bindable, never exact-number
+            # strings, metadata, or request literals such as a threshold.
+            if any(
+                not re.fullmatch(r"/results/\d+/quantities/[^/]+/value", f.pointer)
+                for f in binding.fields
+            ):
+                raise ValueError(
+                    "analytical binding must address a published quantity value"
+                )
         else:
             raise ValueError("binding source does not match execution type")
         fields = [item.field for item in binding.fields]

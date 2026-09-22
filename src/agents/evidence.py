@@ -472,6 +472,22 @@ def has_source_lineage(ledger: AnalysisLedger, references: list[str]) -> bool:
         return False
     if not referenced_artifacts and not has_known_reference:
         return False
+    for event in events:
+        if getattr(event, "tool_name", None) == "run_analytical":
+            from tools.analytical import validate_analytical_record
+
+            try:
+                record = validate_analytical_record(ledger, event.id)
+            except (ValueError, KeyError, TypeError):
+                return False
+            # Every dependency must have source lineage; one legitimate input
+            # cannot launder a constant-only or failed sibling computation.
+            if not all(
+                has_source_lineage(ledger, [item.tool_event_id])
+                for item in record.inputs
+            ):
+                return False
+            return True
     inspected_sql = False
     inspected_python = False
     relation_names = _approved_relation_names(ledger)

@@ -22,7 +22,7 @@ class ComputationBinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tool_event_id: NonEmptyString
-    source: Literal["sql_rows", "python_stdout_json"]
+    source: Literal["sql_rows", "python_stdout_json", "analytical_record"]
     fields: list[ComputedField] = Field(min_length=1)
 
 
