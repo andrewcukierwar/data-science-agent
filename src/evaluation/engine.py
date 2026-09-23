@@ -35,6 +35,7 @@ from evaluation.primitives import (
     evaluate_root_cause,
     evaluate_statistics,
     evaluate_task_completeness,
+    evaluate_unsupported_assertions,
     evaluate_unsupported_claims,
 )
 from evaluation.workspace_identity import (
@@ -211,8 +212,10 @@ def evaluate_workspace(
             executed_refs=executed_refs,
         )
     )
+    legacy_contract = rules.evaluator_version != "1.3"
     final_metrics, metric_set_checks = compile_final_metric_set(
-        state.metric_comparisons
+        state.metric_comparisons,
+        legacy_contract=legacy_contract,
     )
     checks.extend(metric_set_checks)
     if rules.expected_metrics:
@@ -220,6 +223,7 @@ def evaluate_workspace(
             evaluate_numeric_comparisons(
                 final_metrics,
                 rules.expected_metrics,
+                legacy_contract=legacy_contract,
             )
         )
     else:
@@ -237,10 +241,16 @@ def evaluate_workspace(
             state,
             snapshot.report_text,
             rules.statistics_policy,
+            legacy_contract=legacy_contract,
         )
     )
+    unsupported_claim_check = (
+        evaluate_unsupported_claims
+        if legacy_contract
+        else evaluate_unsupported_assertions
+    )
     checks.extend(
-        evaluate_unsupported_claims(
+        unsupported_claim_check(
             _analysis_text(snapshot),
             forbidden_patterns=rules.unsupported_claim_patterns
             or (
@@ -258,6 +268,7 @@ def evaluate_workspace(
             state,
             snapshot.report_text,
             rules.task_policy,
+            legacy_contract=legacy_contract,
         )
     )
 
@@ -268,7 +279,7 @@ def evaluate_workspace(
     status = EvaluatorStatus.FAIL if failures else EvaluatorStatus.PASS
     result = EvaluatorResult(
         numerical_result_contract_version="1.0"
-        if state.schema_version == "1.2"
+        if state.schema_version in {"1.2", "1.3"}
         else None,
         result_id=f"{state.run_id}-{rules.evaluator_version}",
         run_id=state.run_id,

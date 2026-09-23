@@ -12,8 +12,9 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from agents import DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
+from agents import DEFAULT_AGENT_RUN_TIMEOUT_SECONDS, opaque_workspace_id
 from benchmark import (
+    BenchmarkCell,
     BenchmarkCellResult,
     BenchmarkError,
     BenchmarkRunner,
@@ -39,7 +40,7 @@ from evaluation.workspace_identity import (
 )
 from orchestration.ledger import AnalysisLedger
 from orchestration.pricing import MODEL_PRICING
-from scenarios import discover_scenarios
+from scenarios import get_scenario
 from schemas.run_state import (
     AttemptStatus,
     CostBreakdown,
@@ -47,16 +48,13 @@ from schemas.run_state import (
     ToolEvent,
     ToolEventStatus,
 )
+from tools.workspace import WorkspaceManager
 
 FIXED_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 SCENARIO_ID = "meaningful-ab-treatment-effect"
 # Fixture identities must track the catalog rather than restating it; the
 # deliberate version gate lives in tests/test_scenario_catalog.py.
-_CATALOG_EVALUATOR_VERSION = next(
-    registration.metadata.evaluator_version
-    for registration in discover_scenarios()
-    if registration.scenario_id == SCENARIO_ID
-)
+_CATALOG_EVALUATOR_VERSION = get_scenario(SCENARIO_ID).metadata.evaluator_version
 
 
 def _sources(_registration, destination: Path) -> tuple[Path, Path]:
@@ -170,6 +168,76 @@ def test_plan_is_persisted_before_execution_and_resume_skips_completed_cells(
 
     with pytest.raises(BenchmarkError, match="already contains run records"):
         runner.execute(manifest_path)
+
+
+def test_context_versions_and_public_task_are_shared_across_architectures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import orchestration.generalist_runner as single_runner_module
+    import orchestration.runner as multi_runner_module
+    from benchmark.runner import (
+        MODEL_CONTEXT_CONTRACT_VERSION,
+        PUBLIC_CHART_DELIVERABLE,
+        PUBLIC_TASK_CONTRACT_VERSION,
+        _public_task,
+    )
+
+    runner = BenchmarkRunner(tmp_path / "workspaces", source_preparer=_sources)
+    manifest = runner.build_manifest(
+        manifest_id="context-contract-fixture",
+        scenario_ids=[SCENARIO_ID],
+        architectures=("multi-agent", "single-agent"),
+        repetitions=1,
+        model="fixture-model",
+        execution_mode=ExecutionMode.LIVE,
+        repetition_justification="Deterministic context-contract fixture.",
+    )
+    parameters = manifest.run_configuration.parameters
+    assert parameters["model_context_contract_version"] == "2.0"
+    assert parameters["public_task_contract_version"] == "1.1"
+    assert parameters["public_chart_deliverable"] == PUBLIC_CHART_DELIVERABLE
+    assert parameters["evaluator_contract_version"] == "1.3"
+    assert parameters["audit_schema_version"] == "3.0"
+    assert MODEL_CONTEXT_CONTRACT_VERSION == "2.0"
+    assert PUBLIC_TASK_CONTRACT_VERSION == "1.1"
+    internal_run_ids = tuple(parameters["cell_run_ids"].values())
+    assert all(SCENARIO_ID in run_id for run_id in internal_run_ids)
+    assert all(
+        SCENARIO_ID not in opaque_workspace_id(run_id) for run_id in internal_run_ids
+    )
+
+    captured: list[str] = []
+
+    class FakeArchitecture:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run_sync(self, _run_id, objective, *, workspace):
+            captured.append(objective)
+            return object()
+
+    monkeypatch.setattr(multi_runner_module, "AnalysisRunner", FakeArchitecture)
+    monkeypatch.setattr(single_runner_module, "GeneralistRunner", FakeArchitecture)
+
+    registration = get_scenario(SCENARIO_ID, "1.1")
+    question = registration.metadata.user_question
+    for architecture in ("multi-agent", "single-agent"):
+        run_id = f"context-{architecture}"
+        workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(run_id)
+        cell = BenchmarkCell(
+            scenario=registration,
+            architecture=architecture,
+            repetition=1,
+            run_id=run_id,
+            workspace_path=workspace.root,
+            inputs_source=workspace.inputs,
+            docs_source=workspace.docs,
+        )
+        runner._call_architecture(cell, workspace, manifest)
+
+    assert captured == [_public_task(question), _public_task(question)]
+    assert all("chart" in task.lower() for task in captured)
 
 
 def test_plan_freezes_agent_run_wall_clock_timeout(tmp_path) -> None:
@@ -405,7 +473,7 @@ def test_offline_rescore_writes_new_manifest_without_rerunning_agents(
 
     current_rules = ScenarioRules(
         scenario_id=SCENARIO_ID,
-        scenario_version="1.0",
+        scenario_version="1.1",
         evaluator_version=_CATALOG_EVALUATOR_VERSION,
     )
 
@@ -417,7 +485,7 @@ def test_offline_rescore_writes_new_manifest_without_rerunning_agents(
                     run_id=run_id,
                     scenario=SimpleNamespace(
                         scenario_id=SCENARIO_ID,
-                        scenario_version="1.0",
+                        scenario_version="1.1",
                         metadata=SimpleNamespace(
                             evaluator_version=_CATALOG_EVALUATOR_VERSION
                         ),
@@ -433,7 +501,7 @@ def test_offline_rescore_writes_new_manifest_without_rerunning_agents(
     rescored = runner.rescore(
         manifest_path,
         output_path=output_path,
-        rules_by_scenario={(SCENARIO_ID, "1.0"): current_rules},
+        rules_by_scenario={(SCENARIO_ID, "1.1"): current_rules},
     )
 
     assert output_path.is_file()
@@ -609,7 +677,7 @@ def test_canonical_rescore_isolates_crashes_and_rebuilds_aggregates(
                     run_id=run_id,
                     scenario=SimpleNamespace(
                         scenario_id=SCENARIO_ID,
-                        scenario_version="1.0",
+                        scenario_version="1.1",
                         metadata=SimpleNamespace(
                             evaluator_version=_CATALOG_EVALUATOR_VERSION
                         ),
@@ -1005,7 +1073,7 @@ def test_single_agent_benchmark_record_exposes_real_attempt_history(
     record = summary.manifest.run_records[0]
 
     assert record.architecture == "single-agent"
-    assert record.attempt_id is not None
+    assert record.attempt_id is not None, record.lifecycle.model_dump_json()
     assert len(record.attempt_history) == 1
     attempt = record.attempt_history[0]
     assert attempt.attempt_id == record.attempt_id

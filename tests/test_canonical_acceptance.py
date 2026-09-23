@@ -137,7 +137,7 @@ def test_exact_metric_dimensions_win_over_consistent_specific_match() -> None:
     assert _canonical_numeric_ground_truth_failures(comparisons) == []
 
 
-def test_consistent_compatible_metric_supersets_are_reconciled() -> None:
+def test_wrong_dimension_supersets_do_not_match_expected_metric() -> None:
     comparisons = _replace_ltv_comparisons(
         [
             _ltv_comparison(
@@ -153,10 +153,13 @@ def test_consistent_compatible_metric_supersets_are_reconciled() -> None:
         ]
     )
 
-    assert _canonical_numeric_ground_truth_failures(comparisons) == []
+    failures = _canonical_numeric_ground_truth_failures(comparisons)
+    assert any(
+        "missing numeric ground-truth finding" in failure for failure in failures
+    )
 
 
-def test_conflicting_compatible_metric_matches_fail() -> None:
+def test_wrong_dimension_supersets_do_not_compete_as_final_answers() -> None:
     comparisons = _replace_ltv_comparisons(
         [
             _ltv_comparison(
@@ -174,8 +177,9 @@ def test_conflicting_compatible_metric_matches_fail() -> None:
 
     failures = _canonical_numeric_ground_truth_failures(comparisons)
 
-    assert any("materially conflicting" in failure for failure in failures)
-    assert any("meta-q2-90-day-ltv" in failure for failure in failures)
+    assert any(
+        "missing numeric ground-truth finding" in failure for failure in failures
+    )
 
 
 def test_incorrect_exact_metric_match_is_not_replaced_by_superset() -> None:
@@ -703,7 +707,9 @@ def test_completed_persisted_workspace_passes_without_executing_agents(
         f"- {finding_text} _(evidence: {evidence_ref})_\n\n"
         "## Recommendations\n\n"
         "- Govern spend with CAC, conversion, contribution-profit, and LTV "
-        f"guardrails. _(evidence: {evidence_ref})_\n",
+        f"guardrails. _(evidence: {evidence_ref})_\n\n"
+        "## Supporting Visualizations\n\n"
+        "- [canonical-chart](outputs/canonical-chart.png)\n",
         encoding="utf-8",
     )
     report = ArtifactManager(workspace, ledger).register(

@@ -15,8 +15,13 @@ from scenarios.catalog import (
     ScenarioRegistration,
 )
 from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
+from scenarios.definitions.business_root_cause import (
+    BUSINESS_ROOT_CAUSE_SCENARIOS,
+)
+from scenarios.definitions.data_quality import DATA_QUALITY_SCENARIOS
+from scenarios.definitions.experiments import EXPERIMENT_SCENARIOS
+from scenarios.definitions.mix import CHANNEL_MIX_CONFOUNDING_SCENARIO
 from scenarios.generator import SyntheticEcommerceConfig, SyntheticEcommerceGenerator
-from scenarios.injection import generate_canonical_profitability_scenario
 from scenarios.invariants import (
     BASELINE_ONLY_DOCUMENT_CLAIMS,
     ScenarioInvariantError,
@@ -44,11 +49,10 @@ def test_catalog_resolves_canonical_generator_evaluator_and_version() -> None:
     assert len(registrations) == len(
         {(item.scenario_id, item.scenario_version) for item in registrations}
     )
-    registration = get_scenario("canonical-q2-profitability", "1.0")
+    registration = get_scenario("canonical-q2-profitability", "1.1")
     assert registration.generator_name == "generate_canonical_profitability_scenario"
-    # The catalog evaluator version is advanced deliberately, never as a
-    # side effect. ``1.2`` carries R21 audit-provenance enforcement.
-    assert registration.evaluator_rules().evaluator_version == "1.2"
+    # The task and evaluator boundaries are versioned independently.
+    assert registration.evaluator_rules().evaluator_version == "1.3"
     assert registration.evaluation_spec.ground_truth == (
         *CANONICAL_PROFITABILITY_SCENARIO.ground_truth,
     )
@@ -57,8 +61,176 @@ def test_catalog_resolves_canonical_generator_evaluator_and_version() -> None:
         get_scenario("canonical-q2-profitability", "9.0")
 
 
+def test_public_task_periods_match_current_evaluator_scopes() -> None:
+    current_definitions = (
+        *BUSINESS_ROOT_CAUSE_SCENARIOS,
+        CHANNEL_MIX_CONFOUNDING_SCENARIO,
+    )
+    for definition in current_definitions:
+        registration = get_scenario(definition.scenario_id, "1.1")
+        question = registration.metadata.user_question.lower()
+        for condition in registration.evaluation_spec.injected_conditions:
+            assert condition.id.lower() not in question
+        injection = definition.generation_config.get("injection", {})
+        if isinstance(injection, dict):
+            for key, value in injection.items():
+                if "channel" in key.lower() and isinstance(value, str):
+                    assert value.lower() not in question
+        periods = {
+            (metric.baseline_period, metric.comparison_period)
+            for metric in registration.evaluation_spec.ground_truth
+            if metric.baseline_period.startswith("Q")
+            and metric.comparison_period.startswith("Q")
+        }
+        for baseline, comparison in periods:
+            assert baseline.lower() in question
+            assert comparison.lower() in question
+        if any(
+            metric.definition_context is not None
+            and metric.definition_context.observation_window == "90_day"
+            for metric in registration.evaluation_spec.ground_truth
+        ):
+            assert "90 days" in question
+
+    for definition in DATA_QUALITY_SCENARIOS:
+        registration = get_scenario(definition.scenario_id, "1.1")
+        required_scope = registration.evaluator_rules().data_quality_policy
+        question = registration.metadata.user_question
+        required_date_value = required_scope.required_issues[0].scope.date
+        assert required_date_value is not None
+        if "2025 q2" in question.lower():
+            assert required_date_value.year == 2025
+            assert required_date_value.month in {4, 5, 6}
+        else:
+            assert "latest available 2025 reporting period" in question.lower()
+            assert required_date_value.year == 2025
+        assert all(
+            condition.id.lower() not in question.lower()
+            for condition in registration.evaluation_spec.injected_conditions
+        )
+        injection = definition.generation_config.get("injection", {})
+        if isinstance(injection, dict):
+            for key, value in injection.items():
+                if "channel" in key.lower() and isinstance(value, str):
+                    assert value.lower() not in question.lower()
+
+    for definition in EXPERIMENT_SCENARIOS:
+        registration = get_scenario(definition.scenario_id, "1.1")
+        question = registration.metadata.user_question.lower()
+        expectation = registration.evaluation_spec.statistical_expectation
+        assert expectation is not None
+        assert "treatment minus control" in question
+        assert "randomly assigned" in question
+        assert "experiment enrollment" in question
+        assert "pooled two-proportion z test" in question
+        assert "unpooled wald confidence interval" in question
+        assert "cohen's h" in question
+        assert (
+            expectation.required_procedure.value
+            == "pooled_two_proportion_z_with_unpooled_wald_ci"
+        )
+        assert expectation.required_effect_size_method.value == "signed_cohen_h"
+
+    # The canonical task already names Q2 and remains textually unchanged.
+    assert get_scenario("canonical-q2-profitability", "1.1").metadata.user_question == (
+        "Why did profitability decline in Q2, and what should the company do about it?"
+    )
+
+
+def test_model_context_drops_scenario_and_evaluator_sentinel_metadata() -> None:
+    from evaluation.contracts import ScenarioMetadata
+
+    sentinel = "HIDDEN_SENTINEL_CAUSE_SCENARIO_7F31"
+    metadata = ScenarioMetadata(
+        scenario_id=sentinel,
+        scenario_version="1.1",
+        name=sentinel,
+        seed=42,
+        user_question="Assess the observed business results.",
+        evaluator_version="1.3",
+    )
+
+    context = metadata.model_visible_context()
+    encoded = context.model_dump_json()
+    assert context.user_question == metadata.user_question
+    assert sentinel not in encoded
+    assert "evaluator_version" not in encoded
+    assert "scenario_version" not in encoded
+
+
+def test_task_versions_preserve_v8_questions_and_all_numerical_truths() -> None:
+    scenario_ids = {
+        item.scenario_id
+        for item in discover_scenarios().registrations
+        if item.scenario_version == "1.1"
+    }
+    for scenario_id in scenario_ids:
+        legacy = get_scenario(scenario_id, "1.0")
+        current = get_scenario(scenario_id, "1.1")
+        legacy_metrics = tuple(
+            (
+                metric.metric_key,
+                metric.dimensions,
+                metric.baseline_period,
+                metric.comparison_period,
+                metric.expected_relative_change,
+                metric.tolerance,
+            )
+            for metric in legacy.evaluation_spec.ground_truth
+        )
+        current_metrics = tuple(
+            (
+                metric.metric_key,
+                metric.dimensions,
+                metric.baseline_period,
+                metric.comparison_period,
+                metric.expected_relative_change,
+                metric.tolerance,
+            )
+            for metric in current.evaluation_spec.ground_truth
+        )
+        assert current_metrics == legacy_metrics
+
+        old_expectation = legacy.evaluation_spec.statistical_expectation
+        new_expectation = current.evaluation_spec.statistical_expectation
+        if old_expectation is not None:
+            assert new_expectation is not None
+            assert (
+                old_expectation.expected_estimate,
+                old_expectation.estimate_tolerance,
+                old_expectation.expected_confidence_interval,
+                old_expectation.confidence_interval_tolerance,
+                old_expectation.expected_p_value,
+                old_expectation.p_value_tolerance,
+                old_expectation.expected_effect_size,
+                old_expectation.effect_size_tolerance,
+            ) == (
+                new_expectation.expected_estimate,
+                new_expectation.estimate_tolerance,
+                new_expectation.expected_confidence_interval,
+                new_expectation.confidence_interval_tolerance,
+                new_expectation.expected_p_value,
+                new_expectation.p_value_tolerance,
+                new_expectation.expected_effect_size,
+                new_expectation.effect_size_tolerance,
+            )
+
+    assert get_scenario("missing-reporting-day", "1.0").metadata.user_question == (
+        "Assess whether the available reporting supports a reliable Q2 business "
+        "comparison and describe any limitations."
+    )
+    assert (
+        "2025-05-31"
+        not in get_scenario("missing-reporting-day", "1.0").metadata.user_question
+    )
+    assert (
+        "2025 q2"
+        in get_scenario("missing-reporting-day", "1.1").metadata.user_question.lower()
+    )
+
+
 def test_catalog_rejects_duplicate_versioned_registration() -> None:
-    registration = get_scenario("canonical-q2-profitability", "1.0")
+    registration = get_scenario("canonical-q2-profitability", "1.1")
 
     with pytest.raises(ScenarioCatalogError, match="duplicate"):
         ScenarioCatalog((registration, registration))
@@ -67,19 +239,17 @@ def test_catalog_rejects_duplicate_versioned_registration() -> None:
 def test_canonical_generic_contract_preserves_model_visible_context_and_answer() -> (
     None
 ):
-    registration = get_scenario("canonical-q2-profitability", "1.0")
+    registration = get_scenario("canonical-q2-profitability", "1.1")
     legacy_context = CANONICAL_PROFITABILITY_SCENARIO.model_visible_context()
     generic_context = registration.model_context_contract()
 
     assert (
         registration.model_visible_context.model_dump() == legacy_context.model_dump()
     )
-    assert generic_context.scenario_id == legacy_context.scenario_id
-    assert generic_context.scenario_version == legacy_context.scenario_version
-    assert generic_context.name == legacy_context.name
     assert (
         generic_context.user_question == CANONICAL_PROFITABILITY_SCENARIO.user_question
     )
+    assert set(generic_context.model_dump()) == {"contract_version", "user_question"}
     model_text = generic_context.model_dump_json()
     assert all(
         metric.id not in model_text
@@ -133,7 +303,7 @@ def test_injected_scenario_documents_do_not_retain_baseline_only_assertions(
     a newly registered scenario cannot silently skip this check.
     """
 
-    registration = get_scenario(scenario_id, "1.0")
+    registration = get_scenario(scenario_id)
     generated = _generate_registered_scenario(registration)
 
     assert baseline_only_document_claims(generated.dataset) == ()
@@ -146,7 +316,9 @@ def test_injected_scenario_documents_do_not_retain_baseline_only_assertions(
 def test_every_declared_matrix_scenario_is_covered_by_the_document_regression() -> None:
     """The document regression must cover the full declared benchmark matrix."""
 
-    assert len(discover_scenarios().registrations) == 10
+    registrations = discover_scenarios().registrations
+    assert len({item.scenario_id for item in registrations}) == 10
+    assert len(registrations) == 20
 
 
 @pytest.mark.parametrize("claim", BASELINE_ONLY_DOCUMENT_CLAIMS)
@@ -155,7 +327,7 @@ def test_reintroducing_a_baseline_only_claim_fails_scenario_validation(
 ) -> None:
     """A document that reasserts injection status must fail generation."""
 
-    registration = get_scenario("retention-q2-deterioration", "1.0")
+    registration = get_scenario("retention-q2-deterioration")
     generated = registration.generate(_small_config())
     document = generated.dataset.business_definitions
     regressed = replace(
@@ -214,8 +386,8 @@ def test_common_invariants_reject_keys_dates_nulls_and_economic_identities() -> 
 
 
 def test_canonical_observable_ground_truth_is_registered_as_an_invariant() -> None:
-    registration = get_scenario("canonical-q2-profitability", "1.0")
-    generated = generate_canonical_profitability_scenario(_small_config())
+    registration = get_scenario("canonical-q2-profitability")
+    generated = registration.generate(_small_config())
     report = registration.validate_generated(generated)
     assert report.passed, report.violations
 

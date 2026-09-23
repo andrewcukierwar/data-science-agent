@@ -21,8 +21,8 @@ MISSING_REPORTING_DAY_SCENARIO = ScenarioDefinition(
     scenario_id="missing-reporting-day",
     name="Reporting coverage review",
     user_question=(
-        "Assess whether the available reporting supports a reliable Q2 business "
-        "comparison and describe any limitations."
+        "Assess whether the available 2025 Q2 reporting supports a reliable "
+        "business comparison and describe any limitations."
     ),
     generation_config={
         "baseline": {"seed": 42, "start_date": "2025-01-01", "period_days": 365},
@@ -84,8 +84,8 @@ PARTIAL_LATEST_DAY_SCENARIO = ScenarioDefinition(
     scenario_id="partial-latest-reporting-day",
     name="Latest reporting cutoff review",
     user_question=(
-        "Assess whether the latest available reporting period is complete enough "
-        "for a business decision and describe any limitations."
+        "Assess whether the latest available 2025 reporting period is complete "
+        "enough for a business decision and describe any limitations."
     ),
     generation_config={
         "baseline": {"seed": 42, "start_date": "2025-01-01", "period_days": 365},

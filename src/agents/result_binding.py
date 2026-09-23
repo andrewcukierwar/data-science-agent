@@ -67,7 +67,9 @@ def resolve_result[Claim: MetricComparison | StatisticalAssessment | Finding](
     """
 
     required = (
-        ledger.state.schema_version == "1.2" if require_bound is None else require_bound
+        ledger.state.schema_version in {"1.2", "1.3"}
+        if require_bound is None
+        else require_bound
     )
     binding = claim.computation
     if binding is None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from contextvars import copy_context
+from contextvars import ContextVar, copy_context
 from functools import partial
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
@@ -112,18 +112,54 @@ class EvidenceInspection(BaseModel):
     truncated: bool = False
 
 
+_ACTIVE_TOOL_CONTEXT: ContextVar[AgentRunContext | None] = ContextVar(
+    "active_tool_context", default=None
+)
+
+
+def opaque_workspace_id(run_id: str) -> str:
+    """Return a stable model-facing identifier with no encoded scenario text."""
+
+    digest = sha256(run_id.encode("utf-8")).hexdigest()[:24]
+    return f"ws-{digest}"
+
+
 def _context(wrapper: RunContextWrapper[AgentRunContext]) -> AgentRunContext:
     """Extract the application context from an SDK wrapper."""
 
     context = wrapper.context
     context.bind_tool_agent(getattr(wrapper, "agent", None))
+    _ACTIVE_TOOL_CONTEXT.set(context)
     return context
 
 
 def _sdk_response(response: ToolResponse) -> ToolOutputText:
     """Encode the typed response as compact JSON for the SDK model channel."""
 
-    return ToolOutputText(text=response.model_dump_json())
+    context = _ACTIVE_TOOL_CONTEXT.get()
+    payload = response.model_dump(mode="json")
+    if context is not None:
+        payload = _sanitize_model_value(payload, context)
+    return ToolOutputText(text=json.dumps(payload, separators=(",", ":")))
+
+
+def _sanitize_model_value(value: Any, context: AgentRunContext) -> Any:
+    """Scrub internal run identity and workspace root from model-visible output."""
+
+    internal_id = context.run_config.run_id
+    public_id = opaque_workspace_id(internal_id)
+    workspace_root = str(context.workspace.root)
+    if isinstance(value, str):
+        return value.replace(workspace_root, "workspace").replace(
+            internal_id, public_id
+        )
+    if isinstance(value, list):
+        return [_sanitize_model_value(item, context) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_model_value(item, context) for key, item in value.items()
+        }
+    return value
 
 
 def _error_response(tool_name: str, error: Exception) -> ToolOutputText:
@@ -134,7 +170,11 @@ def _error_response(tool_name: str, error: Exception) -> ToolOutputText:
         "code",
         "not_found" if isinstance(error, FileNotFoundError) else "tool_error",
     )
-    return _sdk_response(ToolResponse.failed(tool_name, code, str(error)))
+    context = _ACTIVE_TOOL_CONTEXT.get()
+    message = str(error)
+    if context is not None:
+        message = _sanitize_model_value(message, context)
+    return _sdk_response(ToolResponse.failed(tool_name, code, message))
 
 
 def _json_safe(value: Any) -> Any:
@@ -337,7 +377,7 @@ def inspect_workspace(
         context.require_permission(tool_name)
         files, truncated = _workspace_files(context)
         data = WorkspaceInspection(
-            run_id=context.run_config.run_id,
+            run_id=opaque_workspace_id(context.run_config.run_id),
             directories=["inputs", "docs", "working", "outputs"],
             files=files,
             file_limit=context.run_config.max_workspace_files,
@@ -489,6 +529,10 @@ def inspect_evidence(
         reference = reference.strip()
         if not reference:
             raise ValueError("reference must be a non-empty string")
+        reference = reference.replace(
+            opaque_workspace_id(context.run_config.run_id),
+            context.run_config.run_id,
+        )
 
         if view not in {"result", "source"}:
             raise ValueError("view must be result or source")

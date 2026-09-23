@@ -29,8 +29,9 @@ CHANNEL_MIX_CONFOUNDING_SCENARIO = ScenarioDefinition(
     scenario_id="channel-mix-confounding",
     name="Acquisition channel mix analysis",
     user_question=(
-        "Did a channel change cause the latest acquisition performance change, "
-        "and what should be investigated?"
+        "Compare Q1 2025 and Q2 2025 acquisition-channel mix and performance. "
+        "Did a channel change cause the performance change, and what should be "
+        "investigated?"
     ),
     generation_config={
         "baseline": {"seed": 42, "start_date": "2025-01-01"},

@@ -14,6 +14,7 @@ from agents.evidence import (
 )
 from agents.finalization import (
     build_validation_catalog,
+    objective_requests_visualization,
     validate_review,
 )
 from agents.model_usage import run_agent_with_usage
@@ -161,26 +162,42 @@ def candidate_completeness_validation(
                     )
                 )
 
-        if (
-            candidate.visualization_requested
-            and context is not None
-            and context.ledger.budget.charts_created < context.ledger.budget.max_charts
-            and not any(
-                artifact.kind.value == "chart" for artifact in context.ledger.artifacts
-            )
-        ):
+    visualization_requested = candidate.visualization_requested or (
+        objective_requests_visualization(candidate.objective)
+    )
+    if visualization_requested and context is not None:
+        registered_charts = [
+            artifact
+            for artifact in context.ledger.artifacts
+            if artifact.kind.value == "chart"
+        ]
+        valid_chart_refs = []
+        for artifact in registered_charts:
+            try:
+                if context.artifact_manager.verify_artifact(artifact.id):
+                    valid_chart_refs.append(artifact)
+            except (KeyError, OSError, ValueError):
+                continue
+        listed_chart_refs = [
+            artifact
+            for artifact in valid_chart_refs
+            if artifact.id in candidate.artifacts
+            or artifact.path in candidate.artifacts
+        ]
+        if not listed_chart_refs:
             issues.append(
                 ValidationIssue(
                     id="V-COMPLETENESS-CHART",
                     severity=ValidationSeverity.MEDIUM,
                     category="chart_completeness",
                     message=(
-                        "The candidate contains a material multi-component "
-                        "decomposition but no useful registered chart artifact."
+                        "The required chart is missing, invalid, or absent from the "
+                        "candidate's registered artifact references."
                     ),
                     recommendation=(
-                        "Delegate one bounded chart creation task to the Analyst and "
-                        "carry the returned chart artifact reference forward."
+                        "Create one relevant chart, register it as a chart artifact, "
+                        "and include its exact identifier or path in the final "
+                        "artifact references."
                     ),
                 )
             )

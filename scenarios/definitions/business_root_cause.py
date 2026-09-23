@@ -38,8 +38,9 @@ RETENTION_DETERIORATION_SCENARIO = ScenarioDefinition(
     scenario_id="retention-q2-deterioration",
     name="Customer cohort profitability analysis",
     user_question=(
-        "Why did profitability change across customer cohorts, and what should "
-        "the company do about it?"
+        "Compare Q1 2025 and Q2 2025 acquired-customer cohorts using order "
+        "activity within 90 days of acquisition. Why did profitability change "
+        "across these cohorts, and what should the company do about it?"
     ),
     generation_config={
         "baseline": {"seed": 42, "start_date": "2025-01-01"},
@@ -136,8 +137,9 @@ COGS_MARGIN_DETERIORATION_SCENARIO = ScenarioDefinition(
     scenario_id="cogs-q2-margin-deterioration",
     name="Unit economics profitability analysis",
     user_question=(
-        "Why did profitability change in the latest reporting period, and what "
-        "should the company do about it?"
+        "Compare Q1 2025 and Q2 2025 profitability using each acquired cohort's "
+        "order activity within 90 days of acquisition. Why did profitability "
+        "change, and what should the company do about it?"
     ),
     generation_config={
         "baseline": {"seed": 42, "start_date": "2025-01-01"},
@@ -219,8 +221,9 @@ DISCOUNT_REFUND_DETERIORATION_SCENARIO = ScenarioDefinition(
     scenario_id="discount-refund-q2-deterioration",
     name="Revenue realization profitability analysis",
     user_question=(
-        "Why did profitability change in the latest reporting period, and what "
-        "should the company do about it?"
+        "Compare Q1 2025 and Q2 2025 profitability using each acquired cohort's "
+        "order activity within 90 days of acquisition. Why did profitability "
+        "change, and what should the company do about it?"
     ),
     generation_config={
         "baseline": {"seed": 42, "start_date": "2025-01-01"},

@@ -34,9 +34,10 @@ from schemas.run_state import AttemptCostAvailability, AttemptRecord, AttemptSta
 from schemas.statistics import StatisticalExpectation
 
 EVALUATION_CONTRACT_VERSION = "1.0"
+MODEL_CONTEXT_CONTRACT_VERSION = "2.0"
 LEGACY_WORKSPACE_VERSION = "legacy"
 SUPPORTED_WORKSPACE_VERSIONS = frozenset(
-    {LEGACY_WORKSPACE_VERSION, "1.0", "1.1", "1.2"}
+    {LEGACY_WORKSPACE_VERSION, "1.0", "1.1", "1.2", "1.3"}
 )
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
@@ -65,10 +66,9 @@ class ModelVisibleScenarioContext(ContractModel):
     tolerances, evaluator rules, or ground-truth values.
     """
 
-    contract_version: Literal[EVALUATION_CONTRACT_VERSION] = EVALUATION_CONTRACT_VERSION
-    scenario_id: NonEmptyString
-    scenario_version: VersionString
-    name: NonEmptyString
+    contract_version: Literal[MODEL_CONTEXT_CONTRACT_VERSION] = (
+        MODEL_CONTEXT_CONTRACT_VERSION
+    )
     user_question: NonEmptyString
 
 
@@ -88,9 +88,6 @@ class ScenarioMetadata(ContractModel):
         """Project metadata into the allow-listed model-visible contract."""
 
         return ModelVisibleScenarioContext(
-            scenario_id=self.scenario_id,
-            scenario_version=self.scenario_version,
-            name=self.name,
             user_question=self.user_question,
         )
 
@@ -1282,6 +1279,7 @@ __all__ = [
     "LifecycleOutcome",
     "LifecycleStatus",
     "ModelVisibleScenarioContext",
+    "MODEL_CONTEXT_CONTRACT_VERSION",
     "RunConfiguration",
     "ScenarioEvaluationSpec",
     "ScenarioMetadata",

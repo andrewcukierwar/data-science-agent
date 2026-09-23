@@ -3,6 +3,7 @@
 from schemas.audit import (
     AUDIT_CONTRACT_VERSION,
     LEGACY_AUDIT_CONTRACT_VERSION,
+    PREVIOUS_AUDIT_CONTRACT_VERSION,
     SUPPORTED_AUDIT_CONTRACT_VERSIONS,
     AuditClaim,
     AuditClaimKind,
@@ -11,6 +12,9 @@ from schemas.audit import (
     AuditStatus,
     DataAuditResult,
     DataQualityIssue,
+    DataQualityIssueScope,
+    DataQualityIssueType,
+    DataQualityScopeDimension,
     DateRange,
     IssueSeverity,
     MissingnessObservation,
@@ -71,9 +75,11 @@ from schemas.run_state import (
 from schemas.statistics import (
     CausalInterpretation,
     ConfidenceInterval,
+    EffectSizeMethod,
     StatisticalAssessment,
     StatisticalConclusion,
     StatisticalExpectation,
+    StatisticalProcedure,
 )
 from schemas.validation import (
     CriticCandidate,
@@ -85,8 +91,12 @@ from schemas.validation import (
 
 __all__ = [
     "AUDIT_CONTRACT_VERSION",
+    "DataQualityIssueScope",
+    "DataQualityIssueType",
+    "DataQualityScopeDimension",
     "CURRENT_STATE_SCHEMA_VERSION",
     "LEGACY_AUDIT_CONTRACT_VERSION",
+    "PREVIOUS_AUDIT_CONTRACT_VERSION",
     "SUPPORTED_AUDIT_CONTRACT_VERSIONS",
     "AuditClaim",
     "AuditClaimKind",
@@ -128,6 +138,7 @@ __all__ = [
     "MetricObservation",
     "CausalInterpretation",
     "ConfidenceInterval",
+    "EffectSizeMethod",
     "compile_metric_comparisons",
     "deduplicate_metric_comparisons",
     "metric_comparison_identity",
@@ -142,6 +153,7 @@ __all__ = [
     "StatisticalAssessment",
     "StatisticalConclusion",
     "StatisticalExpectation",
+    "StatisticalProcedure",
     "ModelUsage",
     "ModelPricing",
     "RunBudget",

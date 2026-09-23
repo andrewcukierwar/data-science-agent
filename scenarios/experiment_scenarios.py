@@ -20,12 +20,18 @@ from scenarios.definitions import (
 from scenarios.definitions.models import ScenarioDefinition
 from scenarios.injection import ScenarioRun
 from scenarios.sources import write_deterministic_sources
-from schemas.metrics import MetricComparison, MetricComparisonType
+from schemas.metrics import (
+    MetricComparison,
+    MetricComparisonType,
+    MetricDefinitionContext,
+)
 from schemas.statistics import (
     CausalInterpretation,
     ConfidenceInterval,
+    EffectSizeMethod,
     StatisticalAssessment,
     StatisticalConclusion,
+    StatisticalProcedure,
 )
 
 _EXPERIMENT_DEFINITIONS = """
@@ -143,6 +149,7 @@ def _experiment_summary(
     dataset: ExperimentDataset,
     *,
     practical_threshold: float,
+    definition_context: MetricDefinitionContext | None,
 ) -> StatisticalAssessment:
     frame = dataset.observations
     control = frame.loc[frame["assignment"].eq("control"), "outcome"]
@@ -175,6 +182,9 @@ def _experiment_summary(
         baseline_period="control participants",
         comparison_period="treatment participants",
         method="two-proportion z test",
+        definition_context=definition_context,
+        procedure=StatisticalProcedure.POOLED_TWO_PROPORTION_Z_WITH_UNPOOLED_WALD_CI,
+        effect_size_method=EffectSizeMethod.SIGNED_COHEN_H,
         unit_of_analysis="independently assigned participant",
         conclusion=conclusion,
         confidence_level=0.95,
@@ -280,6 +290,7 @@ def statistical_assessment_for_scenario(
     return _experiment_summary(
         dataset,
         practical_threshold=expectation.practical_significance_threshold,
+        definition_context=expectation.definition_context,
     )
 
 

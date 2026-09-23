@@ -7,6 +7,7 @@ import pytest
 
 from evaluation.primitives import (
     DataQualityPolicy,
+    DataQualityRequirement,
     evaluate_data_quality,
     evaluate_statistics,
     numeric_ground_truth_failures,
@@ -25,6 +26,8 @@ from schemas.audit import (
     AuditResult,
     AuditStatus,
     DataQualityIssue,
+    DataQualityIssueScope,
+    DataQualityIssueType,
     IssueSeverity,
     TableAudit,
 )
@@ -87,31 +90,51 @@ def test_clean_ecommerce_baseline_has_no_reporting_coverage_defect() -> None:
 
 
 @pytest.mark.parametrize(
-    ("scenario_id", "expected_issue", "wrong_issue", "rules"),
+    ("expected_type", "expected_scope", "wrong_type", "rules"),
     (
         (
-            "missing-reporting-day",
-            "missing_reporting_day",
-            "partial_latest_reporting_day",
+            DataQualityIssueType.MISSING_REPORTING_DAY,
+            DataQualityIssueScope(
+                relation="marketing_spend",
+                date="2025-05-31",
+                dimensions={},
+            ),
+            DataQualityIssueType.PARTIAL_REPORTING_DAY,
             missing_reporting_day_rules,
         ),
         (
-            "partial-latest-reporting-day",
-            "partial_latest_reporting_day",
-            "missing_reporting_day",
+            DataQualityIssueType.PARTIAL_REPORTING_DAY,
+            DataQualityIssueScope(
+                relation="marketing_spend",
+                date="2025-12-31",
+                dimensions={"channel": "Affiliate"},
+            ),
+            DataQualityIssueType.MISSING_REPORTING_DAY,
             partial_latest_day_rules,
         ),
     ),
 )
 def test_auditor_defect_recall_and_wrong_defect_rejection(
-    scenario_id: str,
-    expected_issue: str,
-    wrong_issue: str,
+    expected_type: DataQualityIssueType,
+    expected_scope: DataQualityIssueScope,
+    wrong_type: DataQualityIssueType,
     rules: Callable,
 ) -> None:
     policy = rules().data_quality_policy
 
-    correct_state = _state(audit=_audit(expected_issue))
+    correct_state = _state(
+        audit=_audit(
+            DataQualityIssue(
+                id="DQ-001",
+                issue_type=expected_type,
+                scope=expected_scope,
+                severity=IssueSeverity.MEDIUM,
+                message="A classified issue with supported evidence.",
+                table_name=expected_scope.relation,
+                evidence_refs=["evidence:issue"],
+            )
+        )
+    )
     correct_checks = evaluate_data_quality(
         correct_state,
         policy,
@@ -119,13 +142,85 @@ def test_auditor_defect_recall_and_wrong_defect_rejection(
     )
     assert all(check.status.value == "pass" for check in correct_checks)
 
-    wrong_state = _state(audit=_audit(wrong_issue))
+    wrong_state = _state(
+        audit=_audit(
+            DataQualityIssue(
+                id="different-instance-id",
+                issue_type=wrong_type,
+                scope=expected_scope,
+                severity=IssueSeverity.MEDIUM,
+                message="Wrong classification.",
+                table_name=expected_scope.relation,
+                evidence_refs=["evidence:issue"],
+            )
+        )
+    )
     wrong_checks = evaluate_data_quality(
         wrong_state,
         policy,
         executed_refs=_executed_refs(wrong_state),
     )
     assert any(check.status.value == "fail" for check in wrong_checks)
+
+
+def test_data_quality_identity_ignores_id_but_requires_type_scope_and_proof() -> None:
+    requirement = DataQualityRequirement(
+        issue_type=DataQualityIssueType.OTHER,
+        scope=DataQualityIssueScope(
+            relation="orders_v2",
+            date="2031-08-17",
+            dimensions={"sales_region": "North-2"},
+            value="refund_amount",
+        ),
+    )
+    policy = DataQualityPolicy(
+        maximum_issue_severity=IssueSeverity.HIGH,
+        required_issues=(requirement,),
+    )
+
+    def check(issue: DataQualityIssue, *, evidence: set[str] | None = None):
+        state = _state(audit=_audit(issue))
+        return evaluate_data_quality(
+            state,
+            policy,
+            executed_refs=_executed_refs(state) if evidence is None else evidence,
+        )
+
+    supported = DataQualityIssue(
+        id="foo-7",
+        issue_type=DataQualityIssueType.OTHER,
+        scope=requirement.scope,
+        severity=IssueSeverity.MEDIUM,
+        message="Observed issue with changing business labels.",
+        evidence_refs=["evidence:issue"],
+    )
+    supported_checks = check(supported)
+    assert all(item.status.value == "pass" for item in supported_checks)
+
+    renamed = supported.model_copy(update={"id": "instance-arbitrary-928"})
+    assert [item.status for item in check(renamed)] == [
+        item.status for item in supported_checks
+    ]
+
+    for wrong_scope in (
+        requirement.scope.model_copy(update={"date": "2031-08-18"}),
+        DataQualityIssueScope.model_validate(
+            {
+                **requirement.scope.model_dump(),
+                "dimensions": {"sales_region": "South-9"},
+            }
+        ),
+        requirement.scope.model_copy(update={"relation": "orders_v3"}),
+    ):
+        wrong = supported.model_copy(update={"scope": wrong_scope})
+        assert any(item.status.value == "fail" for item in check(wrong))
+
+    unsupported = supported.model_copy(update={"evidence_refs": ["unexecuted-ref"]})
+    unsupported_checks = check(unsupported, evidence={"evidence:table-profile"})
+    assert any(
+        item.check_id == "data_quality:claim_provenance" and item.status.value == "fail"
+        for item in unsupported_checks
+    )
 
 
 def test_clean_data_quality_policy_rejects_false_positive() -> None:
@@ -141,7 +236,17 @@ def test_clean_data_quality_policy_rejects_false_positive() -> None:
     )
     assert all(check.status.value == "pass" for check in clean_checks)
 
-    false_positive_state = _state(audit=_audit("missing_reporting_day"))
+    false_positive_state = _state(
+        audit=_audit(
+            DataQualityIssue(
+                id="false-positive-instance",
+                issue_type=DataQualityIssueType.MISSING_REPORTING_DAY,
+                severity=IssueSeverity.MEDIUM,
+                message="Unsupported false positive.",
+                evidence_refs=["evidence:issue"],
+            )
+        )
+    )
     false_positive_checks = evaluate_data_quality(
         false_positive_state,
         policy,
@@ -231,7 +336,7 @@ def test_statistical_evaluator_checks_typed_assessment(
     scenario_id: str,
     rules: Callable,
 ) -> None:
-    registration = get_scenario(scenario_id, "1.0")
+    registration = get_scenario(scenario_id, "1.1")
     generated = registration.generate_validated()
     assessment = statistical_assessment_for_scenario(
         generated.dataset, generated.definition
@@ -315,7 +420,7 @@ def test_statistical_evaluator_rejects_incomplete_or_wrong_claims(
 _PROFILE_EVIDENCE = "evidence:table-profile"
 
 
-def _audit(*issue_ids: str) -> AuditResult:
+def _audit(*issues: DataQualityIssue) -> AuditResult:
     return AuditResult(
         status=AuditStatus.COMPLETE,
         tables=[
@@ -325,15 +430,7 @@ def _audit(*issue_ids: str) -> AuditResult:
                 evidence_refs=[_PROFILE_EVIDENCE],
             )
         ],
-        issues=[
-            DataQualityIssue(
-                id=issue_id,
-                severity=IssueSeverity.MEDIUM,
-                message=f"Observed {issue_id}",
-                evidence_refs=[f"evidence:{issue_id}"],
-            )
-            for issue_id in issue_ids
-        ],
+        issues=list(issues),
     )
 
 

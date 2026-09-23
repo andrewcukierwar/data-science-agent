@@ -1,28 +1,39 @@
 """Schemas for deterministic data-audit results.
 
-Contract version ``2.0`` replaces the provenance-free warning and limitation
-strings of version ``1.0`` with typed, evidence-bearing observations, and gives
-every table profile its own evidence references. A material audit claim can
-influence the candidate answer, so it must carry the same canonical provenance
-the rest of the evidence contract requires. Version ``1.0`` payloads remain
-loadable: the coercion below preserves their statements and leaves their
-provenance explicitly empty rather than inventing references for them.
+Contract version ``3.0`` adds typed data-quality classifications and structured
+scope. Version ``2.0`` replaced provenance-free warning and limitation strings
+with typed, evidence-bearing observations and gave every table profile its own
+evidence references. A material audit claim can influence the candidate answer,
+so it must carry the same canonical provenance the rest of the evidence contract
+requires. Older payloads remain loadable without inventing references.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
+from datetime import date as Date
 from enum import StrEnum
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
 Rate = Annotated[float, Field(ge=0.0, le=1.0)]
 
-AUDIT_CONTRACT_VERSION = "2.0"
+AUDIT_CONTRACT_VERSION = "3.0"
 LEGACY_AUDIT_CONTRACT_VERSION = "1.0"
+PREVIOUS_AUDIT_CONTRACT_VERSION = "2.0"
 SUPPORTED_AUDIT_CONTRACT_VERSIONS = frozenset(
-    {LEGACY_AUDIT_CONTRACT_VERSION, AUDIT_CONTRACT_VERSION}
+    {
+        LEGACY_AUDIT_CONTRACT_VERSION,
+        PREVIOUS_AUDIT_CONTRACT_VERSION,
+        AUDIT_CONTRACT_VERSION,
+    }
 )
 
 
@@ -42,13 +53,62 @@ class IssueSeverity(StrEnum):
     HIGH = "high"
 
 
+class DataQualityIssueType(StrEnum):
+    """Reusable classifications for data-quality findings."""
+
+    MISSING_REPORTING_DAY = "missing_reporting_day"
+    PARTIAL_REPORTING_DAY = "partial_reporting_day"
+    DUPLICATE_KEY = "duplicate_key"
+    BROKEN_FOREIGN_KEY = "broken_foreign_key"
+    UNEXPECTED_NULL = "unexpected_null"
+    SOURCE_LAG = "source_lag"
+    RECONCILIATION_FAILURE = "reconciliation_failure"
+    OTHER = "other"
+
+
+class DataQualityScopeDimension(BaseModel):
+    """One named dimension value in an issue's affected scope."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: NonEmptyString
+    value: NonEmptyString
+
+
+class DataQualityIssueScope(BaseModel):
+    """Structured location and value affected by a classified issue."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    relation: NonEmptyString | None = None
+    date: Date | None = None
+    dimensions: list[DataQualityScopeDimension] = Field(default_factory=list)
+    value: NonEmptyString | None = None
+
+    @field_validator("dimensions", mode="before")
+    @classmethod
+    def accept_dimension_mapping(cls, value: Any) -> Any:
+        """Coerce in-memory mappings to the strict, model-safe wire shape."""
+
+        if isinstance(value, dict):
+            return [{"name": name, "value": item} for name, item in value.items()]
+        return value
+
+    @model_validator(mode="after")
+    def dimension_names_are_unique(self) -> "DataQualityIssueScope":
+        names = [dimension.name.strip().casefold() for dimension in self.dimensions]
+        if len(names) != len(set(names)):
+            raise ValueError("data-quality scope dimension names must be unique")
+        return self
+
+
 class DateRange(BaseModel):
     """Inclusive date coverage for a table or dataset."""
 
     model_config = ConfigDict(extra="forbid")
 
-    start: date
-    end: date
+    start: Date
+    end: Date
 
     @model_validator(mode="after")
     def end_is_not_before_start(self) -> "DateRange":
@@ -99,6 +159,8 @@ class DataQualityIssue(BaseModel):
         json_schema_extra={"minItems": 1},
     )
     recommendation: NonEmptyString | None = None
+    issue_type: DataQualityIssueType | None = None
+    scope: DataQualityIssueScope | None = None
 
 
 class MissingnessObservation(BaseModel):
@@ -176,6 +238,8 @@ class AuditClaim:
     evidence_refs: tuple[str, ...]
     table_name: str | None = None
     issue_id: str | None = None
+    issue_type: DataQualityIssueType | None = None
+    issue_scope: DataQualityIssueScope | None = None
 
 
 def audit_claims(audit: AuditResult) -> tuple[AuditClaim, ...]:
@@ -222,6 +286,8 @@ def audit_claims(audit: AuditResult) -> tuple[AuditClaim, ...]:
                 evidence_refs=tuple(issue.evidence_refs),
                 table_name=issue.table_name,
                 issue_id=issue.id,
+                issue_type=issue.issue_type,
+                issue_scope=issue.scope,
             )
         )
     for limitation_index, limitation in enumerate(audit.limitations):

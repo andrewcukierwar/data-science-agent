@@ -446,8 +446,8 @@ def test_semantically_equivalent_architectures_receive_the_same_evaluation_resul
 ) -> None:
     """Role traces must not change the score for equivalent persisted outputs."""
 
-    for scenario_id in (
-        item.scenario_id for item in discover_scenarios().registrations
+    for scenario_id in sorted(
+        {item.scenario_id for item in discover_scenarios().registrations}
     ):
         multi_workspace = _persist_fixture(
             tmp_path / "multi-agent",
@@ -745,8 +745,9 @@ def test_incomplete_keyword_rich_fixture_fails_root_cause_semantics(
 
 def test_catalog_generation_and_evaluator_lookup_are_regression_covered() -> None:
     catalog = discover_scenarios()
-    assert len(catalog) == 10
-    assert len({item.key for item in catalog.registrations}) == 10
+    assert len(catalog) == 20
+    assert len({item.scenario_id for item in catalog.registrations}) == 10
+    assert len({item.key for item in catalog.registrations}) == 20
     for registration in catalog.registrations:
         assert registration.evaluator_rules().scenario_id == registration.scenario_id
         if registration.evaluation_spec.statistical_expectation is None:

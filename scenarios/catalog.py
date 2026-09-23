@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from evaluation.contracts import (
@@ -20,6 +20,7 @@ from scenarios.definitions import (
     DATA_QUALITY_SCENARIOS,
     EXPERIMENT_SCENARIOS,
 )
+from scenarios.definitions.legacy_v8 import LEGACY_V8_SCENARIOS
 from scenarios.definitions.models import ScenarioDefinition, ScenarioModelContext
 from scenarios.invariants import (
     ScenarioInvariantSuite,
@@ -128,9 +129,6 @@ class ScenarioRegistration:
         """Return the generic model-visible projection without evaluator fields."""
 
         return ModelVisibleScenarioContext(
-            scenario_id=self.model_visible_context.scenario_id,
-            scenario_version=self.model_visible_context.scenario_version,
-            name=self.model_visible_context.name,
             user_question=self.model_visible_context.user_question,
         )
 
@@ -167,12 +165,7 @@ class ScenarioCatalog:
                     f"invariant ground truth does not match {registration.key}"
                 )
             if (
-                registration.model_visible_context.scenario_id
-                != registration.scenario_id
-                or registration.model_visible_context.scenario_version
-                != registration.scenario_version
-                or registration.model_visible_context.name != registration.metadata.name
-                or registration.model_visible_context.user_question
+                registration.model_visible_context.user_question
                 != registration.metadata.user_question
             ):
                 raise ScenarioCatalogError(
@@ -198,7 +191,7 @@ class ScenarioCatalog:
         scenario_id: str,
         scenario_version: str | None = None,
     ) -> ScenarioRegistration:
-        """Resolve one scenario, requiring a version when multiple exist."""
+        """Resolve an explicit version, or the newest when omitted."""
 
         candidates = [
             registration
@@ -212,13 +205,13 @@ class ScenarioCatalog:
                 raise ScenarioCatalogError(
                     f"unknown scenario registration: {scenario_id}@{scenario_version}"
                 ) from exc
-        if len(candidates) == 1:
-            return candidates[0]
         if not candidates:
             raise ScenarioCatalogError(f"unknown scenario registration: {scenario_id}")
-        versions = ", ".join(sorted(item.scenario_version for item in candidates))
-        raise ScenarioCatalogError(
-            f"scenario {scenario_id!r} has multiple versions; choose one of: {versions}"
+        return max(
+            candidates,
+            key=lambda item: tuple(
+                int(part) for part in item.scenario_version.split(".")
+            ),
         )
 
     def generator_for(
@@ -479,6 +472,171 @@ def _mix_registration() -> ScenarioRegistration:
     )
 
 
+def _legacy_v8_registrations() -> tuple[ScenarioRegistration, ...]:
+    """Register immutable v1.0/v1.2 contracts for retained v8 workspaces."""
+
+    from evaluation.rules import (
+        canonical_rules,
+        channel_mix_rules,
+        cogs_margin_rules,
+        discount_refund_rules,
+        immaterial_experiment_rules,
+        meaningful_experiment_rules,
+        missing_reporting_day_rules,
+        no_effect_experiment_rules,
+        partial_latest_day_rules,
+        retention_rules,
+    )
+    from scenarios.business_scenarios import (
+        generate_cogs_margin_deterioration_scenario,
+        generate_discount_refund_deterioration_scenario,
+        generate_retention_deterioration_scenario,
+        observe_cogs_margin_ground_truth,
+        observe_discount_refund_ground_truth,
+        observe_retention_ground_truth,
+    )
+    from scenarios.data_quality_scenarios import (
+        generate_missing_reporting_day_scenario,
+        generate_partial_latest_reporting_day_scenario,
+        observe_missing_reporting_day_ground_truth,
+        observe_partial_latest_reporting_day_ground_truth,
+    )
+    from scenarios.experiment_scenarios import (
+        generate_immaterial_experiment_scenario,
+        generate_meaningful_experiment_scenario,
+        generate_no_effect_experiment_scenario,
+        observe_immaterial_experiment_ground_truth,
+        observe_meaningful_experiment_ground_truth,
+        observe_no_effect_experiment_ground_truth,
+    )
+    from scenarios.injection import (
+        generate_canonical_profitability_scenario,
+        observe_canonical_ground_truth,
+    )
+    from scenarios.mix_scenarios import (
+        generate_channel_mix_confounding_scenario,
+        observe_channel_mix_ground_truth,
+    )
+
+    registrations = {
+        "canonical-q2-profitability": (
+            "generate_canonical_profitability_scenario",
+            generate_canonical_profitability_scenario,
+            "canonical_rules",
+            canonical_rules,
+            observe_canonical_ground_truth,
+            False,
+        ),
+        "retention-q2-deterioration": (
+            "generate_retention_deterioration_scenario",
+            generate_retention_deterioration_scenario,
+            "retention_rules",
+            retention_rules,
+            observe_retention_ground_truth,
+            False,
+        ),
+        "cogs-q2-margin-deterioration": (
+            "generate_cogs_margin_deterioration_scenario",
+            generate_cogs_margin_deterioration_scenario,
+            "cogs_margin_rules",
+            cogs_margin_rules,
+            observe_cogs_margin_ground_truth,
+            False,
+        ),
+        "discount-refund-q2-deterioration": (
+            "generate_discount_refund_deterioration_scenario",
+            generate_discount_refund_deterioration_scenario,
+            "discount_refund_rules",
+            discount_refund_rules,
+            observe_discount_refund_ground_truth,
+            False,
+        ),
+        "missing-reporting-day": (
+            "generate_missing_reporting_day_scenario",
+            generate_missing_reporting_day_scenario,
+            "missing_reporting_day_rules",
+            missing_reporting_day_rules,
+            observe_missing_reporting_day_ground_truth,
+            False,
+        ),
+        "partial-latest-reporting-day": (
+            "generate_partial_latest_reporting_day_scenario",
+            generate_partial_latest_reporting_day_scenario,
+            "partial_latest_day_rules",
+            partial_latest_day_rules,
+            observe_partial_latest_reporting_day_ground_truth,
+            False,
+        ),
+        "meaningful-ab-treatment-effect": (
+            "generate_meaningful_experiment_scenario",
+            generate_meaningful_experiment_scenario,
+            "meaningful_experiment_rules",
+            meaningful_experiment_rules,
+            observe_meaningful_experiment_ground_truth,
+            True,
+        ),
+        "no-effect-ab-experiment": (
+            "generate_no_effect_experiment_scenario",
+            generate_no_effect_experiment_scenario,
+            "no_effect_experiment_rules",
+            no_effect_experiment_rules,
+            observe_no_effect_experiment_ground_truth,
+            True,
+        ),
+        "significant-but-immaterial-ab-effect": (
+            "generate_immaterial_experiment_scenario",
+            generate_immaterial_experiment_scenario,
+            "immaterial_experiment_rules",
+            immaterial_experiment_rules,
+            observe_immaterial_experiment_ground_truth,
+            True,
+        ),
+        "channel-mix-confounding": (
+            "generate_channel_mix_confounding_scenario",
+            generate_channel_mix_confounding_scenario,
+            "channel_mix_rules",
+            channel_mix_rules,
+            observe_channel_mix_ground_truth,
+            False,
+        ),
+    }
+    result: list[ScenarioRegistration] = []
+    for definition in LEGACY_V8_SCENARIOS:
+        (
+            generator_name,
+            generator,
+            evaluator_name,
+            evaluator_factory,
+            metric_observer,
+            is_experiment,
+        ) = registrations[definition.scenario_id]
+        invariant_suite = (
+            experiment_invariant_suite
+            if is_experiment
+            else synthetic_ecommerce_invariant_suite
+        )(
+            expected_metrics=definition.ground_truth,
+            metric_observer=metric_observer,
+        )
+        result.append(
+            ScenarioRegistration(
+                metadata=definition.to_metadata(),
+                evaluation_spec=definition.to_evaluation_spec(),
+                model_visible_context=definition.model_visible_context(),
+                generator_name=generator_name,
+                generator=lambda *args, factory=generator, item=definition, **kwargs: (
+                    replace(factory(*args, **kwargs), definition=item)
+                ),
+                evaluator_name=evaluator_name,
+                evaluator=lambda factory=evaluator_factory, item=definition: factory(
+                    item
+                ),
+                invariant_suite=invariant_suite,
+            )
+        )
+    return tuple(result)
+
+
 def discover_scenarios() -> ScenarioCatalog:
     """Discover all built-in versioned scenario registrations."""
 
@@ -488,6 +646,7 @@ def discover_scenarios() -> ScenarioCatalog:
     return ScenarioCatalog(
         (
             _canonical_registration(),
+            *_legacy_v8_registrations(),
             *_business_registrations(),
             *_data_quality_registrations(),
             *_experiment_registrations(),

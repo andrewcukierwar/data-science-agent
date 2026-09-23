@@ -20,6 +20,7 @@ from agents import (
     inspect_evidence,
     inspect_relations,
     inspect_workspace,
+    opaque_workspace_id,
     read_document,
     run_python,
     run_sql,
@@ -119,6 +120,7 @@ def _context(
     tmp_path: Path,
     role: AgentRole = AgentRole.ANALYST,
     *,
+    run_id: str = "run-tools",
     budget: RunBudget | None = None,
     max_result_rows: int = 100,
     max_text_chars: int = 4_000,
@@ -137,11 +139,13 @@ def _context(
         encoding="utf-8",
     )
     workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace(
-        "run-tools",
+        run_id,
         inputs_source=input_source,
         docs_source=docs_source,
     )
-    ledger = AnalysisLedger(workspace, objective="Test deterministic tools.")
+    ledger = AnalysisLedger(
+        workspace, run_id=run_id, objective="Test deterministic tools."
+    )
     if budget is not None:
         ledger.update_budget(budget)
     sql_service = DuckDBExecutionService(workspace, ledger)
@@ -158,7 +162,7 @@ def _context(
         python_service=python_service,
         artifact_manager=artifact_manager,
         run_config=AgentRunConfig(
-            run_id="run-tools",
+            run_id=run_id,
             agent_role=role,
             max_result_rows=max_result_rows,
             max_text_chars=max_text_chars,
@@ -229,7 +233,8 @@ def test_tools_bind_to_context_and_return_bounded_structured_results(
     workspace_result = _invoke(inspect_workspace, context)
     assert isinstance(workspace_result, ToolResponse)
     assert workspace_result.success is True
-    assert workspace_result.data["run_id"] == "run-tools"
+    assert workspace_result.data["run_id"] == opaque_workspace_id("run-tools")
+    assert "run-tools" not in workspace_result.model_dump_json()
     assert workspace_result.data["files"]
     assert all(
         not item["path"].startswith(("state/", "logs/"))
@@ -278,6 +283,59 @@ def test_tools_bind_to_context_and_return_bounded_structured_results(
     assert len(python_result.data["stdout"]) == 256
     assert python_result.data["stdout_truncated"] is True
     assert context.ledger.budget.python_executions == 1
+
+
+def test_hidden_run_sentinel_is_opaque_across_model_visible_tool_surfaces(
+    tmp_path: Path,
+) -> None:
+    sentinel = "HIDDEN_SENTINEL_CAUSE_SCENARIO_7F31"
+    context = _context(tmp_path, run_id=sentinel)
+    opaque_id = opaque_workspace_id(sentinel)
+
+    workspace_result = _invoke(inspect_workspace, context)
+    workspace_json = workspace_result.model_dump_json()
+    assert workspace_result.success
+    assert workspace_result.data["run_id"] == opaque_id
+    assert sentinel not in workspace_json
+    assert all(sentinel not in file["path"] for file in workspace_result.data["files"])
+
+    document_path = context.workspace.docs / "business_definitions.md"
+    document_path.chmod(0o644)
+    document_path.write_text(
+        f"Public definitions. Internal fixture marker: {sentinel}.\n",
+        encoding="utf-8",
+    )
+    document_result = _invoke(
+        read_document, context, {"path": "business_definitions.md"}
+    )
+    assert document_result.success
+    assert sentinel not in document_result.model_dump_json()
+
+    # Force a tool error whose path contains the internal identifier.
+    error_result = _invoke(read_document, context, {"path": sentinel})
+    error_json = error_result.model_dump_json()
+    assert not error_result.success
+    assert sentinel not in error_json
+
+    sql_result = _invoke(
+        run_sql,
+        context,
+        {"sql": "SELECT 1 AS value", "query_id": "Q-SENTINEL"},
+    )
+    assert sql_result.success
+    event_ref = sql_result.data["tool_event_id"]
+    assert sentinel not in sql_result.model_dump_json()
+    assert event_ref.startswith("tool-sql-")
+
+    evidence_result = _invoke(inspect_evidence, context, {"reference": event_ref})
+    assert evidence_result.success
+    assert evidence_result.data["reference_type"] == "tool_event"
+    assert sentinel not in evidence_result.model_dump_json()
+
+    resumed = WorkspaceManager(tmp_path / "workspaces").open_workspace(sentinel)
+    resumed_ledger = AnalysisLedger(resumed)
+    assert resumed_ledger.state.run_id == sentinel
+    assert [event.id for event in resumed_ledger.tool_events] == [event_ref]
 
 
 def test_python_tool_documents_separate_data_access_environment() -> None:

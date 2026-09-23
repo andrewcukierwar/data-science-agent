@@ -30,6 +30,8 @@ from schemas.audit import (
     AuditClaimKind,
     AuditResult,
     AuditStatus,
+    DataQualityIssueScope,
+    DataQualityIssueType,
     IssueSeverity,
     audit_claims,
 )
@@ -55,7 +57,10 @@ from schemas.run_state import (
     ToolEventStatus,
     hypothesis_requires_evidence,
 )
-from schemas.statistics import StatisticalAssessment, StatisticalExpectation
+from schemas.statistics import (
+    StatisticalAssessment,
+    StatisticalExpectation,
+)
 from schemas.validation import ValidationStatus
 from tools.artifacts import ArtifactManager
 from tools.workspace import Workspace
@@ -81,7 +86,17 @@ class DataQualityPolicy:
     maximum_issue_severity: IssueSeverity | None = IssueSeverity.LOW
     required_issue_ids: tuple[str, ...] = ()
     forbidden_issue_ids: tuple[str, ...] = ()
+    required_issues: tuple[DataQualityRequirement, ...] = ()
+    forbidden_issue_types: tuple[DataQualityIssueType, ...] = ()
     forbid_any_issues: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DataQualityRequirement:
+    """Required semantic issue classification and exact structured scope."""
+
+    issue_type: DataQualityIssueType
+    scope: DataQualityIssueScope
 
 
 class AnalyticalCapability(StrEnum):
@@ -226,8 +241,8 @@ def evaluate_lifecycle(
     return tuple(checks)
 
 
-def _normalized_period(period: str) -> str:
-    return normalize_metric_period(period).lower()
+def _normalized_period(period: str, *, legacy_contract: bool = False) -> str:
+    return normalize_metric_period(period, legacy_contract=legacy_contract).lower()
 
 
 def _normalized_dimensions(
@@ -242,24 +257,45 @@ def _normalized_dimensions(
 def _metric_identity_matches(
     comparison: MetricComparison,
     expected: GroundTruthMetric,
+    *,
+    legacy_contract: bool = False,
 ) -> bool:
-    normalized_actual = normalize_metric_comparison(comparison)
+    normalized_actual = normalize_metric_comparison(
+        comparison, legacy_contract=legacy_contract
+    )
     expected_metric_key = normalize_metric_key(
         expected.metric_key,
         expected.dimensions,
+        legacy_contract=legacy_contract,
     )
     return (
         normalized_actual.metric_key == expected_metric_key
-        and _normalized_period(comparison.baseline_period)
-        == _normalized_period(expected.baseline_period)
-        and _normalized_period(comparison.comparison_period)
-        == _normalized_period(expected.comparison_period)
+        and (
+            legacy_contract
+            or _normalized_dimensions(comparison.dimensions)
+            == _normalized_dimensions(expected.dimensions)
+        )
+        and _normalized_period(
+            comparison.baseline_period, legacy_contract=legacy_contract
+        )
+        == _normalized_period(expected.baseline_period, legacy_contract=legacy_contract)
+        and _normalized_period(
+            comparison.comparison_period, legacy_contract=legacy_contract
+        )
+        == _normalized_period(
+            expected.comparison_period, legacy_contract=legacy_contract
+        )
         and comparison.comparison_type is expected.comparison_type
         and normalized_actual.unit
-        == normalize_metric_unit(expected.value_unit, expected.comparison_type)
+        == normalize_metric_unit(
+            expected.value_unit,
+            expected.comparison_type,
+            legacy_contract=legacy_contract,
+        )
         and metric_definition_contexts_match(
             normalized_actual.definition_context,
             expected.definition_context,
+            legacy_contract=legacy_contract,
         )
     )
 
@@ -274,28 +310,31 @@ def _compatible_dimension_superset(
 def select_metric_candidates(
     comparisons: Sequence[MetricComparison],
     expected: GroundTruthMetric,
+    *,
+    legacy_contract: bool = False,
 ) -> list[MetricComparison]:
     """Select exact estimands before compatible, more-specific corroboration."""
 
     expected_dimensions = _normalized_dimensions(expected.dimensions)
     candidates = [
-        normalize_metric_comparison(comparison)
+        normalize_metric_comparison(comparison, legacy_contract=legacy_contract)
         for comparison in comparisons
-        if _metric_identity_matches(comparison, expected)
+        if _metric_identity_matches(
+            comparison, expected, legacy_contract=legacy_contract
+        )
     ]
     exact = [
         comparison
         for comparison in candidates
         if _normalized_dimensions(comparison.dimensions) == expected_dimensions
     ]
-    if exact:
+    if exact or not legacy_contract:
         return exact
     return [
         comparison
         for comparison in candidates
         if _compatible_dimension_superset(
-            _normalized_dimensions(comparison.dimensions),
-            expected_dimensions,
+            _normalized_dimensions(comparison.dimensions), expected_dimensions
         )
     ]
 
@@ -303,6 +342,8 @@ def select_metric_candidates(
 def reconcile_metric_candidates(
     candidates: Sequence[MetricComparison],
     expected: GroundTruthMetric,
+    *,
+    legacy_contract: bool = False,
 ) -> tuple[MetricComparison | None, bool]:
     """Compile corroborating measurements and flag material conflicts."""
 
@@ -311,7 +352,7 @@ def reconcile_metric_candidates(
         comparison.model_copy(update={"dimensions": expected_dimensions})
         for comparison in candidates
     ]
-    compilation = compile_metric_comparisons(projected)
+    compilation = compile_metric_comparisons(projected, legacy_contract=legacy_contract)
     if compilation.conflicts:
         return None, True
     reconciled = compilation.comparisons
@@ -343,17 +384,23 @@ def metric_comparisons_from_input(
 def numeric_ground_truth_failures(
     values: Iterable[MetricComparison] | LeadResult | SpecialistResult,
     expected_metrics: Sequence[GroundTruthMetric],
+    *,
+    legacy_contract: bool = False,
 ) -> list[str]:
     """Return deterministic missing, conflicting, stale, or incorrect metrics."""
 
     failures: list[str] = []
     comparisons = metric_comparisons_from_input(values)
     for metric in expected_metrics:
-        candidates = select_metric_candidates(comparisons, metric)
+        candidates = select_metric_candidates(
+            comparisons, metric, legacy_contract=legacy_contract
+        )
         if not candidates:
             failures.append(f"missing numeric ground-truth finding: {metric.id}")
             continue
-        comparison, conflicting = reconcile_metric_candidates(candidates, metric)
+        comparison, conflicting = reconcile_metric_candidates(
+            candidates, metric, legacy_contract=legacy_contract
+        )
         if conflicting:
             failures.append(
                 f"materially conflicting numeric findings for metric: {metric.id}"
@@ -378,13 +425,16 @@ def evaluate_numeric_comparisons(
     expected_metrics: Sequence[GroundTruthMetric],
     *,
     check_prefix: str = "numeric",
+    legacy_contract: bool = False,
 ) -> tuple[EvaluationCheck, ...]:
     """Evaluate generic metric identity, scope, tolerance, and conflicts."""
 
     actual = list(comparisons)
     checks: list[EvaluationCheck] = []
     for metric in expected_metrics:
-        failures = numeric_ground_truth_failures(actual, (metric,))
+        failures = numeric_ground_truth_failures(
+            actual, (metric,), legacy_contract=legacy_contract
+        )
         checks.append(
             _check(
                 f"{check_prefix}:{metric.id}",
@@ -401,10 +451,13 @@ def compile_final_metric_set(
     comparisons: Iterable[MetricComparison],
     *,
     check_prefix: str = "metric_set",
+    legacy_contract: bool = False,
 ) -> tuple[tuple[MetricComparison, ...], tuple[EvaluationCheck, ...]]:
     """Compile the one final metric set shared by report, Critic, and evaluator."""
 
-    compilation = compile_metric_comparisons(list(comparisons))
+    compilation = compile_metric_comparisons(
+        list(comparisons), legacy_contract=legacy_contract
+    )
     checks = [
         _check(
             f"{check_prefix}:conflict:{conflict.metric_key}",
@@ -522,6 +575,11 @@ def evaluate_data_quality(
         and item.claim.kind is AuditClaimKind.ISSUE
         and item.claim.issue_id is not None
     }
+    supported_issue_indexes = {
+        int(item.claim.claim_id.rsplit(":", 1)[1])
+        for item in resolved
+        if item.supported and item.claim.kind is AuditClaimKind.ISSUE
+    }
     checks = [
         _check(
             f"{check_prefix}:audit_status",
@@ -557,6 +615,47 @@ def evaluate_data_quality(
                 f"{check_prefix}:forbidden:{issue_id}",
                 issue_id not in issue_ids,
                 f"forbidden data-quality issue {issue_id} is absent",
+            )
+        )
+    for requirement_index, requirement in enumerate(policy.required_issues, start=1):
+        matching_indexes = [
+            index
+            for index, issue in enumerate(audit.issues)
+            if _data_quality_issue_matches(issue, requirement)
+        ]
+        supported_match = any(
+            index in supported_issue_indexes for index in matching_indexes
+        )
+        identifier = f"{requirement.issue_type.value}:{requirement_index}"
+        checks.extend(
+            (
+                _check(
+                    f"{check_prefix}:required_type_scope:{identifier}",
+                    bool(matching_indexes),
+                    f"required {requirement.issue_type.value} issue "
+                    "has the declared scope"
+                    if matching_indexes
+                    else f"required {requirement.issue_type.value} issue is "
+                    "missing or has the wrong scope",
+                ),
+                _check(
+                    f"{check_prefix}:required_provenance:{identifier}",
+                    supported_match,
+                    f"required {requirement.issue_type.value} issue "
+                    "cites executed evidence"
+                    if supported_match
+                    else f"required {requirement.issue_type.value} issue has "
+                    "no supported evidence",
+                ),
+            )
+        )
+    for issue_type in policy.forbidden_issue_types:
+        present = any(issue.issue_type is issue_type for issue in audit.issues)
+        checks.append(
+            _check(
+                f"{check_prefix}:forbidden_type:{issue_type.value}",
+                not present,
+                f"forbidden issue type {issue_type.value} is absent",
             )
         )
     if policy.maximum_issue_severity is not None:
@@ -622,12 +721,52 @@ def evaluate_data_quality(
     return tuple(checks)
 
 
+def _data_quality_issue_matches(issue, requirement: DataQualityRequirement) -> bool:
+    """Match a semantic issue and its declared scope without consulting its ID."""
+
+    if issue.issue_type is not requirement.issue_type:
+        return False
+    actual_scope = issue.scope
+    expected_scope = requirement.scope
+    if expected_scope is None:
+        return True
+    actual_relation = (
+        actual_scope.relation if actual_scope is not None else issue.table_name
+    )
+    if expected_scope.relation is not None and (
+        actual_relation is None
+        or actual_relation.strip().casefold()
+        != expected_scope.relation.strip().casefold()
+    ):
+        return False
+    if expected_scope.date is not None and (
+        actual_scope is None or actual_scope.date != expected_scope.date
+    ):
+        return False
+    actual_dimensions = {
+        dimension.name.strip().casefold(): dimension.value.strip().casefold()
+        for dimension in (actual_scope.dimensions if actual_scope is not None else ())
+    }
+    expected_dimensions = {
+        dimension.name.strip().casefold(): dimension.value.strip().casefold()
+        for dimension in expected_scope.dimensions
+    }
+    if actual_dimensions != expected_dimensions:
+        return False
+    if expected_scope.value is not None and (
+        actual_scope is None or actual_scope.value != expected_scope.value
+    ):
+        return False
+    return True
+
+
 def evaluate_statistics(
     state: AnalysisRunState,
     report_text: str,
     policy: StatisticsPolicy,
     *,
     check_prefix: str = "statistics",
+    legacy_contract: bool = False,
 ) -> tuple[EvaluationCheck, ...]:
     """Evaluate typed statistical output and report-level requirements.
 
@@ -653,7 +792,9 @@ def evaluate_statistics(
         matches = [
             assessment
             for assessment in assessments
-            if _statistical_assessment_matches(assessment, expectation)
+            if _statistical_assessment_matches(
+                assessment, expectation, legacy_contract=legacy_contract
+            )
         ]
         prefix = f"{check_prefix}:expectation:{index}"
         checks.append(
@@ -667,7 +808,12 @@ def evaluate_statistics(
         )
         if len(matches) == 1:
             checks.extend(
-                _evaluate_statistical_assessment(prefix, matches[0], expectation)
+                _evaluate_statistical_assessment(
+                    prefix,
+                    matches[0],
+                    expectation,
+                    legacy_contract=legacy_contract,
+                )
             )
     return tuple(checks) or (
         _check(
@@ -758,7 +904,7 @@ def _statistical_assessments(
     """Return unique typed assessments independent of producing architecture."""
 
     assessments = [*state.statistical_assessments]
-    if state.schema_version != "1.2":
+    if state.schema_version not in {"1.2", "1.3"}:
         assessments.extend(
             assessment
             for record in state.specialist_results
@@ -777,6 +923,8 @@ def _statistical_assessments(
 def _statistical_assessment_matches(
     assessment: StatisticalAssessment,
     expectation: StatisticalExpectation,
+    *,
+    legacy_contract: bool = False,
 ) -> bool:
     """Match a typed assessment to an expected estimand without using prose."""
 
@@ -785,10 +933,31 @@ def _statistical_assessment_matches(
         == normalize_metric_key(expectation.metric_key, expectation.dimensions)
         and normalize_metric_dimensions(assessment.dimensions)
         == normalize_metric_dimensions(expectation.dimensions)
-        and normalize_metric_period(assessment.baseline_period)
-        == normalize_metric_period(expectation.baseline_period)
-        and normalize_metric_period(assessment.comparison_period)
-        == normalize_metric_period(expectation.comparison_period)
+        and metric_definition_contexts_match(
+            assessment.definition_context,
+            expectation.definition_context,
+            legacy_contract=legacy_contract,
+        )
+        and normalize_metric_period(
+            assessment.baseline_period, legacy_contract=legacy_contract
+        )
+        == normalize_metric_period(
+            expectation.baseline_period, legacy_contract=legacy_contract
+        )
+        and normalize_metric_period(
+            assessment.comparison_period, legacy_contract=legacy_contract
+        )
+        == normalize_metric_period(
+            expectation.comparison_period, legacy_contract=legacy_contract
+        )
+        and (
+            expectation.required_procedure is None
+            or assessment.procedure is expectation.required_procedure
+        )
+        and (
+            expectation.required_effect_size_method is None
+            or assessment.effect_size_method is expectation.required_effect_size_method
+        )
     )
 
 
@@ -796,14 +965,20 @@ def _evaluate_statistical_assessment(
     prefix: str,
     assessment: StatisticalAssessment,
     expectation: StatisticalExpectation,
+    *,
+    legacy_contract: bool = False,
 ) -> tuple[EvaluationCheck, ...]:
     """Check the V1 statistical conclusion and its supporting quantities."""
 
     expected_interval = expectation.expected_confidence_interval
     actual_interval = assessment.confidence_interval
-    assumptions = {item.strip().lower() for item in assessment.assumptions_checked}
+    assumptions = {
+        _normalize_statistical_assumption(item, legacy_contract=legacy_contract)
+        for item in assessment.assumptions_checked
+    }
     required_assumptions = {
-        item.strip().lower() for item in expectation.required_assumptions
+        _normalize_statistical_assumption(item, legacy_contract=legacy_contract)
+        for item in expectation.required_assumptions
     }
     return (
         _check(
@@ -863,12 +1038,61 @@ def _evaluate_statistical_assessment(
             "required statistical assumptions are reported",
         ),
         _check(
+            f"{prefix}:procedure",
+            expectation.required_procedure is None
+            or assessment.procedure is expectation.required_procedure,
+            "required statistical procedure is explicit and correct",
+        ),
+        _check(
+            f"{prefix}:effect_size_method",
+            expectation.required_effect_size_method is None
+            or assessment.effect_size_method is expectation.required_effect_size_method,
+            "required effect-size definition is explicit and correct",
+        ),
+        _check(
             f"{prefix}:causal_restraint",
             assessment.causal_interpretation
             is expectation.expected_causal_interpretation,
             "causal interpretation matches the declared study design",
         ),
     )
+
+
+def _normalize_statistical_assumption(
+    value: str,
+    *,
+    legacy_contract: bool = False,
+) -> str:
+    """Normalize a small set of general statistical assumption phrasings."""
+
+    lowered = value.lower()
+    if legacy_contract:
+        return lowered.strip()
+    words = set(re.findall(r"[a-z]+", lowered))
+    if "independence" in words or "independent" in words:
+        if words & {"observation", "observations", "subject", "subjects"}:
+            return "independent_observations"
+    if "binary" in words and words & {"outcome", "response", "result"}:
+        return "binary_outcome"
+    if words & {"random", "randomized", "randomization"} and words & {
+        "assignment",
+        "allocation",
+        "assignments",
+    }:
+        return "random_assignment"
+    if words & {"adequate", "sufficient", "large"} and words & {
+        "sample",
+        "samplesize",
+        "size",
+    }:
+        return "adequate_sample_size"
+    if (
+        "two" in words
+        and words & {"sided", "tailed"}
+        and ("0.05" in lowered or "5%" in lowered or "alpha" in words)
+    ):
+        return "two_sided_alpha_0_05"
+    return " ".join(re.findall(r"[a-z0-9.]+", lowered))
 
 
 def _evidence_refs(workspace: Workspace) -> set[str]:
@@ -993,7 +1217,7 @@ def evaluate_provenance(
     ):
         # Preserve legacy scoring; absence of the versioned guarantee is explicit
         # in the workspace version and evaluator result contract marker.
-        if state.schema_version != "1.2" and item.computation is None:
+        if state.schema_version not in {"1.2", "1.3"} and item.computation is None:
             continue
         try:
             resolved = resolve_result(item, ledger)
@@ -1006,7 +1230,7 @@ def evaluate_provenance(
         except ResultBindingError as error:
             valid, message = False, str(error)
         checks.append(_check(f"{check_prefix}:binding:{index}", valid, message))
-    if state.schema_version == "1.2":
+    if state.schema_version in {"1.2", "1.3"}:
         try:
             validate_statistical_selection(list(assessments))
             validate_metric_selection(state.metric_comparisons)
@@ -1322,6 +1546,94 @@ def evaluate_unsupported_claims(
     )
 
 
+def _affirmative_forbidden_match(clause: str, match: re.Match[str]) -> bool:
+    """Distinguish a direct caution from an affirmative forbidden assertion."""
+
+    prefix = clause[: match.start()]
+    normalized_prefix = re.sub(
+        r"\b(doesn['’]t|doesnt|don['’]t|didn['’]t|isn['’]t|aren['’]t|can['’]t)\b",
+        lambda found: {
+            "doesn't": "does not",
+            "doesnt": "does not",
+            "don't": "do not",
+            "dont": "do not",
+            "didn't": "did not",
+            "didnt": "did not",
+            "isn't": "is not",
+            "isnt": "is not",
+            "aren't": "are not",
+            "arent": "are not",
+            "can't": "cannot",
+            "cant": "cannot",
+        }[found.group(0).replace("’", "'").lower()],
+        prefix,
+    )
+    normalized_prefix = re.sub(r"\bnot\s+(?:only|merely)\b", "", normalized_prefix)
+    scoped_prefix = normalized_prefix[-48:]
+    # A negated failure, lack, inability, or impossibility is an affirmative
+    # assertion. Two explicit negators before the claim also form a double
+    # negative (for example, "does not not prove").
+    if (
+        re.search(
+            r"\bnot\s+(?:fail|lack|unable|impossible|absence|inability)\b",
+            scoped_prefix,
+        )
+        or len(re.findall(r"\b(?:no|not|never|cannot)\b", scoped_prefix)) >= 2
+    ):
+        return True
+    if re.search(r"\b(?:no|not)\s+(?:evidence|proof)\b", scoped_prefix):
+        return False
+    return not bool(re.search(r"\b(?:not|never|cannot)\b[^,;]{0,24}$", scoped_prefix))
+
+
+def evaluate_unsupported_assertions(
+    text: str,
+    *,
+    forbidden_patterns: Sequence[str] = (
+        r"\bproves?\b",
+        r"\bguarantee[sd]?\b",
+        r"\bdefinitively\b",
+        r"\bcausal proof\b",
+        r"\bwithout uncertainty\b",
+    ),
+    check_prefix: str = "unsupported_claims",
+) -> tuple[EvaluationCheck, ...]:
+    """Reject affirmative overclaims while allowing explicit scoped caveats."""
+
+    clauses = re.split(
+        r"[,;\n]|(?<!\d)[.!?]+(?!\d)|"
+        r"\b(?:but|however|yet|and|because|although|though|whereas)\b",
+        text.lower()
+        .replace("’", "'")
+        .replace("doesn't", "does not")
+        .replace("doesnt", "does not")
+        .replace("don't", "do not")
+        .replace("didn't", "did not")
+        .replace("isn't", "is not")
+        .replace("aren't", "are not")
+        .replace("can't", "cannot"),
+    )
+    matches = [
+        pattern
+        for pattern in forbidden_patterns
+        if any(
+            _affirmative_forbidden_match(clause, match)
+            for clause in clauses
+            for match in re.finditer(pattern, clause)
+        )
+    ]
+    return (
+        _check(
+            f"{check_prefix}:forbidden_language",
+            not matches,
+            "report contains no affirmative unsupported certainty or causal-proof claim"
+            if not matches
+            else "report contains an affirmative unsupported claim: "
+            + ", ".join(matches),
+        ),
+    )
+
+
 def evaluate_task_completeness(
     workspace: Workspace,
     state: AnalysisRunState,
@@ -1329,6 +1641,7 @@ def evaluate_task_completeness(
     policy: TaskCompletenessPolicy,
     *,
     check_prefix: str = "task_completeness",
+    legacy_contract: bool = False,
 ) -> tuple[EvaluationCheck, ...]:
     """Evaluate final report, Critic, plan, evidence, and output completeness."""
 
@@ -1366,15 +1679,59 @@ def evaluate_task_completeness(
             )
         )
     if policy.require_chart:
-        checks.append(
-            _check(
-                f"{check_prefix}:chart",
-                any(
-                    artifact.kind is ArtifactKind.CHART for artifact in state.artifacts
-                ),
-                "a chart artifact is present",
+        chart_artifacts = [
+            artifact
+            for artifact in state.artifacts
+            if artifact.kind is ArtifactKind.CHART
+        ]
+        if legacy_contract:
+            checks.append(
+                _check(
+                    f"{check_prefix}:chart",
+                    bool(chart_artifacts),
+                    "a chart artifact is present",
+                )
             )
-        )
+        else:
+            ledger = AnalysisLedger(workspace)
+            artifact_manager = ArtifactManager(workspace, ledger)
+            valid_charts = []
+            for artifact in chart_artifacts:
+                try:
+                    if artifact_manager.verify_artifact(artifact.id):
+                        valid_charts.append(artifact)
+                except (KeyError, OSError, ValueError):
+                    continue
+            referenced_charts = [
+                artifact
+                for artifact in valid_charts
+                if re.search(rf"\[[^\]]+\]\({re.escape(artifact.path)}\)", report_text)
+            ]
+            checks.extend(
+                (
+                    _check(
+                        f"{check_prefix}:chart",
+                        bool(chart_artifacts),
+                        "a registered chart artifact is present"
+                        if chart_artifacts
+                        else "a registered chart artifact is missing",
+                    ),
+                    _check(
+                        f"{check_prefix}:chart_artifact_valid",
+                        bool(valid_charts),
+                        "a chart artifact exists and matches its registered provenance"
+                        if valid_charts
+                        else "no chart artifact has valid registered provenance",
+                    ),
+                    _check(
+                        f"{check_prefix}:chart_report_reference",
+                        bool(referenced_charts),
+                        "the report includes a link to a valid registered chart"
+                        if referenced_charts
+                        else "the report does not link a valid registered chart",
+                    ),
+                )
+            )
     if policy.require_final_critic_pass:
         checks.append(
             _check(
@@ -1434,6 +1791,7 @@ __all__ = [
     "AnalyticalCapability",
     "CapabilityPolicy",
     "DataQualityPolicy",
+    "DataQualityRequirement",
     "StatisticsPolicy",
     "TaskCompletenessPolicy",
     "TextRule",
@@ -1454,6 +1812,7 @@ __all__ = [
     "evaluate_statistics",
     "evaluate_task_completeness",
     "evaluate_unsupported_claims",
+    "evaluate_unsupported_assertions",
     "metric_comparisons_from_input",
     "numeric_ground_truth_failures",
     "reconcile_metric_candidates",

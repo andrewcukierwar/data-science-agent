@@ -9,8 +9,10 @@ from schemas.metrics import MetricComparisonType, MetricDefinitionContext
 from schemas.statistics import (
     CausalInterpretation,
     ConfidenceInterval,
+    EffectSizeMethod,
     StatisticalConclusion,
     StatisticalExpectation,
+    StatisticalProcedure,
 )
 
 _EXPERIMENT_CONTEXT = MetricDefinitionContext(
@@ -63,6 +65,7 @@ def _expectation(
     return StatisticalExpectation(
         metric_key="experiment_conversion_effect",
         dimensions={"experiment": "checkout-v1"},
+        definition_context=_EXPERIMENT_CONTEXT,
         baseline_period="control participants",
         comparison_period="treatment participants",
         expected_conclusion=conclusion,
@@ -79,6 +82,10 @@ def _expectation(
             conclusion is StatisticalConclusion.SIGNIFICANT_AND_PRACTICAL
         ),
         required_assumptions=_ASSUMPTIONS,
+        required_procedure=(
+            StatisticalProcedure.POOLED_TWO_PROPORTION_Z_WITH_UNPOOLED_WALD_CI
+        ),
+        required_effect_size_method=EffectSizeMethod.SIGNED_COHEN_H,
         expected_causal_interpretation=CausalInterpretation.CAUSAL_EFFECT_SUPPORTED,
     )
 
@@ -87,8 +94,12 @@ MEANINGFUL_EXPERIMENT_SCENARIO = ScenarioDefinition(
     scenario_id="meaningful-ab-treatment-effect",
     name="Controlled experiment decision",
     user_question=(
-        "Should the company roll out the tested customer experience based on "
-        "the observed experiment results?"
+        "Compare treatment minus control conversion rates, using all participants "
+        "randomly assigned to each arm as the denominator and outcomes observed "
+        "during experiment enrollment. Should the company roll out the tested "
+        "customer experience based on the observed results? Report a two-sided pooled "
+        "two-proportion z test with a 95% unpooled Wald confidence interval, "
+        "signed Cohen's h, and the required assumptions."
     ),
     generation_config={
         "experiment": {
@@ -142,8 +153,12 @@ NO_EFFECT_EXPERIMENT_SCENARIO = ScenarioDefinition(
     scenario_id="no-effect-ab-experiment",
     name="Controlled experiment decision",
     user_question=(
-        "Should the company roll out the tested customer experience based on "
-        "the observed experiment results?"
+        "Compare treatment minus control conversion rates, using all participants "
+        "randomly assigned to each arm as the denominator and outcomes observed "
+        "during experiment enrollment. Should the company roll out the tested "
+        "customer experience based on the observed results? Report a two-sided pooled "
+        "two-proportion z test with a 95% unpooled Wald confidence interval, "
+        "signed Cohen's h, and the required assumptions."
     ),
     generation_config={
         "experiment": {
@@ -197,8 +212,12 @@ IMMATERIAL_EXPERIMENT_SCENARIO = ScenarioDefinition(
     scenario_id="significant-but-immaterial-ab-effect",
     name="Controlled experiment decision",
     user_question=(
-        "Should the company roll out the tested customer experience based on "
-        "the observed experiment results?"
+        "Compare treatment minus control conversion rates, using all participants "
+        "randomly assigned to each arm as the denominator and outcomes observed "
+        "during experiment enrollment. Should the company roll out the tested "
+        "customer experience based on the observed results? Report a two-sided pooled "
+        "two-proportion z test with a 95% unpooled Wald confidence interval, "
+        "signed Cohen's h, and the required assumptions."
     ),
     generation_config={
         "experiment": {

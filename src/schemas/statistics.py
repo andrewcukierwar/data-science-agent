@@ -29,6 +29,20 @@ class CausalInterpretation(StrEnum):
     CAUSAL_EFFECT_SUPPORTED = "causal_effect_supported"
 
 
+class StatisticalProcedure(StrEnum):
+    """Named inferential procedures with distinct uncertainty semantics."""
+
+    POOLED_TWO_PROPORTION_Z_WITH_UNPOOLED_WALD_CI = (
+        "pooled_two_proportion_z_with_unpooled_wald_ci"
+    )
+
+
+class EffectSizeMethod(StrEnum):
+    """Effect-size definitions whose values are not interchangeable."""
+
+    SIGNED_COHEN_H = "signed_cohen_h"
+
+
 class ConfidenceInterval(BaseModel):
     """Finite interval for an estimated effect."""
 
@@ -76,6 +90,7 @@ class StatisticalExpectation(_DimensionedStatistic):
 
     metric_key: NonEmptyString
     dimensions: MetricDimensions
+    definition_context: MetricDefinitionContext | None = None
     baseline_period: NonEmptyString
     comparison_period: NonEmptyString
     expected_conclusion: StatisticalConclusion
@@ -91,6 +106,20 @@ class StatisticalExpectation(_DimensionedStatistic):
     practical_significance_threshold: float = Field(ge=0, allow_inf_nan=False)
     expected_practically_significant: bool
     required_assumptions: tuple[NonEmptyString, ...] = Field(min_length=1)
+    required_procedure: StatisticalProcedure | None = Field(
+        default=None,
+        description=(
+            "The inferential procedure required by the public task; leave unset "
+            "only when the task does not prescribe one."
+        ),
+    )
+    required_effect_size_method: EffectSizeMethod | None = Field(
+        default=None,
+        description=(
+            "The effect-size definition required by the public task; leave unset "
+            "only when the task does not prescribe one."
+        ),
+    )
     expected_causal_interpretation: CausalInterpretation = (
         CausalInterpretation.CAUSAL_EFFECT_SUPPORTED
     )
@@ -119,6 +148,14 @@ class StatisticalAssessment(_DimensionedStatistic, BoundNumericalClaim):
     baseline_period: NonEmptyString
     comparison_period: NonEmptyString
     method: NonEmptyString
+    procedure: StatisticalProcedure | None = Field(
+        default=None,
+        description="Structured inferential procedure used for this assessment.",
+    )
+    effect_size_method: EffectSizeMethod | None = Field(
+        default=None,
+        description="Structured definition used for the reported effect size.",
+    )
     unit_of_analysis: NonEmptyString
     conclusion: StatisticalConclusion
     confidence_level: float | None = Field(default=None, gt=0, lt=1)
@@ -145,7 +182,9 @@ class StatisticalAssessment(_DimensionedStatistic, BoundNumericalClaim):
 __all__ = [
     "CausalInterpretation",
     "ConfidenceInterval",
+    "EffectSizeMethod",
     "StatisticalAssessment",
     "StatisticalConclusion",
     "StatisticalExpectation",
+    "StatisticalProcedure",
 ]

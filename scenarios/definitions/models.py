@@ -75,15 +75,15 @@ class ScenarioDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scenario_id: NonEmptyString
-    scenario_version: VersionString = "1.0"
+    scenario_version: VersionString = "1.1"
     name: NonEmptyString
     user_question: NonEmptyString
     seed: int = Field(default=42, ge=0)
     generation_config: dict[str, JsonValue] = Field(default_factory=dict)
-    # Advanced deliberately whenever a scoring rule changes. ``1.2`` adds
-    # R21 audit-provenance enforcement: a completed audit or a matching
-    # issue ID no longer satisfies a requirement on its own.
-    evaluator_version: VersionString = "1.2"
+    # Advanced whenever evaluator semantics change. Version 1.3 introduces
+    # semantic issue/scope matching, scoped claim checks, and exact structured
+    # estimand identities while retaining legacy loading and v1.2 evaluation.
+    evaluator_version: VersionString = "1.3"
     injected_conditions: tuple[InjectedCondition, ...] = Field(min_length=1)
     expected_primary_driver: NonEmptyString
     expected_secondary_findings: tuple[NonEmptyString, ...] = Field(min_length=1)
@@ -114,9 +114,6 @@ class ScenarioDefinition(BaseModel):
         """
 
         return ScenarioModelContext(
-            scenario_id=self.scenario_id,
-            scenario_version=self.scenario_version,
-            name=self.name,
             user_question=self.user_question,
         )
 
@@ -171,9 +168,6 @@ class ScenarioDefinition(BaseModel):
         from evaluation.contracts import ModelVisibleScenarioContext
 
         return ModelVisibleScenarioContext(
-            scenario_id=self.scenario_id,
-            scenario_version=self.scenario_version,
-            name=self.name,
             user_question=self.user_question,
         )
 
@@ -183,7 +177,4 @@ class ScenarioModelContext(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    scenario_id: NonEmptyString
-    scenario_version: VersionString
-    name: NonEmptyString
     user_question: NonEmptyString

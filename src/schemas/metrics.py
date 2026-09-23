@@ -263,6 +263,8 @@ def normalized_dimension_mapping(
 def normalize_metric_key(
     metric_key: str,
     dimensions: Sequence[MetricDimension] | Mapping[str, str],
+    *,
+    legacy_contract: bool = False,
 ) -> str:
     """Normalize aliases and remove redundant dimension-value prefixes.
 
@@ -287,10 +289,16 @@ def normalize_metric_key(
         if normalized_key.startswith(marker):
             normalized_key = normalized_key[len(marker) :]
             break
+    key_terms = set(normalized_key.split("_"))
+    if not legacy_contract and (
+        ("difference" in key_terms and key_terms & {"rate", "proportion"})
+        or ("effect" in key_terms and "conversion" in key_terms)
+    ):
+        return "rate_difference"
     return _METRIC_ALIASES.get(normalized_key, normalized_key)
 
 
-def normalize_metric_period(period: str) -> str:
+def normalize_metric_period(period: str, *, legacy_contract: bool = False) -> str:
     """Normalize common quarter labels while preserving generic periods."""
 
     normalized = re.sub(r"[-_/]+", " ", period.strip().lower())
@@ -300,12 +308,24 @@ def normalize_metric_period(period: str) -> str:
         quarter = match.group(1) or match.group(4)
         year = match.group(2) or match.group(3)
         return f"Q{quarter} {year}"
+    if legacy_contract:
+        return normalized
+    role_label = re.sub(
+        r"\b(?:arm|group|participants|participant|subjects)\b", " ", normalized
+    )
+    role_label = re.sub(r"\s+", " ", role_label).strip()
+    if role_label in {"control", "control arm", "control group"}:
+        return "control"
+    if role_label in {"treatment", "treatment arm", "treatment group"}:
+        return "treatment"
     return normalized
 
 
 def normalize_metric_unit(
     unit: str,
     comparison_type: MetricComparisonType,
+    *,
+    legacy_contract: bool = False,
 ) -> str:
     """Normalize units only when the numeric interpretation is unchanged."""
 
@@ -315,6 +335,16 @@ def normalize_metric_unit(
         or normalized.endswith("_relative_change_fraction")
     ):
         return "relative_change_fraction"
+    if (
+        not legacy_contract
+        and comparison_type
+        in {
+            MetricComparisonType.LEVEL,
+            MetricComparisonType.ABSOLUTE_DIFFERENCE,
+        }
+        and normalized in {"fraction", "proportion", "rate", "decimal_fraction"}
+    ):
+        return "fraction"
     return normalized
 
 
@@ -342,6 +372,8 @@ def normalize_metric_definition_context(
 
 def normalize_metric_comparison(
     comparison: MetricComparison,
+    *,
+    legacy_contract: bool = False,
 ) -> MetricComparison:
     """Return the canonical application-boundary form of a comparison."""
 
@@ -351,11 +383,23 @@ def normalize_metric_comparison(
     )
     return comparison.model_copy(
         update={
-            "metric_key": normalize_metric_key(comparison.metric_key, dimensions),
+            "metric_key": normalize_metric_key(
+                comparison.metric_key,
+                dimensions,
+                legacy_contract=legacy_contract,
+            ),
             "dimensions": dimensions,
-            "baseline_period": normalize_metric_period(comparison.baseline_period),
-            "comparison_period": normalize_metric_period(comparison.comparison_period),
-            "unit": normalize_metric_unit(comparison.unit, comparison.comparison_type),
+            "baseline_period": normalize_metric_period(
+                comparison.baseline_period, legacy_contract=legacy_contract
+            ),
+            "comparison_period": normalize_metric_period(
+                comparison.comparison_period, legacy_contract=legacy_contract
+            ),
+            "unit": normalize_metric_unit(
+                comparison.unit,
+                comparison.comparison_type,
+                legacy_contract=legacy_contract,
+            ),
             "definition_context": definition_context,
         }
     )
@@ -363,10 +407,14 @@ def normalize_metric_comparison(
 
 def metric_comparison_scope_identity(
     comparison: MetricComparison,
+    *,
+    legacy_contract: bool = False,
 ) -> tuple[object, ...]:
     """Return identity without definition context for scope-mismatch checks."""
 
-    comparison = normalize_metric_comparison(comparison)
+    comparison = normalize_metric_comparison(
+        comparison, legacy_contract=legacy_contract
+    )
     return (
         comparison.metric_key,
         tuple(
@@ -384,10 +432,14 @@ def metric_comparison_scope_identity(
 
 def metric_comparison_identity(
     comparison: MetricComparison,
+    *,
+    legacy_contract: bool = False,
 ) -> tuple[object, ...]:
     """Return the stable identity of a metric comparison, excluding its value."""
 
-    comparison = normalize_metric_comparison(comparison)
+    comparison = normalize_metric_comparison(
+        comparison, legacy_contract=legacy_contract
+    )
     context = comparison.definition_context
     context_identity = (
         tuple(
@@ -472,6 +524,76 @@ def _context_anchor_sets(
     return anchors
 
 
+def _normalize_context_value(field_name: str, value: str) -> str:
+    """Canonicalize only common wording variants of structured estimand fields."""
+
+    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    tokens = set(normalized.split())
+    if field_name == "population":
+        if tokens & {"acquisition", "acquired"} and "cohort" in tokens:
+            return "acquired customer cohort"
+        if "experiment" in tokens and tokens & {"participant", "participants"}:
+            return "randomized experiment participants"
+        if {"randomized", "participants"} <= tokens:
+            return "randomized experiment participants"
+    if field_name == "date_basis":
+        bases = []
+        if "assignment" in tokens:
+            bases.append("assignment")
+        if "acquisition" in tokens:
+            bases.append("acquisition_date")
+        if "order" in tokens:
+            bases.append("order_date")
+        if "session" in tokens:
+            bases.append("session_date")
+        if "marketing" in tokens or "spend" in tokens:
+            bases.append("marketing_date")
+        if bases:
+            return ",".join(sorted(set(bases)))
+    if field_name == "observation_window":
+        if "90d" in tokens or ("90" in tokens and "day" in tokens):
+            return "90_day"
+        if "experiment" in tokens and "enrollment" in tokens:
+            return "experiment_enrollment"
+        if "quarter" in tokens or "period" in tokens:
+            return "calendar_period"
+        if "lifetime" in tokens or "history" in tokens:
+            return "lifetime"
+    aliases = {
+        "numerator": (
+            ({"marketing", "spend"}, "marketing spend"),
+            ({"ad", "spend"}, "marketing spend"),
+            ({"acquired", "customers"}, "acquired customers"),
+            ({"new", "customers"}, "acquired customers"),
+            ({"retained", "customers"}, "retained customers"),
+            ({"repeat", "customers"}, "retained customers"),
+            ({"second", "order"}, "retained customers"),
+            ({"successful", "outcomes"}, "successful outcomes"),
+            ({"binary", "successes"}, "successful outcomes"),
+            ({"conversions"}, "successful outcomes"),
+            ({"cogs"}, "cogs"),
+            ({"discount"}, "discount"),
+            ({"refund"}, "refund"),
+        ),
+        "denominator": (
+            ({"assigned", "participants"}, "assigned participants"),
+            ({"participants", "assigned"}, "assigned participants"),
+            ({"sessions"}, "sessions"),
+            ({"traffic"}, "sessions"),
+            ({"acquired", "customers"}, "acquired customers"),
+            ({"new", "customers"}, "acquired customers"),
+            ({"orders"}, "orders"),
+            ({"gross", "revenue"}, "gross revenue"),
+            ({"net", "revenue"}, "net revenue"),
+        ),
+    }
+    for required_tokens, canonical in aliases.get(field_name, ()):
+        if required_tokens <= tokens:
+            return canonical
+    return normalized
+
+
 def metric_definition_contexts_compatible(
     left: MetricDefinitionContext | None,
     right: MetricDefinitionContext | None,
@@ -496,6 +618,8 @@ def metric_definition_contexts_compatible(
 def metric_definition_contexts_match(
     actual: MetricDefinitionContext | None,
     expected: MetricDefinitionContext | None,
+    *,
+    legacy_contract: bool = False,
 ) -> bool:
     """Require an actual comparison to carry every expected estimand anchor."""
 
@@ -503,13 +627,32 @@ def metric_definition_contexts_match(
         return True
     if actual is None or not metric_definition_contexts_compatible(actual, expected):
         return False
-    expected_anchors = _context_anchor_sets(expected)
-    actual_anchors = _context_anchor_sets(actual)
-    return all(
-        field_name in actual_anchors
-        and expected_values.issubset(actual_anchors[field_name])
-        for field_name, expected_values in expected_anchors.items()
-    )
+    if legacy_contract:
+        expected_anchors = _context_anchor_sets(expected)
+        actual_anchors = _context_anchor_sets(actual)
+        return all(
+            field_name in actual_anchors
+            and expected_values.issubset(actual_anchors[field_name])
+            for field_name, expected_values in expected_anchors.items()
+        )
+    for field_name in (
+        "population",
+        "date_basis",
+        "observation_window",
+        "numerator",
+        "denominator",
+    ):
+        expected_value = getattr(expected, field_name)
+        actual_value = getattr(actual, field_name)
+        if expected_value is None:
+            if actual_value is not None:
+                return False
+            continue
+        if actual_value is None or _normalize_context_value(
+            field_name, actual_value
+        ) != _normalize_context_value(field_name, expected_value):
+            return False
+    return True
 
 
 def _merge_evidence_refs(comparisons: list[MetricComparison]) -> list[str]:
@@ -548,6 +691,7 @@ def compile_metric_comparisons(
     *,
     relative_tolerance: float = 1e-3,
     absolute_tolerance: float = 1e-3,
+    legacy_contract: bool = False,
 ) -> MetricCompilationResult:
     """Compile working measurements into one deterministic final metric set.
 
@@ -559,11 +703,15 @@ def compile_metric_comparisons(
 
     groups: list[list[MetricComparison]] = []
     for raw_comparison in comparisons:
-        comparison = normalize_metric_comparison(raw_comparison)
+        comparison = normalize_metric_comparison(
+            raw_comparison, legacy_contract=legacy_contract
+        )
         for group in groups:
             if metric_comparison_scope_identity(
-                group[0]
-            ) == metric_comparison_scope_identity(comparison) and all(
+                group[0], legacy_contract=legacy_contract
+            ) == metric_comparison_scope_identity(
+                comparison, legacy_contract=legacy_contract
+            ) and all(
                 metric_definition_contexts_compatible(
                     comparison.definition_context,
                     member.definition_context,

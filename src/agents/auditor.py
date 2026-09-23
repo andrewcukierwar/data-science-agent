@@ -84,6 +84,11 @@ Required workflow:
   read approved raw files with pandas or PyArrow under `/workspace/inputs`.
 - Record issues only when supported by observed tool evidence. If a check is
   unavailable or ambiguous, record a limitation instead of inventing a problem.
+- For each issue, set the semantic `issue_type` and structured `scope` fields
+  when the classification is known. The free-form `id` is only an instance
+  identifier; it is not the issue category. Include relation, date, dimensions,
+  and affected value where the evidence establishes them. Encode `dimensions`
+  as a list of `{{name, value}}` objects.
 - Keep the audit concise and actionable.
 
 Evidence provenance is mandatory:

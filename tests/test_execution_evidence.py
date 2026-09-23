@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agents import AgentRole, inspect_evidence, run_python, run_sql
+from agents import AgentRole, inspect_evidence, opaque_workspace_id, run_python, run_sql
 from agents.evidence import evidence_events, executed_references
 from orchestration.ledger import AnalysisLedger
 from sandbox.executor import SandboxExecutionResult
@@ -30,7 +30,10 @@ def test_sql_result_aliases_survive_reload_without_reexecution(tmp_path: Path) -
     assert result.data["tool_event_id"] == event.id
     assert event.output["rows"] == [[63]]
     assert event.attempt_id == attempt_id
-    assert result.data["attempt_id"] == attempt_id
+    public_attempt_id = attempt_id.replace(
+        context.run_config.run_id, opaque_workspace_id(context.run_config.run_id)
+    )
+    assert result.data["attempt_id"] == public_attempt_id
     context.artifact_manager.register(
         "working/queries/audit.sql", artifact_id="saved-query", kind=ArtifactKind.QUERY
     )
@@ -43,8 +46,10 @@ def test_sql_result_aliases_survive_reload_without_reexecution(tmp_path: Path) -
         assert reference in executed_references(context.ledger)
         inspected = _inspect(context, reference)
         assert inspected["tool_event_id"] == event.id
-        assert inspected["attempt_id"] == attempt_id
-        assert inspected["output"] == event.output
+        assert inspected["attempt_id"] == public_attempt_id
+        expected_public_output = dict(event.output)
+        expected_public_output["attempt_id"] = public_attempt_id
+        assert inspected["output"] == expected_public_output
         assert inspected["content"] is None
     source = _inspect(context, "working/queries/audit.sql", view="source")
     assert source["content"] == "SELECT 7 * 9 AS total"

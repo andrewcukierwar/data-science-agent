@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from evaluation.engine import ScenarioRules
 from evaluation.primitives import (
     AnalyticalCapability,
     CapabilityPolicy,
     DataQualityPolicy,
+    DataQualityRequirement,
     StatisticsPolicy,
     TaskCompletenessPolicy,
     TextRule,
@@ -26,7 +29,11 @@ from scenarios.definitions import (
     RETENTION_DETERIORATION_SCENARIO,
 )
 from scenarios.definitions.models import ScenarioDefinition
-from schemas.audit import IssueSeverity
+from schemas.audit import (
+    DataQualityIssueScope,
+    DataQualityIssueType,
+    IssueSeverity,
+)
 from schemas.statistics import StatisticalExpectation
 
 _COMMON_CAPABILITY_POLICY = CapabilityPolicy(
@@ -46,10 +53,11 @@ _STATISTICAL_CAPABILITY_POLICY = CapabilityPolicy(
 )
 
 
-def canonical_rules() -> ScenarioRules:
+def canonical_rules(definition: ScenarioDefinition | None = None) -> ScenarioRules:
     """Return evaluator-only rules for the canonical profitability scenario."""
 
-    evaluation_spec = CANONICAL_PROFITABILITY_SCENARIO.to_evaluation_spec()
+    definition = definition or CANONICAL_PROFITABILITY_SCENARIO
+    evaluation_spec = definition.to_evaluation_spec()
     return ScenarioRules(
         scenario_id=evaluation_spec.scenario_id,
         scenario_version=evaluation_spec.scenario_version,
@@ -224,6 +232,8 @@ def _data_quality_rules(
     *,
     required_issue_id: str,
     forbidden_issue_id: str,
+    required_issue: DataQualityRequirement,
+    forbidden_issue_type: DataQualityIssueType,
 ) -> ScenarioRules:
     """Build common quality-trap gates with explicit defect recall."""
 
@@ -247,10 +257,18 @@ def _data_quality_rules(
                 ),
             ),
         ),
-        data_quality_policy=DataQualityPolicy(
-            required_issue_ids=(required_issue_id,),
-            forbidden_issue_ids=(forbidden_issue_id,),
-            maximum_issue_severity=IssueSeverity.HIGH,
+        data_quality_policy=(
+            DataQualityPolicy(
+                required_issue_ids=(required_issue_id,),
+                forbidden_issue_ids=(forbidden_issue_id,),
+                maximum_issue_severity=IssueSeverity.HIGH,
+            )
+            if definition.evaluator_version == "1.2"
+            else DataQualityPolicy(
+                required_issues=(required_issue,),
+                forbidden_issue_types=(forbidden_issue_type,),
+                maximum_issue_severity=IssueSeverity.HIGH,
+            )
         ),
         task_policy=TaskCompletenessPolicy(),
     )
@@ -298,39 +316,66 @@ def _experiment_rules(
     )
 
 
-def missing_reporting_day_rules() -> ScenarioRules:
+def missing_reporting_day_rules(
+    definition: ScenarioDefinition | None = None,
+) -> ScenarioRules:
     """Return evaluator rules for the missing-day data-quality trap."""
 
     return _data_quality_rules(
-        next(
+        definition
+        or next(
             item
             for item in DATA_QUALITY_SCENARIOS
             if item.scenario_id == "missing-reporting-day"
         ),
         required_issue_id="missing_reporting_day",
         forbidden_issue_id="partial_latest_reporting_day",
+        required_issue=DataQualityRequirement(
+            issue_type=DataQualityIssueType.MISSING_REPORTING_DAY,
+            scope=DataQualityIssueScope(
+                relation="marketing_spend",
+                date=date(2025, 5, 31),
+                dimensions={},
+            ),
+        ),
+        forbidden_issue_type=DataQualityIssueType.PARTIAL_REPORTING_DAY,
     )
 
 
-def partial_latest_day_rules() -> ScenarioRules:
+def partial_latest_day_rules(
+    definition: ScenarioDefinition | None = None,
+) -> ScenarioRules:
     """Return evaluator rules for the partial-latest-day trap."""
 
     return _data_quality_rules(
-        next(
+        definition
+        or next(
             item
             for item in DATA_QUALITY_SCENARIOS
             if item.scenario_id == "partial-latest-reporting-day"
         ),
         required_issue_id="partial_latest_reporting_day",
         forbidden_issue_id="missing_reporting_day",
+        required_issue=DataQualityRequirement(
+            issue_type=DataQualityIssueType.PARTIAL_REPORTING_DAY,
+            scope=DataQualityIssueScope(
+                relation="marketing_spend",
+                date=date(2025, 12, 31),
+                dimensions={"channel": "Affiliate"},
+            ),
+        ),
+        forbidden_issue_type=DataQualityIssueType.MISSING_REPORTING_DAY,
     )
 
 
-def meaningful_experiment_rules() -> ScenarioRules:
+def meaningful_experiment_rules(
+    definition: ScenarioDefinition | None = None,
+) -> ScenarioRules:
     """Return evaluator rules for the practically meaningful experiment."""
 
     return _experiment_rules(
-        next(
+        definition
+        or next(
             item
             for item in EXPERIMENT_SCENARIOS
             if item.scenario_id == "meaningful-ab-treatment-effect"
@@ -339,11 +384,14 @@ def meaningful_experiment_rules() -> ScenarioRules:
     )
 
 
-def no_effect_experiment_rules() -> ScenarioRules:
+def no_effect_experiment_rules(
+    definition: ScenarioDefinition | None = None,
+) -> ScenarioRules:
     """Return evaluator rules for the no-effect experiment."""
 
     return _experiment_rules(
-        next(
+        definition
+        or next(
             item
             for item in EXPERIMENT_SCENARIOS
             if item.scenario_id == "no-effect-ab-experiment"
@@ -352,11 +400,14 @@ def no_effect_experiment_rules() -> ScenarioRules:
     )
 
 
-def immaterial_experiment_rules() -> ScenarioRules:
+def immaterial_experiment_rules(
+    definition: ScenarioDefinition | None = None,
+) -> ScenarioRules:
     """Return evaluator rules for the significant-but-immaterial experiment."""
 
     return _experiment_rules(
-        next(
+        definition
+        or next(
             item
             for item in EXPERIMENT_SCENARIOS
             if item.scenario_id == "significant-but-immaterial-ab-effect"
@@ -365,11 +416,13 @@ def immaterial_experiment_rules() -> ScenarioRules:
     )
 
 
-def channel_mix_rules() -> ScenarioRules:
+def channel_mix_rules(
+    definition: ScenarioDefinition | None = None,
+) -> ScenarioRules:
     """Return evaluator rules for the acquisition-channel mix trap."""
 
     return _business_rules(
-        CHANNEL_MIX_CONFOUNDING_SCENARIO,
+        definition or CHANNEL_MIX_CONFOUNDING_SCENARIO,
         (
             TextRule(
                 check_id="mix_shift_driver",
@@ -435,11 +488,11 @@ def channel_mix_rules() -> ScenarioRules:
     )
 
 
-def retention_rules() -> ScenarioRules:
+def retention_rules(definition: ScenarioDefinition | None = None) -> ScenarioRules:
     """Return evaluator rules for the retention deterioration scenario."""
 
     return _business_rules(
-        RETENTION_DETERIORATION_SCENARIO,
+        definition or RETENTION_DETERIORATION_SCENARIO,
         (
             TextRule(
                 check_id="retention_driver",
@@ -517,11 +570,11 @@ def retention_rules() -> ScenarioRules:
     )
 
 
-def cogs_margin_rules() -> ScenarioRules:
+def cogs_margin_rules(definition: ScenarioDefinition | None = None) -> ScenarioRules:
     """Return evaluator rules for the COGS/margin deterioration scenario."""
 
     return _business_rules(
-        COGS_MARGIN_DETERIORATION_SCENARIO,
+        definition or COGS_MARGIN_DETERIORATION_SCENARIO,
         (
             TextRule(
                 check_id="cogs_margin_driver",
@@ -593,11 +646,13 @@ def cogs_margin_rules() -> ScenarioRules:
     )
 
 
-def discount_refund_rules() -> ScenarioRules:
+def discount_refund_rules(
+    definition: ScenarioDefinition | None = None,
+) -> ScenarioRules:
     """Return evaluator rules for the discount/refund deterioration scenario."""
 
     return _business_rules(
-        DISCOUNT_REFUND_DETERIORATION_SCENARIO,
+        definition or DISCOUNT_REFUND_DETERIORATION_SCENARIO,
         (
             TextRule(
                 check_id="revenue_realization_driver",

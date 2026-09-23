@@ -567,7 +567,9 @@ def _reuse_specialist_metric_comparisons(
         # Lead comparison with the only same-scope value from an unrelated
         # execution silently changes both the measurement and its provenance.
         reused.append(cited_scoped[0] if len(cited_scoped) == 1 else normalized)
-    for finding in (findings or []) if ledger.state.schema_version != "1.2" else []:
+    for finding in (
+        (findings or []) if ledger.state.schema_version not in {"1.2", "1.3"} else []
+    ):
         if finding.metric is None:
             continue
         for record in ledger.specialist_results:

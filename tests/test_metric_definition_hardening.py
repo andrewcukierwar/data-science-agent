@@ -1048,3 +1048,41 @@ def test_chart_completeness_is_generic_and_budget_aware(tmp_path: Path) -> None:
     assert validation is not None
     assert validation.status is ValidationStatus.REVISE
     assert any(issue.category == "chart_completeness" for issue in validation.issues)
+
+    objective_implies_chart = candidate.model_copy(
+        update={
+            "objective": (
+                "Explain acquisition efficiency and include one relevant chart."
+            ),
+            "visualization_requested": False,
+        }
+    )
+    objective_validation = candidate_completeness_validation(
+        objective_implies_chart, context=context
+    )
+    assert objective_validation is not None
+    assert any(
+        issue.category == "chart_completeness" for issue in objective_validation.issues
+    )
+
+    chart_path = context.workspace.outputs / "chart.svg"
+    chart_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n', encoding="utf-8"
+    )
+    chart = context.artifact_manager.register(
+        "outputs/chart.svg",
+        artifact_id="registered-chart",
+        kind=ArtifactKind.CHART,
+        media_type="image/svg+xml",
+    )
+    unlisted = candidate_completeness_validation(candidate, context=context)
+    assert unlisted is not None
+    assert any(issue.category == "chart_completeness" for issue in unlisted.issues)
+
+    listed = candidate.model_copy(update={"artifacts": [chart.id]})
+    assert candidate_completeness_validation(listed, context=context) is None
+
+    chart_path.write_text("tampered chart bytes\n", encoding="utf-8")
+    invalid = candidate_completeness_validation(listed, context=context)
+    assert invalid is not None
+    assert any(issue.category == "chart_completeness" for issue in invalid.issues)

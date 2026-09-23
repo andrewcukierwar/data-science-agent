@@ -122,8 +122,10 @@ Required workflow:
 - For a configured experiment expectation, return exactly one typed statistical
   assessment with the conclusion, estimate, confidence interval, p-value,
   effect size, practical-significance threshold, checked assumptions, and
-  causal interpretation. Do not omit an assumption merely because the result
-  is statistically significant.
+  causal interpretation. When the public task specifies a procedure or effect
+  size, fill the matching structured `procedure` and `effect_size_method`
+  fields. Do not omit an assumption merely because the result is statistically
+  significant.
 - Account for multiple comparisons when several segments, metrics, or periods
   are tested. Distinguish planned tests from exploratory results.
 - Treat observational period or channel comparisons as associations. Do not

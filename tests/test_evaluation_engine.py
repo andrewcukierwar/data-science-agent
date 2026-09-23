@@ -25,6 +25,8 @@ from evaluation.primitives import (
     evaluate_numeric_comparisons,
     evaluate_provenance,
     evaluate_root_cause,
+    evaluate_task_completeness,
+    evaluate_unsupported_assertions,
     evaluate_unsupported_claims,
     numeric_ground_truth_failures,
 )
@@ -39,12 +41,13 @@ from scenarios.definitions import CANONICAL_PROFITABILITY_SCENARIO
 from schemas.audit import AuditStatus
 from schemas.findings import ConfidenceLevel, Finding
 from schemas.metrics import MetricComparison
-from schemas.run_state import RunStatus, ToolEvent, ToolEventStatus
+from schemas.run_state import ArtifactKind, RunStatus, ToolEvent, ToolEventStatus
+from tools.artifacts import ArtifactManager
 from tools.workspace import WorkspaceManager
 
-# Fixture identities track the catalog; the deliberate version gate lives
-# in tests/test_scenario_catalog.py.
-_CATALOG_EVALUATOR_VERSION = CANONICAL_PROFITABILITY_SCENARIO.evaluator_version
+# This fixture explicitly binds scenario 1.0, which is retained for frozen v8
+# compatibility and therefore keeps evaluator contract 1.2.
+_CATALOG_EVALUATOR_VERSION = "1.2"
 
 
 def _comparisons() -> list[MetricComparison]:
@@ -143,6 +146,109 @@ def test_semantic_primitives_reject_speculation_and_unsupported_claims() -> None
         "The analysis proves this channel change caused every downstream outcome."
     )
     assert unsupported[0].status.value == "fail"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_status"),
+    (
+        ("The data prove X caused Y.", "fail"),
+        ("The data do not prove X caused Y.", "pass"),
+        ("This is an observed association, not causal proof.", "pass"),
+        ("It is not only associated; it proves causality.", "fail"),
+        ("The data do not fail to prove X caused Y.", "fail"),
+        ("The data do not not prove X caused Y.", "fail"),
+        ("It is not impossible to prove X caused Y.", "fail"),
+        (
+            "The data do not prove X caused Y, and the data prove the treatment "
+            "caused more conversions.",
+            "fail",
+        ),
+        (
+            "The result proves a literal null effect.",
+            "fail",
+        ),
+        (
+            "The result does not prove a literal null effect.",
+            "pass",
+        ),
+        (
+            "The result does not establish a true null.",
+            "pass",
+        ),
+    ),
+)
+def test_scoped_assertion_gate_distinguishes_causal_and_null_caveats(
+    text: str,
+    expected_status: str,
+) -> None:
+    checks = evaluate_unsupported_assertions(
+        text,
+        forbidden_patterns=(
+            r"\bproves?\b",
+            r"\b(?:proves?|establishes?)\b[^.!?]{0,50}\b(?:literal )?(?:true )?null"
+            r"(?: effect)?\b",
+        ),
+    )
+    assert checks[0].status.value == expected_status
+
+
+def test_current_chart_contract_requires_registered_valid_and_reported_artifact(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace("chart-v13")
+    ledger = AnalysisLedger(workspace, objective="Summarize the findings.")
+    artifact_manager = ArtifactManager(workspace, ledger)
+    chart_path = workspace.outputs / "chart.svg"
+    chart_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n', encoding="utf-8"
+    )
+    chart = artifact_manager.register(
+        "outputs/chart.svg",
+        artifact_id="chart-v13",
+        kind=ArtifactKind.CHART,
+        media_type="image/svg+xml",
+    )
+    policy = TaskCompletenessPolicy(
+        require_plan=False,
+        require_hypothesis_history=False,
+        require_findings=False,
+        require_structured_metrics=False,
+        require_chart=True,
+        require_final_critic_pass=False,
+        require_recommendations=False,
+        require_agent_trace=False,
+        require_tool_trace=False,
+    )
+    state = ledger.state
+
+    missing_link = evaluate_task_completeness(
+        workspace, state, "No chart link.", policy, legacy_contract=False
+    )
+    assert any(
+        item.check_id == "task_completeness:chart_report_reference"
+        and item.status.value == "fail"
+        for item in missing_link
+    )
+
+    report = f"[Supporting chart]({chart.path})"
+    valid = evaluate_task_completeness(
+        workspace, state, report, policy, legacy_contract=False
+    )
+    assert all(
+        item.status.value == "pass"
+        for item in valid
+        if item.check_id.startswith("task_completeness:chart")
+    )
+
+    chart_path.write_text("tampered chart bytes\n", encoding="utf-8")
+    tampered = evaluate_task_completeness(
+        workspace, state, report, policy, legacy_contract=False
+    )
+    assert any(
+        item.check_id == "task_completeness:chart_artifact_valid"
+        and item.status.value == "fail"
+        for item in tampered
+    )
 
 
 def test_repeated_offline_evaluation_is_byte_stable(tmp_path: Path) -> None:

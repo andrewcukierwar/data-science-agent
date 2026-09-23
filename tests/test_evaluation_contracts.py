@@ -173,12 +173,12 @@ def test_model_visible_scenario_projection_excludes_evaluator_only_fields() -> N
 
     context = scenario.model_visible_context()
     assert context.model_dump() == {
-        "contract_version": "1.0",
-        "scenario_id": "scenario-a",
-        "scenario_version": "1.0",
-        "name": "A scenario",
+        "contract_version": "2.0",
         "user_question": "What changed?",
     }
+    assert "scenario_id" not in context.model_dump()
+    assert "scenario_version" not in context.model_dump()
+    assert "name" not in context.model_dump()
     assert "seed" not in context.model_dump()
     assert "evaluator_version" not in context.model_dump()
     assert "ground_truth" not in context.model_dump()

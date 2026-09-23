@@ -8,6 +8,7 @@ from evaluation.canonical import (
 )
 from evaluation.contracts import (
     EVALUATION_CONTRACT_VERSION,
+    MODEL_CONTEXT_CONTRACT_VERSION,
     AggregateBenchmarkResult,
     AggregateDenominator,
     ArchitectureComparison,
@@ -130,6 +131,7 @@ __all__ = [
     "CostSummary",
     "DistributionSummary",
     "EVALUATION_CONTRACT_VERSION",
+    "MODEL_CONTEXT_CONTRACT_VERSION",
     "EvaluationCheck",
     "EvaluationCheckStatus",
     "EvaluatorCompatibility",

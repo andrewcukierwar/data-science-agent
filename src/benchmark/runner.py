@@ -30,6 +30,7 @@ from agents.runtime import (
 )
 from benchmark.aggregation import AGGREGATION_VERSION, aggregate_manifest
 from evaluation.contracts import (
+    MODEL_CONTEXT_CONTRACT_VERSION,
     BenchmarkManifest,
     BenchmarkRunRecord,
     BudgetConfiguration,
@@ -82,8 +83,13 @@ from schemas.run_state import RunBlockReason, RunBudget
 from tools.sql_deadline import DEFAULT_SQL_TIMEOUT_SECONDS, validate_sql_timeout
 from tools.workspace import Workspace, WorkspaceManager
 
-BENCHMARK_RUNNER_VERSION = "1.0"
-TOOL_CONTRACT_VERSION = "1.1"
+BENCHMARK_RUNNER_VERSION = "1.1"
+TOOL_CONTRACT_VERSION = "1.2"
+PUBLIC_TASK_CONTRACT_VERSION = "1.1"
+PUBLIC_CHART_DELIVERABLE = (
+    "Include one relevant chart as a registered chart artifact and reference it "
+    "in the final report."
+)
 DEFAULT_ARCHITECTURES = ("multi-agent", "single-agent")
 DEFAULT_REPETITIONS = 3
 _RUN_ID_SAFE = re.compile(r"[^A-Za-z0-9_-]+")
@@ -573,6 +579,12 @@ def _default_run_id(
     return _RUN_ID_SAFE.sub("-", "-".join(values)).strip("-")
 
 
+def _public_task(user_question: str) -> str:
+    """Apply the declared, architecture-neutral benchmark deliverable contract."""
+
+    return f"{user_question.strip()}\n\n{PUBLIC_CHART_DELIVERABLE}"
+
+
 def _capture_code_revision() -> CodeRevision | None:
     """Capture the exact local repository state without network access.
 
@@ -829,7 +841,12 @@ class BenchmarkRunner:
             )
         selected_ids = tuple(
             scenario_ids
-            or [registration.scenario_id for registration in self.catalog.registrations]
+            or sorted(
+                {
+                    registration.scenario_id
+                    for registration in self.catalog.registrations
+                }
+            )
         )
         if not selected_ids:
             raise BenchmarkError("at least one scenario must be declared")
@@ -889,6 +906,11 @@ class BenchmarkRunner:
         sql_timeout_seconds = validate_sql_timeout(sql_timeout_seconds)
         parameters: dict[str, object] = {
             "benchmark_runner_version": BENCHMARK_RUNNER_VERSION,
+            "model_context_contract_version": MODEL_CONTEXT_CONTRACT_VERSION,
+            "public_task_contract_version": PUBLIC_TASK_CONTRACT_VERSION,
+            "public_chart_deliverable": PUBLIC_CHART_DELIVERABLE,
+            "evaluator_contract_version": "1.3",
+            "audit_schema_version": "3.0",
             "cost_pilot_required": True,
             "workspace_base_dir": str(self.workspace_base_dir),
             # The bounded evidence-correction allowance changes how many model
@@ -1700,7 +1722,7 @@ class BenchmarkRunner:
         runner = runner_class(**runner_options)
         return runner.run_sync(
             cell.run_id,
-            cell.scenario.metadata.user_question,
+            _public_task(cell.scenario.metadata.user_question),
             workspace=workspace,
         )
 

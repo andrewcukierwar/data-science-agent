@@ -404,9 +404,10 @@ class CostBreakdown(BaseModel):
         return self
 
 
-# Persisted state 1.2 adds bound numerical results and selected-only statistics.
-# Earlier versions remain readable without claiming the new guarantees.
-CURRENT_STATE_SCHEMA_VERSION = "1.2"
+# Persisted state 1.2 adds bound numerical results and selected-only statistics;
+# 1.3 stores classified data-quality issues with structured scope. Earlier
+# versions remain readable without claiming newer guarantees.
+CURRENT_STATE_SCHEMA_VERSION = "1.3"
 
 
 class AnalysisRunState(BaseModel):

@@ -539,12 +539,12 @@ def test_generalist_audit_without_provenance_is_refused(tmp_path: Path) -> None:
 # --- versioning and compatibility --------------------------------------------
 
 
-def test_audit_contract_two_uses_typed_observations() -> None:
+def test_audit_contract_three_uses_typed_observations_and_issue_scope() -> None:
     schema = AuditResult.model_json_schema()
     limitation_items = schema["properties"]["limitations"]["items"]
     observation = schema["$defs"]["AuditObservation"]
 
-    assert AUDIT_CONTRACT_VERSION == "2.0"
+    assert AUDIT_CONTRACT_VERSION == "3.0"
     assert limitation_items == {"$ref": "#/$defs/AuditObservation"}
     assert set(observation["properties"]) == {"statement", "evidence_refs"}
     table = schema["$defs"]["TableAudit"]
@@ -552,6 +552,14 @@ def test_audit_contract_two_uses_typed_observations() -> None:
     assert table["properties"]["warnings"]["items"] == {
         "$ref": "#/$defs/AuditObservation"
     }
+    issue_scope = schema["$defs"]["DataQualityIssueScope"]
+    assert issue_scope["properties"]["dimensions"]["items"] == {
+        "$ref": "#/$defs/DataQualityScopeDimension"
+    }
+
+    from agents.output_contract import strict_output_type
+
+    assert strict_output_type(AuditResult).is_strict_json_schema()
 
 
 def test_output_schema_fingerprint_is_bound_to_the_audit_contract(
@@ -589,10 +597,10 @@ def test_new_workspaces_declare_the_audit_contract_state_version(
     workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace("run-v11")
     ledger = AnalysisLedger(workspace, run_id="run-v11", objective="Audit the data.")
 
-    assert CURRENT_STATE_SCHEMA_VERSION == "1.2"
+    assert CURRENT_STATE_SCHEMA_VERSION == "1.3"
     assert ledger.state.schema_version == CURRENT_STATE_SCHEMA_VERSION
     assert CURRENT_STATE_SCHEMA_VERSION in SUPPORTED_WORKSPACE_VERSIONS
-    assert check_workspace_version_compatibility(workspace.root) == "1.2"
+    assert check_workspace_version_compatibility(workspace.root) == "1.3"
 
 
 def test_contract_one_audits_load_without_fabricated_provenance() -> None:
