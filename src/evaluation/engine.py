@@ -7,7 +7,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from agents.evidence import executed_references
 from evaluation.contracts import (
     BenchmarkManifest,
     BenchmarkRunRecord,
@@ -20,6 +19,7 @@ from evaluation.contracts import (
     WorkspaceIdentity,
     check_workspace_version_compatibility,
 )
+from evaluation.evidence_semantics import evidence_semantics_for_contract
 from evaluation.primitives import (
     CapabilityPolicy,
     DataQualityPolicy,
@@ -191,10 +191,14 @@ def evaluate_workspace(
             evaluator_version=rules.evaluator_version,
         )
     state = snapshot.state
+    evidence_semantics = evidence_semantics_for_contract(
+        scenario_version=rules.scenario_version,
+        evaluator_version=rules.evaluator_version,
+    )
     # One resolution of executed evidence for the whole evaluation, so the
     # audit, capability, and provenance checks cannot disagree about what
     # counts as a successful execution or a verified artifact.
-    executed_refs = executed_references(snapshot.ledger)
+    executed_refs = evidence_semantics.executed_references(snapshot.ledger)
     checks: list[EvaluationCheck] = []
     checks.extend(evaluate_lifecycle(state))
     checks.extend(
@@ -234,7 +238,14 @@ def evaluate_workspace(
                 message="no scenario-specific numeric ground truth was declared",
             )
         )
-    checks.extend(evaluate_provenance(snapshot.workspace, state, snapshot.report_text))
+    checks.extend(
+        evaluate_provenance(
+            snapshot.workspace,
+            state,
+            snapshot.report_text,
+            evidence_semantics=evidence_semantics,
+        )
+    )
     checks.extend(evaluate_root_cause(_analysis_text(snapshot), rules.root_cause_rules))
     checks.extend(
         evaluate_statistics(

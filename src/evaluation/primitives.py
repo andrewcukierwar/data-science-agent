@@ -16,13 +16,17 @@ from enum import StrEnum
 from math import isclose, isfinite
 
 from agents.evidence import (
-    executed_references,
-    has_source_lineage,
+    executed_references,  # noqa: F401 -- retain the current-contract module API
+    has_source_lineage,  # noqa: F401 -- retain the current-contract module API
     material_claims,
     resolve_citations,
-    resolve_material_claims,
+    resolve_material_claims,  # noqa: F401 -- retain the current-contract module API
 )
 from evaluation.contracts import EvaluationCheck, EvaluationCheckStatus
+from evaluation.evidence_semantics import (
+    CURRENT_EVIDENCE_SEMANTICS,
+    EvidenceSemantics,
+)
 from orchestration.ledger import AnalysisLedger
 from scenarios.definitions.models import GroundTruthMetric
 from schemas.audit import (
@@ -1111,10 +1115,13 @@ def _normalize_statistical_assumption(
     return " ".join(re.findall(r"[a-z0-9.]+", lowered))
 
 
-def _evidence_refs(workspace: Workspace) -> set[str]:
+def _evidence_refs(
+    workspace: Workspace,
+    evidence_semantics: EvidenceSemantics = CURRENT_EVIDENCE_SEMANTICS,
+) -> set[str]:
     """Resolve only successful and verified persisted evidence references."""
 
-    return executed_references(AnalysisLedger(workspace))
+    return evidence_semantics.executed_references(AnalysisLedger(workspace))
 
 
 def _report_recommendation_evidence_refs(report_text: str) -> list[str]:
@@ -1138,6 +1145,7 @@ def evaluate_provenance(
     report_text: str,
     *,
     check_prefix: str = "provenance",
+    evidence_semantics: EvidenceSemantics = CURRENT_EVIDENCE_SEMANTICS,
 ) -> tuple[EvaluationCheck, ...]:
     """Verify executed evidence, registered artifacts, and report citations."""
 
@@ -1210,8 +1218,8 @@ def evaluate_provenance(
                 )
             )
 
-    refs = _evidence_refs(workspace)
     ledger = AnalysisLedger(workspace)
+    refs = evidence_semantics.executed_references(ledger)
     # The same claim enumeration and the same resolution the runtime uses, so a
     # persisted workspace cannot be supported at one boundary and unsupported at
     # the other.
@@ -1262,7 +1270,7 @@ def evaluate_provenance(
         )
     resolutions = {
         item.claim_id: item.resolution
-        for item in resolve_material_claims(
+        for item in evidence_semantics.resolve_material_claims(
             material_claims(
                 findings=state.findings,
                 hypotheses=state.hypotheses,
@@ -1304,7 +1312,7 @@ def evaluate_provenance(
     # The append-only history records the transitions themselves. A resolution
     # that was later revised still had to be supported when it was made, so an
     # unsupported version cannot be hidden by overwriting the current one.
-    history_resolutions = resolve_material_claims(
+    history_resolutions = evidence_semantics.resolve_material_claims(
         tuple(
             (f"{index}:{version.id}", tuple(version.evidence_refs))
             for index, version in enumerate(state.hypothesis_history)
@@ -1344,17 +1352,23 @@ def evaluate_provenance(
         f"finding:{finding.id}"
         for finding in state.findings
         if (finding.metric is not None or finding.value is not None)
-        and not has_source_lineage(ledger, list(finding.evidence_refs))
+        and not evidence_semantics.has_source_lineage(
+            ledger, list(finding.evidence_refs)
+        )
     ]
     unsupported_lineage.extend(
         f"metric_comparison:{comparison.metric_key}"
         for comparison in state.metric_comparisons
-        if not has_source_lineage(ledger, list(comparison.evidence_refs))
+        if not evidence_semantics.has_source_lineage(
+            ledger, list(comparison.evidence_refs)
+        )
     )
     unsupported_lineage.extend(
         f"statistical_assessment:{assessment.metric_key}"
         for assessment in assessments
-        if not has_source_lineage(ledger, list(assessment.evidence_refs))
+        if not evidence_semantics.has_source_lineage(
+            ledger, list(assessment.evidence_refs)
+        )
     )
     checks.append(
         _check(
