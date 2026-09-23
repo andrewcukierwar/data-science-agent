@@ -127,6 +127,12 @@ Required investigation behavior:
    decomposition would benefit from visual comparison, ask Analyst to save a
    relevant chart artifact. Treat specialist outputs as evidence-bearing
    structured results, not as unverified prose.
+   For a binary experiment, reuse a suitable existing complete canonical SQL
+   source from the mandatory audit when it covers the requested population,
+   grain, period, and outcome. Otherwise, delegate source construction to the
+   Analyst first, then pass the exact successful SQL `tool_event_id` in the
+   bounded Statistician task. The Statistician has no SQL tool and must inspect
+   that retained event before running the approved analytical operation.
 4. Record material open questions and decide explicitly whether each needs follow-up
    analysis. Do not pursue a follow-up merely because it is interesting; explain its
    decision value and available evidence. When the objective asks why a major
@@ -484,7 +490,9 @@ def build_lead_agent(
             role=AgentRole.ANALYST,
             tool_name="delegate_to_analyst",
             description=(
-                "Delegate bounded SQL/Python business analytics and decomposition."
+                "Delegate bounded business analytics, deterministic analytical "
+                "source construction, and decomposition; return canonical SQL "
+                "event IDs when a downstream Statistician needs the source."
             ),
             max_turns=specialist_turns(AgentRole.ANALYST),
         ),
@@ -492,7 +500,12 @@ def build_lead_agent(
             statistician,
             role=AgentRole.STATISTICIAN,
             tool_name="delegate_to_statistician",
-            description="Delegate a bounded inferential or statistical question.",
+            description=(
+                "Delegate a bounded inferential or statistical question. For "
+                "supported binary_experiment work, pass a complete canonical "
+                "SQL source by reusing suitable audit evidence or passing the "
+                "exact successful SQL event ID from Analyst source construction."
+            ),
             max_turns=specialist_turns(AgentRole.STATISTICIAN),
         ),
     ]

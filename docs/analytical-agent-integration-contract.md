@@ -41,7 +41,7 @@ discriminator behind it:
 
 | Role | Permitted analytical operations | Boundary |
 | --- | --- | --- |
-| Lead | None | Coordinates the investigation and arranges Analyst or Data Auditor source work through the existing orchestration path. It remains unable to execute SQL, Python, or analytical computation. |
+| Lead | None | Coordinates the investigation, reuses suitable mandatory-audit sources, or arranges Analyst source work. It remains unable to execute SQL, Python, or analytical computation. |
 | Data Auditor | `coverage` | Checks explicit expected date or dimension grids. |
 | Analyst | `entity_aggregate`, `ratio`, `contrast`, `reconciliation` | Performs entity, ratio, comparison, and reconciliation calculations. |
 | Statistician | `binary_experiment` | Has no SQL permission; use Python for other inferential work. |
@@ -60,6 +60,12 @@ and legitimate filters to produce a complete retained source with the exact
 `tool_event_id` returned by `run_sql`. Source operations accept only successful,
 canonical, complete, untruncated SQL results. Derived operations accept
 validated `run_analytical` event IDs and retained quantity names.
+
+Supported role-approved primitives are the default calculation path when a
+complete, valid source is available. For binary experiments, Lead reuses a
+suitable mandatory-audit SQL source or commissions Analyst source construction
+first, then passes the exact successful SQL `tool_event_id` to Statistician.
+Statistician inspects that event; it cannot execute SQL or delegate source work.
 
 An agent must not treat a model-preview truncation, SQL row cap, result-byte cap,
 or sample as a complete population. If a source exceeds a capture cap, the
@@ -116,7 +122,47 @@ specialist permissions; it does not gain a separate implementation or hidden
 budget.
 
 This integration does not claim that agents have adopted or selected these
-operations in a live run. Verification pending.
+operations in a live run. Deterministic acceptance verification is complete.
+
+### Acceptance results (2026-09-22)
+
+Independent Sol High review covered `3a644a85..0231f589` and the necessary
+contracts. It found no Critical or High issues and one Medium issue: older
+SQL/Python-only instructions conflicted with primitive adoption, and Lead lacked
+explicit SQL-source handoff guidance for Statistician. The accepted Luna High
+fix aligned role instructions and delegation descriptions, added a guidance
+regression, and corrected Ruff formatting. No P1.1a arithmetic was changed.
+
+- Final focused integration, analytical, P0.1/P0.2/P0.3, and role/tool/binding
+  regression command: **297 passed**, including all **14 P1.1b integration**
+  and **41 P1.1a analytical** cases.
+- Full `uv run pytest -m 'not live' -q`: **820 passed, 3 skipped,
+  17 deselected**. Docker-dependent tests skipped because the local Docker
+  socket is unavailable. One existing negative-test Pydantic serialization
+  warning remains.
+- `uv run ruff check .`, `uv run ruff format --check .` (**193 files**), and
+  `git diff --check`: passed.
+
+Commands used `UV_CACHE_DIR=/private/tmp/p11b-uv-cache` because the default cache
+is outside the writable sandbox. No live/model/paid calls were made.
+
+The integration fixtures use arbitrary names and shifted 2043 dates. They reject
+failed, truncated, and ambiguous sources and verify exact bound values through
+specialist persistence, Lead selection, Critic candidate validation, final report,
+and offline evaluator without model retyping. The Generalist exposes exactly the
+specialist operation union and uses the same binding/finalization machinery.
+Large responses retain canonical IDs and an explicit pageable inspection route.
+The reviewed production additions contain no scenario IDs, expected answers,
+hidden causes, or evaluator-only information.
+
+Lead remains non-computational. Critic has no `run_analytical` capability; its
+pre-existing SQL/Python verification permissions remain unchanged.
+
+Autonomous primitive selection, Analyst-to-Statistician source sequencing,
+complete paged inspection, and correct model-authored binding selection remain
+unverified without live calls. Deterministic plumbing and prompt regressions do
+not establish those behaviors. Subject to those stated limitations, P1.1b is
+ready to close; P1.2 has not begun.
 
 P1.2 Critic policy and repair changes remain deferred. Large-result streaming,
 additional cadences, arbitrary arithmetic expressions, automatic statistical

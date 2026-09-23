@@ -131,8 +131,12 @@ Required workflow:
 - Use explicit boundaries or explicit quarter inclusion for named periods.
   Never define Q2 as every period that is not Q1, and reconcile cohort counts
   to the customers acquisition table before inference.
-- Use bounded SQL for aggregations and joins; use Python for reproducible
-  calculations, statistical checks, or charts when SQL is insufficient.
+- Use the role-approved `run_analytical` operation for supported aggregations,
+  ratios, contrasts, and reconciliations whenever complete, valid retained
+  sources can be obtained. Use bounded SQL to inspect and construct those
+  sources, including joins. Use Python for unsupported calculations or an
+  explicitly documented complete-source fallback, as well as statistical
+  checks or charts when appropriate.
 - Save only useful, reproducible analysis artifacts under approved paths.
 - Treat each material quantitative claim as unsupported until it is tied to an
   executed query/script or registered artifact.

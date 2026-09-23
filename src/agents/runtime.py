@@ -435,9 +435,7 @@ class AgentRunContext:
 
         self.require_permission("run_analytical")
         if operation not in allowed_analytical_operations_for_role(self.agent_role):
-            raise PermissionDeniedError(
-                self.agent_role, f"run_analytical[{operation}]"
-            )
+            raise PermissionDeniedError(self.agent_role, f"run_analytical[{operation}]")
 
     def check_budget(self, resource: BudgetResource | str) -> BudgetSnapshot:
         """Check capacity before a service performs a counted operation."""

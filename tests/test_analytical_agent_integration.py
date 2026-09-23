@@ -22,10 +22,14 @@ from agents import (
     run_sql,
     tools_for_role,
 )
+from agents.analyst import ANALYST_INSTRUCTIONS
 from agents.critic import validate_candidate_evidence_provenance
-from agents.generalist import persist_generalist_result
-from agents.lead import persist_lead_result
-from agents.statistician import persist_statistician_result
+from agents.generalist import GENERALIST_INSTRUCTIONS, persist_generalist_result
+from agents.lead import LEAD_INSTRUCTIONS, persist_lead_result
+from agents.statistician import (
+    STATISTICIAN_INSTRUCTIONS,
+    persist_statistician_result,
+)
 from evaluation.primitives import StatisticsPolicy, evaluate_statistics
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
@@ -69,9 +73,7 @@ def _context(
     return AgentRunContext(
         workspace=workspace,
         ledger=ledger,
-        sql_service=DuckDBExecutionService(
-            workspace, ledger, max_rows=max_sql_rows
-        ),
+        sql_service=DuckDBExecutionService(workspace, ledger, max_rows=max_sql_rows),
         python_service=PythonExecutionService(workspace, ledger),
         artifact_manager=ArtifactManager(workspace, ledger),
         run_config=AgentRunConfig(
@@ -121,6 +123,25 @@ def _analytical(context: AgentRunContext, request: dict) -> AnalyticalToolOutput
     response = _invoke(run_analytical, context, {"request": request})
     assert response.success, response
     return AnalyticalToolOutput.model_validate(response.data)
+
+
+def test_agent_guidance_uses_supported_analytical_operation_by_default() -> None:
+    """Keep role prompts aligned with the deterministic operation contract."""
+
+    assert "role-approved `run_analytical` operation" in GENERALIST_INSTRUCTIONS
+    assert "role-approved `run_analytical` operation" in ANALYST_INSTRUCTIONS
+    assert "role-approved `run_analytical` operation" in STATISTICIAN_INSTRUCTIONS
+    assert "complete, valid" in GENERALIST_INSTRUCTIONS
+    assert "complete, valid" in ANALYST_INSTRUCTIONS
+    assert "complete, valid" in STATISTICIAN_INSTRUCTIONS
+    assert "SQL is not an approved tool" in STATISTICIAN_INSTRUCTIONS
+    assert "complete canonical SQL" in LEAD_INSTRUCTIONS
+    assert "Analyst first" in LEAD_INSTRUCTIONS
+    assert "exact successful SQL `tool_event_id`" in STATISTICIAN_INSTRUCTIONS
+    assert "SQL tool and cannot delegate" in STATISTICIAN_INSTRUCTIONS
+    assert "Use SQL/Python for every material number" not in GENERALIST_INSTRUCTIONS
+    assert "Use Python for all calculations" not in STATISTICIAN_INSTRUCTIONS
+    assert "Use bounded SQL for aggregations and joins" not in ANALYST_INSTRUCTIONS
 
 
 def test_schema_role_surfaces_and_runtime_operation_guards(tmp_path: Path) -> None:
@@ -287,7 +308,11 @@ def test_large_model_response_keeps_ids_and_explicit_inspection_route(
     assert output.analytical_record_id.startswith("analytical-")
     assert output.result_summaries_truncated or output.result_summaries
     inspected = _invoke(
-        next(t for t in tools_for_role(AgentRole.DATA_AUDITOR) if t.name == "inspect_evidence"),
+        next(
+            t
+            for t in tools_for_role(AgentRole.DATA_AUDITOR)
+            if t.name == "inspect_evidence"
+        ),
         context,
         {"reference": output.inspect_reference},
     )
@@ -437,8 +462,7 @@ def _experiment_context(
             "assignment_log": {
                 "participant_token": [f"p{i}" for i in range(arm_size * 2)],
                 "assigned_on": [_day(0)] * (arm_size * 2),
-                "variant_label": ["baseline-x"] * arm_size
-                + ["candidate-y"] * arm_size,
+                "variant_label": ["baseline-x"] * arm_size + ["candidate-y"] * arm_size,
                 "success_bit": [1] * control_successes
                 + [0] * (arm_size - control_successes)
                 + [1] * treatment_successes
@@ -478,9 +502,7 @@ def _binary_output(context: AgentRunContext, threshold: str) -> AnalyticalToolOu
     )
 
 
-def _assessment(
-    output: AnalyticalToolOutput, conclusion: str
-) -> StatisticalAssessment:
+def _assessment(output: AnalyticalToolOutput, conclusion: str) -> StatisticalAssessment:
     pointers = {
         item.quantity: item.pointer
         for item in output.binding_pointers
