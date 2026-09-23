@@ -205,8 +205,8 @@ def persist_generalist_validation(
     catalog = build_validation_catalog(critic_candidate)
     deterministic = deterministic_candidate_validation(critic_candidate, context)
     try:
-        validation = validate_review(
-            deterministic or result.validation,
+        validation = deterministic or validate_review(
+            result.validation,
             critic_candidate,
             context.ledger,
             catalog=catalog,

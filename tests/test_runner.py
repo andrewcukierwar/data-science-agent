@@ -834,6 +834,60 @@ def test_successful_preflight_repair_retains_originating_review_history(
     ]
 
 
+def test_deterministic_preflight_revision_uses_bounded_blocked_lifecycle(
+    tmp_path: Path,
+) -> None:
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    pd.DataFrame({"cogs": [40]}).to_parquet(inputs / "orders.parquet", index=False)
+    lead_calls = 0
+    critic_calls = 0
+    objective = "Explain profit performance and include a chart."
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def incomplete_lead(
+        context,
+        prompt,
+        *,
+        business_context,
+        audit,
+        agent,
+    ):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        return LeadResult(objective=objective, answer="Profit declined.")
+
+    async def critic_must_not_run(context, candidate, *, agent):  # noqa: ANN001
+        nonlocal critic_calls
+        critic_calls += 1
+        raise AssertionError("deterministic preflight should precede Critic")
+
+    result = asyncio.run(
+        AnalysisRunner(
+            workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+            auditor_runner=fake_auditor,
+            lead_runner=incomplete_lead,
+            critic_runner=critic_must_not_run,
+        ).run("run-deterministic-preflight", objective, inputs_source=inputs)
+    )
+
+    assert result.status is RunStatus.BLOCKED
+    assert result.error is None
+    assert result.constrained is True
+    assert lead_calls == 2
+    assert critic_calls == 0
+    assert result.validation_result is not None
+    assert {
+        blocker.requirement_id for blocker in result.validation_result.blockers
+    } == {"requirement:margin", "requirement:visualization"}
+    assert result.ledger is not None
+    assert result.ledger.budget.critic_loops == 0
+    assert len(result.ledger.finalization_repairs) == 1
+    assert result.ledger.finalization_repairs[0].status is RepairStatus.SUCCEEDED
+
+
 def test_runner_preserves_candidate_when_sql_budget_stops_remediation(
     tmp_path: Path,
 ) -> None:

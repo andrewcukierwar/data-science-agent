@@ -406,6 +406,19 @@ _ISSUE_CATEGORY = {
     "structured_metric": BlockerCategory.INCORRECT_NUMERICAL_CLAIM,
 }
 
+_COMPLETION_REQUIREMENT_BY_ISSUE_ID = {
+    "V-COMPLETENESS-FOLLOW-UP": "requirement:follow-up",
+    "V-COMPLETENESS-MARGIN": "requirement:margin",
+    "V-COMPLETENESS-ACQUISITION": "requirement:acquisition",
+    "V-COMPLETENESS-STRUCTURED-METRICS": "requirement:structured-metrics",
+    "V-COMPLETENESS-CHART": "requirement:visualization",
+}
+_COMPLETION_REQUIREMENT_BY_CATEGORY = {
+    "structured_metric_completeness": "requirement:structured-metrics",
+    "chart_completeness": "requirement:visualization",
+    "evidence_provenance": "requirement:evidence",
+}
+
 
 def adapt_legacy_issues(
     issues: Iterable[ValidationIssue],
@@ -444,7 +457,15 @@ def adapt_legacy_issues(
         category = _ISSUE_CATEGORY.get(
             issue.category or "", BlockerCategory.UNSUPPORTED_ASSERTED_FACT
         )
-        target_id = "target:answer"
+        completion_requirement_id = _COMPLETION_REQUIREMENT_BY_ISSUE_ID.get(
+            issue.id
+        ) or _COMPLETION_REQUIREMENT_BY_CATEGORY.get(issue.category or "")
+        blocker_requirement_id = completion_requirement_id or requirement_id
+        target_id = (
+            f"target:missing:{blocker_requirement_id}"
+            if completion_requirement_id is not None
+            else "target:answer"
+        )
         affected_result_ids: list[str] = []
         referenced_metrics = [
             item
@@ -492,7 +513,7 @@ def adapt_legacy_issues(
         blockers.append(
             ValidationBlocker(
                 category=category,
-                requirement_id=requirement_id,
+                requirement_id=blocker_requirement_id,
                 target_id=target_id,
                 affected_result_ids=affected_result_ids,
                 evidence=anchors,

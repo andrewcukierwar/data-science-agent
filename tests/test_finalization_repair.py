@@ -5,16 +5,23 @@ from pathlib import Path
 
 import pytest
 
-from agents.critic import candidate_completeness_validation
+from agents.critic import (
+    candidate_completeness_validation,
+    deterministic_candidate_validation,
+)
 from agents.finalization import (
     ORIGINAL_OBJECTIVE_REQUIREMENT,
     ReviewContractError,
+    blocker_identity,
     build_validation_catalog,
     metric_definition_change_targets,
     preserve_unrelated_candidate,
     validate_review,
 )
-from agents.generalist import _as_critic_candidate
+from agents.generalist import (
+    _as_critic_candidate,
+    persist_generalist_validation,
+)
 from agents.runtime import (
     AgentRole,
     AgentRunConfig,
@@ -23,7 +30,9 @@ from agents.runtime import (
 )
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import AnalysisRunner
+from schemas.audit import AuditResult, AuditStatus
 from schemas.findings import ConfidenceLevel, Finding
+from schemas.generalist import GeneralistResult
 from schemas.lead import LeadResult
 from schemas.metrics import MetricComparison, MetricComparisonType
 from schemas.run_state import ToolEvent, ToolEventStatus
@@ -53,9 +62,13 @@ from tools.sql import DuckDBExecutionService
 from tools.workspace import WorkspaceManager
 
 
-def _context(tmp_path: Path) -> AgentRunContext:
+def _context(
+    tmp_path: Path,
+    *,
+    objective: str = "Compare North and South revenue.",
+) -> AgentRunContext:
     workspace = WorkspaceManager(tmp_path / "workspaces").create_workspace("p12")
-    ledger = AnalysisLedger(workspace, objective="Compare North and South revenue.")
+    ledger = AnalysisLedger(workspace, objective=objective)
     return AgentRunContext(
         workspace=workspace,
         ledger=ledger,
@@ -64,6 +77,12 @@ def _context(tmp_path: Path) -> AgentRunContext:
         artifact_manager=ArtifactManager(workspace, ledger),
         run_config=AgentRunConfig(run_id="p12", agent_role=AgentRole.GENERALIST),
     )
+
+
+def _enable_cogs(context: AgentRunContext, tmp_path: Path) -> None:
+    path = tmp_path / "orders.csv"
+    path.write_text("cogs", encoding="utf-8")
+    context.sql_service._input_relations["orders"] = path
 
 
 def _blocker(candidate: CriticCandidate, **updates: object) -> ValidationBlocker:
@@ -299,6 +318,146 @@ def test_blocker_identity_survives_rephrasing_reordering_and_value_change(
     assert a.blockers[0].id == b.blockers[0].id
 
 
+def test_deterministic_margin_and_visualization_blockers_have_distinct_identities(
+    tmp_path: Path,
+) -> None:
+    context = _context(
+        tmp_path, objective="Explain profit performance and create a chart."
+    )
+    _enable_cogs(context, tmp_path)
+    candidate = CriticCandidate(
+        objective=context.ledger.state.objective,
+        answer="Profit changed.",
+        visualization_requested=True,
+    )
+
+    validation = deterministic_candidate_validation(candidate, context)
+
+    assert validation is not None
+    assert validation.status is ValidationStatus.REVISE
+    assert {
+        (blocker.requirement_id, blocker.target_id) for blocker in validation.blockers
+    } == {
+        ("requirement:margin", "target:missing:requirement:margin"),
+        (
+            "requirement:visualization",
+            "target:missing:requirement:visualization",
+        ),
+    }
+    assert len({blocker.id for blocker in validation.blockers}) == 2
+    assert context.ledger.budget.critic_loops == 0
+
+
+def test_follow_up_acquisition_and_chart_requirements_can_coexist(
+    tmp_path: Path,
+) -> None:
+    context = _context(
+        tmp_path, objective="Analyze acquisition efficiency and create a chart."
+    )
+    context.sql_service._input_relations["sessions"] = tmp_path / "sessions.parquet"
+    candidate = CriticCandidate(
+        objective=context.ledger.state.objective,
+        answer="Marketing spend increased while CAC was stable.",
+        follow_up_analysis=True,
+        follow_up_rationale="The channel-level question remains unresolved.",
+    )
+
+    validation = deterministic_candidate_validation(candidate, context)
+
+    assert validation is not None
+    assert {blocker.requirement_id for blocker in validation.blockers} == {
+        "requirement:follow-up",
+        "requirement:acquisition",
+        "requirement:visualization",
+    }
+    assert len({blocker.id for blocker in validation.blockers}) == 3
+
+
+def test_each_deterministic_completion_issue_uses_its_catalog_binding(
+    tmp_path: Path,
+) -> None:
+    context = _context(
+        tmp_path,
+        objective=("Explain profit and acquisition efficiency, and create a chart."),
+    )
+    _enable_cogs(context, tmp_path)
+    context.sql_service._input_relations["sessions"] = tmp_path / "sessions.parquet"
+    candidate = CriticCandidate(
+        objective=context.ledger.state.objective,
+        answer="Profit declined. Marketing spend and CAC changed.",
+        follow_up_analysis=True,
+        follow_up_rationale="A material follow-up remains.",
+        structured_metrics_required=True,
+        visualization_requested=True,
+    )
+    completeness = candidate_completeness_validation(candidate, context=context)
+    assert completeness is not None
+    issues = [
+        *completeness.issues,
+        ValidationIssue(
+            id="V-EVIDENCE-SOURCE-LINEAGE",
+            severity=ValidationSeverity.HIGH,
+            category="evidence_provenance",
+            message="A material claim needs source-derived evidence.",
+        ),
+    ]
+
+    validated = validate_review(
+        ValidationResult(status=ValidationStatus.REVISE, issues=issues),
+        candidate,
+        context.ledger,
+    )
+
+    expected = {
+        "requirement:follow-up",
+        "requirement:margin",
+        "requirement:acquisition",
+        "requirement:structured-metrics",
+        "requirement:visualization",
+        "requirement:evidence",
+    }
+    assert {blocker.requirement_id for blocker in validated.blockers} == expected
+    assert {blocker.target_id for blocker in validated.blockers} == {
+        f"target:missing:{requirement}" for requirement in expected
+    }
+    assert len({blocker.id for blocker in validated.blockers}) == len(expected)
+
+
+def test_equivalent_duplicate_blockers_deduplicate_but_conflicts_still_fail(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    candidate = CriticCandidate(
+        objective=context.ledger.state.objective,
+        answer="North was higher.",
+    )
+    blocker = _blocker(candidate)
+
+    deduplicated = validate_review(
+        ValidationResult(status="revise", blockers=[blocker, blocker.model_copy()]),
+        candidate,
+        context.ledger,
+    )
+    assert len(deduplicated.blockers) == 1
+    assert deduplicated.blockers[0].id == blocker_identity(
+        deduplicated.blockers[0], build_validation_catalog(candidate)
+    )
+
+    contradictory = _blocker(
+        candidate,
+        message="The same objective gap needs a different repair.",
+        smallest_feasible_repair="Use another remediation.",
+    )
+    with pytest.raises(
+        ReviewContractError, match="conflicting duplicate blocker identity"
+    ):
+        validate_review(
+            ValidationResult(status="revise", blockers=[blocker, contradictory]),
+            candidate,
+            context.ledger,
+        )
+
+
 @pytest.mark.parametrize("category", list(LimitationCategory))
 def test_limitation_categories_alone_do_not_block(
     tmp_path: Path, category: LimitationCategory
@@ -398,6 +557,44 @@ def test_generalist_and_multi_agent_candidates_have_preflight_parity() -> None:
     assert multi_failure is not None
     assert [issue.id for issue in generalist_failure.issues] == [
         issue.id for issue in multi_failure.issues
+    ]
+
+
+def test_generalist_and_multi_agent_share_deterministic_blocker_mapping(
+    tmp_path: Path,
+) -> None:
+    objective = "Analyze acquisition efficiency and include a chart."
+    context = _context(tmp_path, objective=objective)
+    context.sql_service._input_relations["sessions"] = tmp_path / "sessions.parquet"
+    lead = LeadResult(
+        objective=objective,
+        answer="Marketing spend increased while CAC was stable.",
+    )
+    multi = AnalysisRunner._candidate(
+        objective,
+        lead,
+        require_visualization=AnalysisRunner._objective_requests_visualization(
+            objective
+        ),
+    )
+
+    multi_validation = deterministic_candidate_validation(multi, context)
+    generalist_result = persist_generalist_validation(
+        GeneralistResult(
+            audit=AuditResult(status=AuditStatus.COMPLETE),
+            candidate=lead,
+            validation=ValidationResult(status=ValidationStatus.PASS),
+        ),
+        context,
+    )
+
+    assert multi_validation is not None
+    assert [
+        (item.requirement_id, item.target_id, item.id)
+        for item in multi_validation.blockers
+    ] == [
+        (item.requirement_id, item.target_id, item.id)
+        for item in generalist_result.validation.blockers
     ]
 
 
