@@ -17,6 +17,8 @@ from agents import (
     build_generalist_agent,
     run_generalist,
 )
+from agents.finalization import review_was_rejected
+from agents.generalist import _generalist_input
 from orchestration.generalist_runner import GeneralistRunner
 from schemas.audit import AuditResult, AuditStatus
 from schemas.findings import ConfidenceLevel, Finding
@@ -30,7 +32,12 @@ from schemas.statistics import (
     StatisticalAssessment,
     StatisticalConclusion,
 )
-from schemas.validation import ValidationResult, ValidationStatus
+from schemas.validation import (
+    ValidationIssue,
+    ValidationResult,
+    ValidationSeverity,
+    ValidationStatus,
+)
 from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
@@ -204,6 +211,8 @@ def test_generalist_run_uses_bounded_turns_and_shared_provenance(
         assert context.agent_role is AgentRole.GENERALIST
         assert kwargs["max_turns"] == 16
         assert "ground_truth" not in prompt
+        assert "SELF_REVIEW_CATALOG_JSON" in prompt
+        assert "requirement:original-objective" in prompt
         return SimpleNamespace(final_output=expected)
 
     monkeypatch.setattr(usage_module.Runner, "run", fake_run)
@@ -220,6 +229,49 @@ def test_generalist_run_uses_bounded_turns_and_shared_provenance(
     assert context.ledger.budget.specialist_invocations == 0
     assert context.ledger.budget.sql_executions == 0
     assert context.ledger.budget.python_executions == 0
+
+
+def test_generalist_legacy_review_with_fabricated_reference_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context(tmp_path)
+    invalid = _result().model_copy(
+        update={
+            "validation": ValidationResult(
+                status="revise",
+                issues=[
+                    ValidationIssue(
+                        id="legacy-invalid",
+                        severity=ValidationSeverity.HIGH,
+                        message="The cited value is wrong.",
+                        evidence_refs=["fabricated-event"],
+                    )
+                ],
+            )
+        }
+    )
+
+    async def fake_run(agent, prompt, *, context, **kwargs):  # noqa: ANN001
+        return SimpleNamespace(final_output=invalid)
+
+    monkeypatch.setattr(usage_module.Runner, "run", fake_run)
+    returned = asyncio.run(run_generalist(context, "Explain the observed change."))
+
+    assert review_was_rejected(returned.validation)
+    assert returned.validation.blockers == []
+    assert context.ledger.validation_issues == []
+    assert context.ledger.validation_results[-1] == returned.validation
+
+
+def test_generalist_repair_catalog_uses_immutable_original_objective() -> None:
+    prompt = _generalist_input(
+        "FINALIZATION_REPAIR: repair blocker B1.",
+        validation_objective="Compare North and South revenue.",
+    )
+
+    assert '"text": "Compare North and South revenue."' in prompt
+    assert '"text": "FINALIZATION_REPAIR: repair blocker B1."' not in prompt
 
 
 def test_generalist_runner_reuses_report_contract_without_specialist_events(

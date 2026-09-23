@@ -134,6 +134,16 @@ def test_critic_persists_validation_result_and_issues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-Q001",
+            tool_name="run_sql",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+            output={"rows": [{"cac": 12.0}]},
+        )
+    )
     candidate = CriticCandidate(
         objective="Validate a candidate finding.",
         answer="The candidate is ready for validation.",

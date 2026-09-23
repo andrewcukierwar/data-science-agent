@@ -15,6 +15,7 @@ from agents.critic import (
     validate_candidate_evidence_provenance,
 )
 from agents.evidence import executed_references
+from agents.finalization import metric_target_id
 from agents.lead import _reuse_specialist_metric_comparisons, persist_lead_result
 from orchestration.runner import AnalysisRunner
 from schemas.audit import AuditResult, AuditStatus
@@ -251,6 +252,65 @@ def test_remediation_preserves_original_estimand_and_keeps_new_scope_distinct(
         for item in distinct.metric_comparisons
         if item.definition_context is not None
     } == {"acquisition_date", "order_date"}
+
+
+def test_definition_change_permission_is_limited_to_named_metric_slot(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path, AgentRole.LEAD)
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-profit",
+            tool_name="run_sql",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            artifact_refs=["working/queries/profit.sql"],
+        )
+    )
+    targeted = _comparison(value=-0.2, context=_cohort_context())
+    unrelated = _comparison(
+        value=0.3,
+        context=_cohort_context(),
+        metric_key="cac",
+    )
+    prior = LeadResult(
+        objective="Explain profitability.",
+        answer="Initial answer.",
+        metric_comparisons=[targeted, unrelated],
+    )
+    proposed = prior.model_copy(
+        update={
+            "answer": "Targeted denominator correction.",
+            "metric_comparisons": [
+                targeted.model_copy(update={"definition_context": _calendar_context()}),
+                unrelated.model_copy(
+                    update={"definition_context": _calendar_context()}
+                ),
+            ],
+        }
+    )
+
+    repaired = persist_lead_result(
+        proposed,
+        context,
+        prior_result=prior,
+        allowed_definition_change_targets=frozenset({metric_target_id(targeted)}),
+    )
+
+    profit_contexts = {
+        item.definition_context.date_basis
+        for item in repaired.metric_comparisons
+        if item.metric_key == "reporting_contribution_profit"
+        and item.definition_context is not None
+    }
+    cac_contexts = {
+        item.definition_context.date_basis
+        for item in repaired.metric_comparisons
+        if item.metric_key == "cac" and item.definition_context is not None
+    }
+    assert profit_contexts == {"order_date"}
+    assert "acquisition_date" in cac_contexts
 
 
 def test_critic_reports_metric_scope_mismatch_instead_of_generic_conflict(

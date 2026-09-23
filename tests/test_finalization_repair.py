@@ -5,12 +5,16 @@ from pathlib import Path
 
 import pytest
 
+from agents.critic import candidate_completeness_validation
 from agents.finalization import (
     ORIGINAL_OBJECTIVE_REQUIREMENT,
     ReviewContractError,
     build_validation_catalog,
+    metric_definition_change_targets,
+    preserve_unrelated_candidate,
     validate_review,
 )
+from agents.generalist import _as_critic_candidate
 from agents.runtime import (
     AgentRole,
     AgentRunConfig,
@@ -18,7 +22,17 @@ from agents.runtime import (
     PermissionDeniedError,
 )
 from orchestration.ledger import AnalysisLedger
+from orchestration.runner import AnalysisRunner
+from schemas.findings import ConfidenceLevel, Finding
+from schemas.lead import LeadResult
+from schemas.metrics import MetricComparison, MetricComparisonType
 from schemas.run_state import ToolEvent, ToolEventStatus
+from schemas.statistics import (
+    CausalInterpretation,
+    ConfidenceInterval,
+    StatisticalAssessment,
+    StatisticalConclusion,
+)
 from schemas.validation import (
     BlockerCategory,
     CriticCandidate,
@@ -27,8 +41,10 @@ from schemas.validation import (
     ObjectionEvidence,
     RepairClass,
     ValidationBlocker,
+    ValidationIssue,
     ValidationLimitation,
     ValidationResult,
+    ValidationSeverity,
     ValidationStatus,
 )
 from tools.artifacts import ArtifactManager
@@ -106,6 +122,145 @@ def test_real_event_id_cannot_launder_a_fabricated_value(tmp_path: Path) -> None
 
     with pytest.raises(ReviewContractError, match="does not match retained"):
         validate_review(review, candidate, context.ledger)
+
+
+def test_legacy_issue_cannot_launder_a_fabricated_evidence_reference(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    now = datetime.now(UTC)
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-real",
+            tool_name="run_sql",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=now,
+            completed_at=now,
+            output={"rows": [[17]]},
+        )
+    )
+    candidate = CriticCandidate(
+        objective=context.ledger.state.objective,
+        answer="North was higher.",
+    )
+    review = ValidationResult(
+        status=ValidationStatus.REVISE,
+        issues=[
+            ValidationIssue(
+                id="legacy-1",
+                severity=ValidationSeverity.HIGH,
+                category="denominator",
+                message="The denominator is wrong.",
+                evidence_refs=["tool-real", "tool-fabricated"],
+            )
+        ],
+    )
+
+    with pytest.raises(ReviewContractError, match="tool-fabricated"):
+        validate_review(review, candidate, context.ledger)
+
+
+def test_typed_blocker_cannot_hide_unvalidated_legacy_issue(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    candidate = CriticCandidate(
+        objective=context.ledger.state.objective,
+        answer="North was higher.",
+    )
+    review = ValidationResult(
+        status="revise",
+        blockers=[_blocker(candidate)],
+        issues=[
+            ValidationIssue(
+                id="legacy-hidden",
+                severity=ValidationSeverity.MEDIUM,
+                message="A second untyped objection.",
+                evidence_refs=["fabricated-event"],
+            )
+        ],
+    )
+
+    with pytest.raises(ReviewContractError, match="cannot mix"):
+        validate_review(review, candidate, context.ledger)
+
+
+def test_validated_legacy_definition_issue_targets_only_its_metric(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    now = datetime.now(UTC)
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-metric",
+            tool_name="run_sql",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=now,
+            completed_at=now,
+            output={"rows": [[0.2]]},
+        )
+    )
+    comparison = MetricComparison(
+        result_id="result-metric",
+        metric_key="cac",
+        baseline_period="Q1",
+        comparison_period="Q2",
+        comparison_type=MetricComparisonType.RELATIVE_CHANGE,
+        value=0.2,
+        unit="relative_change_fraction",
+        evidence_refs=["tool-metric"],
+    )
+    candidate = CriticCandidate(
+        objective=context.ledger.state.objective,
+        answer="CAC increased.",
+        metric_comparisons=[comparison],
+    )
+    review = ValidationResult(
+        status="revise",
+        issues=[
+            ValidationIssue(
+                id="legacy-definition",
+                severity=ValidationSeverity.HIGH,
+                category="metric_definition",
+                message="The denominator is at the wrong grain.",
+                evidence_refs=["tool-metric"],
+            )
+        ],
+    )
+
+    validated = validate_review(review, candidate, context.ledger)
+
+    target = next(
+        item.id
+        for item in build_validation_catalog(candidate).targets
+        if item.kind == "metric"
+    )
+    assert validated.blockers[0].target_id == target
+    assert validated.blockers[0].affected_result_ids == ["result-metric"]
+    assert metric_definition_change_targets(validated) == frozenset({target})
+
+
+def test_fabricated_candidate_pointer_is_rejected(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    candidate = CriticCandidate(
+        objective=context.ledger.state.objective,
+        answer="North was higher.",
+    )
+    blocker = _blocker(
+        candidate,
+        evidence=[
+            ObjectionEvidence(
+                source=EvidenceAnchorSource.CANDIDATE,
+                pointer="/findings/99/value",
+                value=17,
+            )
+        ],
+    )
+
+    with pytest.raises(ReviewContractError, match="does not resolve"):
+        validate_review(
+            ValidationResult(status="revise", blockers=[blocker]),
+            candidate,
+            context.ledger,
+        )
 
 
 def test_blocker_identity_survives_rephrasing_reordering_and_value_change(
@@ -205,3 +360,163 @@ def test_catalog_deduplicates_ambiguous_targets(tmp_path: Path) -> None:
     )
     catalog = build_validation_catalog(candidate)
     assert len({target.id for target in catalog.targets}) == len(catalog.targets)
+
+
+def test_generalist_and_multi_agent_candidates_have_preflight_parity() -> None:
+    objective = "Explain acquisition spend and CAC, and create a chart."
+    lead = LeadResult(
+        objective=objective,
+        answer="Acquisition spend and CAC changed.",
+        findings=[
+            Finding(
+                id="F1",
+                statement="CAC increased.",
+                metric="cac",
+                value=0.2,
+                value_unit="relative_change_fraction",
+                evidence_refs=["tool-evidence"],
+                confidence=ConfidenceLevel.MEDIUM,
+            )
+        ],
+    )
+    multi = AnalysisRunner._candidate(
+        objective,
+        lead,
+        require_visualization=AnalysisRunner._objective_requests_visualization(
+            objective
+        ),
+    )
+    generalist = _as_critic_candidate(lead, objective=objective)
+
+    assert generalist.structured_metrics_required is True
+    assert generalist.visualization_requested is True
+    assert generalist.model_dump() == multi.model_dump()
+    assert build_validation_catalog(generalist) == build_validation_catalog(multi)
+    generalist_failure = candidate_completeness_validation(generalist)
+    multi_failure = candidate_completeness_validation(multi)
+    assert generalist_failure is not None
+    assert multi_failure is not None
+    assert [issue.id for issue in generalist_failure.issues] == [
+        issue.id for issue in multi_failure.issues
+    ]
+
+
+def test_targeted_repair_preserves_unrelated_findings_metrics_and_caveats() -> None:
+    metric_one = MetricComparison(
+        result_id="result-m1",
+        metric_key="cac",
+        baseline_period="Q1",
+        comparison_period="Q2",
+        comparison_type=MetricComparisonType.RELATIVE_CHANGE,
+        value=0.2,
+        unit="relative_change_fraction",
+        evidence_refs=["tool-one"],
+    )
+    metric_two = metric_one.model_copy(
+        update={
+            "result_id": "result-m2",
+            "metric_key": "ltv",
+            "value": 0.1,
+            "evidence_refs": ["tool-two"],
+        }
+    )
+    finding_one = Finding(
+        result_id="result-f1",
+        id="F1",
+        statement="CAC increased.",
+        evidence_refs=["tool-one"],
+        confidence=ConfidenceLevel.MEDIUM,
+    )
+    finding_two = finding_one.model_copy(
+        update={
+            "result_id": "result-f2",
+            "id": "F2",
+            "statement": "LTV was stable.",
+            "evidence_refs": ["tool-two"],
+        }
+    )
+    statistic_one = StatisticalAssessment(
+        result_id="result-s1",
+        metric_key="conversion_rate",
+        baseline_period="Q1",
+        comparison_period="Q2",
+        method="two-proportion z test",
+        unit_of_analysis="account",
+        conclusion=StatisticalConclusion.NOT_STATISTICALLY_SIGNIFICANT,
+        confidence_level=0.95,
+        estimate=0.01,
+        confidence_interval=ConfidenceInterval(lower=-0.02, upper=0.04),
+        p_value=0.4,
+        effect_size=0.01,
+        practical_significance_threshold=0.05,
+        practically_significant=False,
+        assumptions_checked=("independent accounts",),
+        causal_interpretation=CausalInterpretation.ASSOCIATION_ONLY,
+        evidence_refs=["tool-one"],
+    )
+    statistic_two = statistic_one.model_copy(
+        update={
+            "result_id": "result-s2",
+            "metric_key": "retention_rate",
+            "evidence_refs": ["tool-two"],
+        }
+    )
+    previous = LeadResult(
+        selected_result_ids=[
+            "result-f1",
+            "result-f2",
+            "result-m1",
+            "result-m2",
+            "result-s1",
+            "result-s2",
+        ],
+        objective="Explain profitability.",
+        answer="Initial answer.",
+        findings=[finding_one, finding_two],
+        metric_comparisons=[metric_one, metric_two],
+        statistical_assessments=[statistic_one, statistic_two],
+        caveats=["Observed data are non-experimental."],
+    )
+    corrected_finding = finding_one.model_copy(
+        update={"statement": "CAC increased using acquired customers."}
+    )
+    corrected_metric = metric_one.model_copy(
+        update={"result_id": "result-m1-corrected", "value": 0.15}
+    )
+    proposed = LeadResult(
+        objective=previous.objective,
+        answer="Corrected answer.",
+        findings=[corrected_finding],
+        metric_comparisons=[corrected_metric],
+    )
+    candidate = AnalysisRunner._candidate(previous.objective, previous)
+    metric_target = next(
+        target.id
+        for target in build_validation_catalog(candidate).targets
+        if target.kind == "metric" and "result-m1" in target.result_ids
+    )
+    review = ValidationResult(
+        status="revise",
+        blockers=[
+            _blocker(
+                candidate,
+                category=BlockerCategory.WRONG_DENOMINATOR,
+                target_id=metric_target,
+                affected_result_ids=["result-m1"],
+                repair_class=RepairClass.COMPUTATION,
+            )
+        ],
+    )
+
+    repaired = preserve_unrelated_candidate(previous, proposed, review)
+
+    assert finding_one in repaired.findings
+    assert corrected_finding not in repaired.findings
+    assert finding_two in repaired.findings
+    assert metric_two in repaired.metric_comparisons
+    assert corrected_metric in repaired.metric_comparisons
+    assert repaired.statistical_assessments == [statistic_one, statistic_two]
+    assert "result-f2" in repaired.selected_result_ids
+    assert "result-m2" in repaired.selected_result_ids
+    assert "result-s2" in repaired.selected_result_ids
+    assert repaired.caveats == previous.caveats

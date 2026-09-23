@@ -8,9 +8,16 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
-from agents.critic import persist_validation_result
-from agents.finalization import is_essential_impossible, repair_class_for
-from agents.generalist import persist_generalist_result, run_generalist
+from agents.finalization import (
+    is_essential_impossible,
+    repair_class_for,
+    review_was_rejected,
+)
+from agents.generalist import (
+    persist_generalist_result,
+    persist_generalist_validation,
+    run_generalist,
+)
 from agents.runtime import AgentRole
 from orchestration.block_reasons import (
     BlockedAuditError,
@@ -169,16 +176,25 @@ class GeneralistRunner(AnalysisRunner):
                     generalist_result,
                     context,
                 )
-            elif generalist_result.validation not in ledger.validation_results:
-                persist_validation_result(
-                    generalist_result.validation,
-                    ledger,
-                    allow_issue_updates=True,
+            else:
+                generalist_result = persist_generalist_validation(
+                    generalist_result,
+                    context,
                 )
             audit = generalist_result.audit
             lead_result = generalist_result.candidate
             validation_result = generalist_result.validation
-            self._record_agent_success(ledger, active_agent, GeneralistResult)
+            if review_was_rejected(validation_result):
+                ledger.record_agent_event(
+                    agent_name=agent.name,
+                    agent_role=AgentRole.GENERALIST.value,
+                    status=AgentEventStatus.FAILED,
+                    model=self.model,
+                    objective=objective,
+                    error=validation_result.summary,
+                )
+            else:
+                self._record_agent_success(ledger, active_agent, GeneralistResult)
             active_agent_recorded = True
 
             if validation_result.status is ValidationStatus.REVISE:
@@ -192,7 +208,12 @@ class GeneralistRunner(AnalysisRunner):
                     if consumed is not None
                     else 0
                 )
-                if remaining > 0 and not is_essential_impossible(validation_result):
+                if (
+                    remaining > 0
+                    and validation_result.blockers
+                    and not is_essential_impossible(validation_result)
+                ):
+                    prior_generalist_result = generalist_result
                     prior_selected_ids = list(
                         generalist_result.candidate.selected_result_ids
                     )
@@ -207,10 +228,6 @@ class GeneralistRunner(AnalysisRunner):
                             "hypotheses",
                             "hypothesis_history",
                             "open_questions",
-                            "validation_results",
-                            "validation_issues",
-                            "validation_candidates",
-                            "validation_catalogs",
                         )
                     }
                     repair_prompt = self._generalist_repair_prompt(
@@ -222,6 +239,8 @@ class GeneralistRunner(AnalysisRunner):
                         repair_class_for(validation_result)
                     )
                     repaired: GeneralistResult | None = None
+                    active_agent = (agent.name, repair_prompt)
+                    active_agent_recorded = False
                     try:
                         repaired = await run_generalist(
                             context,
@@ -229,8 +248,20 @@ class GeneralistRunner(AnalysisRunner):
                             business_context=business_context,
                             agent=agent,
                             max_turns=remaining,
+                            prior_result=generalist_result,
+                            repair_validation=validation_result,
+                            validation_objective=objective,
                         )
                     except Exception as error:
+                        ledger.record_agent_event(
+                            agent_name=agent.name,
+                            agent_role=AgentRole.GENERALIST.value,
+                            status=AgentEventStatus.FAILED,
+                            model=self.model,
+                            objective=repair_prompt,
+                            error=str(error),
+                        )
+                        active_agent_recorded = True
                         for name, value in preserved_selection.items():
                             setattr(ledger.state, name, value)
                         ledger.save()
@@ -255,42 +286,85 @@ class GeneralistRunner(AnalysisRunner):
                     finally:
                         context.end_finalization_repair()
                     if repaired is not None:
-                        ledger.add_finalization_repair(
-                            FinalizationRepairRecord(
-                                attempt_id=(
-                                    f"{ledger.state.attempt_id}:finalization-repair-1"
-                                ),
-                                blocker_ids=[
-                                    item.id or "unassigned"
-                                    for item in validation_result.blockers
-                                ],
-                                status=RepairStatus.SUCCEEDED,
-                                prior_selected_result_ids=prior_selected_ids,
-                                repaired_selected_result_ids=list(
-                                    repaired.candidate.selected_result_ids
-                                ),
+                        if review_was_rejected(repaired.validation):
+                            ledger.record_agent_event(
+                                agent_name=agent.name,
+                                agent_role=AgentRole.GENERALIST.value,
+                                status=AgentEventStatus.FAILED,
+                                model=self.model,
+                                objective=repair_prompt,
+                                error=repaired.validation.summary,
                             )
-                        )
-                        generalist_result = repaired
-                        audit = repaired.audit
-                        lead_result = repaired.candidate
-                        validation_result = repaired.validation
+                            active_agent_recorded = True
+                            for name, value in preserved_selection.items():
+                                setattr(ledger.state, name, value)
+                            ledger.save()
+                            ledger.add_finalization_repair(
+                                FinalizationRepairRecord(
+                                    attempt_id=(
+                                        f"{ledger.state.attempt_id}:"
+                                        "finalization-repair-1"
+                                    ),
+                                    blocker_ids=[
+                                        item.id or "unassigned"
+                                        for item in validation_result.blockers
+                                    ],
+                                    status=RepairStatus.FAILED,
+                                    prior_selected_result_ids=prior_selected_ids,
+                                    stop_reason=repaired.validation.summary,
+                                )
+                            )
+                            generalist_result = prior_generalist_result.model_copy(
+                                update={"validation": repaired.validation}
+                            )
+                            audit = prior_generalist_result.audit
+                            lead_result = prior_generalist_result.candidate
+                            validation_result = repaired.validation
+                            constrained = True
+                        else:
+                            self._record_agent_success(
+                                ledger,
+                                active_agent,
+                                GeneralistResult,
+                            )
+                            active_agent_recorded = True
+                            ledger.add_finalization_repair(
+                                FinalizationRepairRecord(
+                                    attempt_id=(
+                                        f"{ledger.state.attempt_id}:"
+                                        "finalization-repair-1"
+                                    ),
+                                    blocker_ids=[
+                                        item.id or "unassigned"
+                                        for item in validation_result.blockers
+                                    ],
+                                    status=RepairStatus.SUCCEEDED,
+                                    prior_selected_result_ids=prior_selected_ids,
+                                    repaired_selected_result_ids=list(
+                                        repaired.candidate.selected_result_ids
+                                    ),
+                                )
+                            )
+                            generalist_result = repaired
+                            audit = repaired.audit
+                            lead_result = repaired.candidate
+                            validation_result = repaired.validation
 
             if audit.status is AuditStatus.BLOCKED:
                 raise BlockedAuditError("generalist data audit was blocked")
             # Name the originating condition rather than defaulting every
             # constrained single-agent run to a budget failure.
-            if validation_result.status is ValidationStatus.REVISE:
-                constraint = RunConstraint(
-                    reason=RunBlockReason.VALIDATION_REVISION,
-                    detail="The generalist self-critique returned REVISE.",
-                )
-            elif lead_result.follow_up_analysis:
+            if lead_result.follow_up_analysis:
                 constraint = RunConstraint(
                     reason=RunBlockReason.UNRESOLVED_FOLLOW_UP,
                     detail=(
                         "The generalist left objective-critical follow-up unresolved."
                     ),
+                )
+            elif validation_result.status is ValidationStatus.REVISE:
+                constraint = RunConstraint(
+                    reason=RunBlockReason.VALIDATION_REVISION,
+                    detail="The generalist self-critique returned REVISE.",
                 )
             constrained = constraint is not None
 

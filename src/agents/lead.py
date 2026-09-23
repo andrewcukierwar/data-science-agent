@@ -28,6 +28,7 @@ from agents.evidence import (
     resolve_material_claims,
     unsupported_claim_ids,
 )
+from agents.finalization import metric_target_id
 from agents.hypothesis_state import (
     HypothesisEvidenceError,
     validate_hypothesis_transition,
@@ -584,6 +585,8 @@ def _reuse_specialist_metric_comparisons(
 def _preserve_metric_definitions(
     comparisons: list[MetricComparison],
     prior_result: LeadResult,
+    *,
+    allowed_definition_change_targets: frozenset[str] = frozenset(),
 ) -> list[MetricComparison]:
     """Keep prior estimands stable across a Lead remediation replacement."""
 
@@ -594,6 +597,20 @@ def _preserve_metric_definitions(
     consumed: set[int] = set()
     merged: list[MetricComparison] = []
     for previous in prior:
+        if metric_target_id(previous) in allowed_definition_change_targets:
+            targeted = [
+                (index, item)
+                for index, item in enumerate(current)
+                if index not in consumed
+                and metric_target_id(item) == metric_target_id(previous)
+            ]
+            if targeted:
+                consumed.update(index for index, _ in targeted)
+                # The complete replacement is authoritative only for the
+                # specifically targeted estimand; a carried-forward stale copy
+                # followed by its correction resolves to the correction.
+                merged.append(targeted[-1][1])
+            continue
         exact_matches = [
             (index, item)
             for index, item in enumerate(current)
@@ -669,7 +686,7 @@ def validate_lead_result(
     ledger: AnalysisLedger,
     *,
     prior_result: LeadResult | None = None,
-    allow_definition_change: bool = False,
+    allowed_definition_change_targets: frozenset[str] = frozenset(),
 ) -> LeadResult:
     """Require every Lead citation to resolve to exact executed evidence.
 
@@ -731,10 +748,11 @@ def validate_lead_result(
         ledger,
         canonical_findings,
     )
-    if prior_result is not None and not allow_definition_change:
+    if prior_result is not None:
         canonical_metric_comparisons = _preserve_metric_definitions(
             canonical_metric_comparisons,
             prior_result,
+            allowed_definition_change_targets=allowed_definition_change_targets,
         )
     validate_metric_selection(canonical_metric_comparisons)
     compilation = compile_metric_comparisons(canonical_metric_comparisons)
@@ -791,7 +809,7 @@ def _persist_result(
     context: AgentRunContext,
     *,
     prior_result: LeadResult | None = None,
-    allow_definition_change: bool = False,
+    allowed_definition_change_targets: frozenset[str] = frozenset(),
 ) -> LeadResult:
     """Persist observable Lead conclusions without starting the later critic loop."""
 
@@ -799,7 +817,7 @@ def _persist_result(
         result,
         context.ledger,
         prior_result=prior_result,
-        allow_definition_change=allow_definition_change,
+        allowed_definition_change_targets=allowed_definition_change_targets,
     )
     for hypothesis in result.hypotheses:
         context.ledger.upsert_hypothesis(hypothesis)
@@ -817,7 +835,7 @@ def persist_lead_result(
     context: AgentRunContext,
     *,
     prior_result: LeadResult | None = None,
-    allow_definition_change: bool = False,
+    allowed_definition_change_targets: frozenset[str] = frozenset(),
 ) -> LeadResult:
     """Persist a Lead result for callers that manage the SDK lifecycle."""
 
@@ -825,7 +843,7 @@ def persist_lead_result(
         result,
         context,
         prior_result=prior_result,
-        allow_definition_change=allow_definition_change,
+        allowed_definition_change_targets=allowed_definition_change_targets,
     )
 
 

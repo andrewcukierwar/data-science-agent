@@ -4,7 +4,10 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
+
 from agents import MaxTurnsExceeded
+from agents.finalization import review_was_rejected
 from agents.runtime import AgentRole
 from orchestration.ledger import AnalysisLedger
 from orchestration.runner import (
@@ -24,6 +27,12 @@ from schemas.run_state import (
     RunStatus,
 )
 from schemas.validation import (
+    BlockerCategory,
+    EvidenceAnchorSource,
+    ObjectionEvidence,
+    RepairClass,
+    RepairStatus,
+    ValidationBlocker,
     ValidationIssue,
     ValidationResult,
     ValidationSeverity,
@@ -34,7 +43,7 @@ from tools.artifacts import ArtifactManager
 from tools.workspace import WorkspaceManager
 
 
-def test_metric_definition_consistency_issue_allows_requested_correction() -> None:
+def test_legacy_definition_issue_does_not_grant_blanket_correction() -> None:
     validation = ValidationResult(
         status=ValidationStatus.REVISE,
         issues=[
@@ -49,7 +58,7 @@ def test_metric_definition_consistency_issue_allows_requested_correction() -> No
         summary="Correct the metric definition.",
     )
 
-    assert _critic_allows_metric_definition_change(validation) is True
+    assert _critic_allows_metric_definition_change(validation) is False
 
 
 def test_non_definition_issue_preserves_the_existing_estimand() -> None:
@@ -68,6 +77,33 @@ def test_non_definition_issue_preserves_the_existing_estimand() -> None:
     )
 
     assert _critic_allows_metric_definition_change(validation) is False
+
+
+def test_definition_change_requires_targeted_metric_blocker() -> None:
+    def blocker(target_id: str) -> ValidationBlocker:
+        return ValidationBlocker(
+            category=BlockerCategory.WRONG_DENOMINATOR,
+            requirement_id="requirement:evidence",
+            target_id=target_id,
+            evidence=[
+                ObjectionEvidence(
+                    source=EvidenceAnchorSource.CANDIDATE,
+                    pointer="/answer",
+                    value="Candidate answer.",
+                )
+            ],
+            message="The denominator is wrong.",
+            smallest_feasible_repair="Correct only this metric.",
+            repair_class=RepairClass.COMPUTATION,
+        )
+
+    broad = ValidationResult(status="revise", blockers=[blocker("target:answer")])
+    targeted = ValidationResult(
+        status="revise", blockers=[blocker("target:metric:stable-slot")]
+    )
+
+    assert _critic_allows_metric_definition_change(broad) is False
+    assert _critic_allows_metric_definition_change(targeted) is True
 
 
 def test_visualization_requirement_is_explicit_and_word_bounded() -> None:
@@ -555,8 +591,9 @@ def test_runner_constrains_when_lead_follow_up_reaches_continuation_limit(
     assert result.lead_result is not None
     assert result.lead_result.follow_up_analysis is True
     report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
-    assert "Deterministic finalization checks" in report_text
+    assert "configured continuation limit" in report_text
     assert "V-COMPLETENESS-FOLLOW-UP" in report_text
+    assert result.block_reason is RunBlockReason.UNRESOLVED_FOLLOW_UP
 
 
 def test_runner_returns_constrained_report_after_critic_limit(
@@ -609,6 +646,192 @@ def test_runner_returns_constrained_report_after_critic_limit(
     assert "V001" in report_text
     assert "provisional" in report_text
     assert "Remediation stop:" in report_text
+
+
+def test_invalid_runtime_review_constrains_without_losing_candidate(
+    tmp_path: Path,
+) -> None:
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def fake_lead(context, objective, *, business_context, audit, agent):  # noqa: ANN001
+        return LeadResult(objective=objective, answer="Retain this valid candidate.")
+
+    async def invalid_critic(context, candidate, *, agent):  # noqa: ANN001
+        context.consume_budget("critic_loops")
+        return ValidationResult(
+            status="revise",
+            blockers=[
+                ValidationBlocker(
+                    category=BlockerCategory.OBJECTIVE_NOT_ANSWERED,
+                    requirement_id="requirement:evidence",
+                    target_id="target:answer",
+                    evidence=[
+                        ObjectionEvidence(
+                            source=EvidenceAnchorSource.CANDIDATE,
+                            pointer="/answer",
+                            value="fabricated candidate value",
+                        )
+                    ],
+                    message="Invalid review evidence.",
+                    smallest_feasible_repair="Do not execute this repair.",
+                    repair_class=RepairClass.SYNTHESIS_SELECTION,
+                )
+            ],
+        )
+
+    result = asyncio.run(
+        AnalysisRunner(
+            workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+            budget=RunBudget(max_critic_loops=1),
+            auditor_runner=fake_auditor,
+            lead_runner=fake_lead,
+            critic_runner=invalid_critic,
+        ).run("run-invalid-review", "Explain profitability.")
+    )
+
+    assert result.status is RunStatus.BLOCKED
+    assert result.error is None
+    assert result.lead_result is not None
+    assert result.lead_result.answer == "Retain this valid candidate."
+    assert result.validation_result is not None
+    assert review_was_rejected(result.validation_result)
+    assert result.validation_result.blockers == []
+    assert result.ledger is not None
+    assert result.ledger.finalization_repairs == []
+
+
+def test_invalid_post_repair_review_preserves_history_and_repaired_candidate(
+    tmp_path: Path,
+) -> None:
+    lead_calls = 0
+    critic_calls = 0
+    issue = ValidationIssue(
+        id="legacy-repair",
+        severity=ValidationSeverity.MEDIUM,
+        message="Clarify the candidate answer.",
+        recommendation="Clarify only the answer.",
+    )
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def fake_lead(context, objective, *, business_context, audit, agent):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        return LeadResult(
+            objective="Explain profitability.",
+            answer=(
+                "The repaired valid candidate."
+                if lead_calls == 2
+                else "The initial valid candidate."
+            ),
+            caveats=["The evidence is observational."],
+        )
+
+    async def fake_critic(context, candidate, *, agent):  # noqa: ANN001
+        nonlocal critic_calls
+        critic_calls += 1
+        context.consume_budget("critic_loops")
+        if critic_calls == 1:
+            return ValidationResult(status="revise", issues=[issue])
+        return ValidationResult(
+            status="revise",
+            blockers=[
+                ValidationBlocker(
+                    category=BlockerCategory.OBJECTIVE_NOT_ANSWERED,
+                    requirement_id="requirement:evidence",
+                    target_id="target:answer",
+                    evidence=[
+                        ObjectionEvidence(
+                            source=EvidenceAnchorSource.CANDIDATE,
+                            pointer="/missing",
+                            value="fabricated",
+                        )
+                    ],
+                    message="Malformed post-repair review.",
+                    smallest_feasible_repair="No repair is allowed.",
+                    repair_class=RepairClass.SYNTHESIS_SELECTION,
+                )
+            ],
+        )
+
+    result = asyncio.run(
+        AnalysisRunner(
+            workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+            budget=RunBudget(max_critic_loops=2),
+            auditor_runner=fake_auditor,
+            lead_runner=fake_lead,
+            critic_runner=fake_critic,
+        ).run("run-invalid-post-repair", "Explain profitability.")
+    )
+
+    assert result.status is RunStatus.BLOCKED
+    assert result.error is None
+    assert result.lead_result is not None
+    assert result.lead_result.answer == "The repaired valid candidate."
+    assert result.lead_result.caveats == ["The evidence is observational."]
+    assert result.validation_result is not None
+    assert review_was_rejected(result.validation_result)
+    assert result.ledger is not None
+    assert len(result.ledger.validation_results) == 2
+    assert result.ledger.validation_results[0].blockers
+    assert review_was_rejected(result.ledger.validation_results[-1])
+    assert result.ledger.finalization_repairs[-1].status is RepairStatus.SUCCEEDED
+
+
+def test_successful_preflight_repair_retains_originating_review_history(
+    tmp_path: Path,
+) -> None:
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    pd.DataFrame({"order_id": [1], "net_revenue": [100], "cogs": [40]}).to_parquet(
+        inputs / "orders.parquet", index=False
+    )
+    lead_calls = 0
+
+    async def fake_auditor(context, objective, *, agent):  # noqa: ANN001
+        return _audit()
+
+    async def fake_lead(context, objective, *, business_context, audit, agent):  # noqa: ANN001
+        nonlocal lead_calls
+        lead_calls += 1
+        return LeadResult(
+            objective="Explain profitability.",
+            answer=(
+                "Net revenue, COGS, contribution before marketing, and margin "
+                "were compared; stable margin was not a driver."
+                if lead_calls == 2
+                else "Profitability changed."
+            ),
+        )
+
+    async def passing_critic(context, candidate, *, agent):  # noqa: ANN001
+        context.consume_budget("critic_loops")
+        return ValidationResult(status="pass")
+
+    result = asyncio.run(
+        AnalysisRunner(
+            workspace_manager=WorkspaceManager(tmp_path / "workspaces"),
+            auditor_runner=fake_auditor,
+            lead_runner=fake_lead,
+            critic_runner=passing_critic,
+        ).run(
+            "run-preflight-history",
+            "Explain why profitability changed.",
+            inputs_source=inputs,
+        )
+    )
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.ledger is not None
+    assert len(result.ledger.validation_results) == 2
+    assert result.ledger.validation_results[0].blockers
+    assert result.ledger.validation_results[-1].status is ValidationStatus.PASS
+    assert len(result.ledger.validation_candidates) == 2
+    assert result.ledger.finalization_repairs[-1].blocker_ids == [
+        result.ledger.validation_results[0].blockers[0].id
+    ]
 
 
 def test_runner_preserves_candidate_when_sql_budget_stops_remediation(

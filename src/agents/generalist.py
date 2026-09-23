@@ -17,7 +17,16 @@ from agents.audit_evidence import (
 )
 from agents.correction import run_bounded_evidence_correction
 from agents.critic import deterministic_candidate_validation, persist_validation_result
-from agents.finalization import build_validation_catalog, validate_review
+from agents.finalization import (
+    ReviewContractError,
+    build_validation_catalog,
+    metric_definition_change_targets,
+    objective_requests_visualization,
+    preserve_unrelated_candidate,
+    rejected_review_result,
+    structured_metrics_required,
+    validate_review,
+)
 from agents.lead import (
     LeadEvidenceError,
     persist_lead_result,
@@ -35,6 +44,7 @@ from agents.output_contract import (
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
 from agents.tools import tools_for_role
 from schemas.generalist import GeneralistResult
+from schemas.validation import CriticCandidate, ValidationResult
 
 GENERALIST_OBJECTIVE = (
     "Complete the full evidence-backed business analysis as one bounded generalist "
@@ -151,39 +161,74 @@ create_generalist_agent = build_generalist_agent
 def persist_generalist_result(
     result: GeneralistResult,
     context: AgentRunContext,
+    *,
+    prior_result: GeneralistResult | None = None,
+    repair_validation: ValidationResult | None = None,
 ) -> GeneralistResult:
     """Persist the generalist output through the shared evidence boundaries."""
 
     if context.agent_role is not AgentRole.GENERALIST:
         raise ValueError("persist_generalist_result requires a Generalist context")
-    audit = persist_audit_result(result.audit, context)
-    candidate = persist_lead_result(result.candidate, context)
+    if prior_result is not None and repair_validation is not None:
+        audit = prior_result.audit
+        candidate_input = preserve_unrelated_candidate(
+            prior_result.candidate,
+            result.candidate,
+            repair_validation,
+        )
+        candidate = persist_lead_result(
+            candidate_input,
+            context,
+            prior_result=prior_result.candidate,
+            allowed_definition_change_targets=metric_definition_change_targets(
+                repair_validation
+            ),
+        )
+    else:
+        audit = persist_audit_result(result.audit, context)
+        candidate = persist_lead_result(result.candidate, context)
+    return persist_generalist_validation(
+        result.model_copy(update={"audit": audit, "candidate": candidate}),
+        context,
+    )
+
+
+def persist_generalist_validation(
+    result: GeneralistResult,
+    context: AgentRunContext,
+) -> GeneralistResult:
+    """Validate and persist self-review for an already persisted candidate."""
+
     critic_candidate = _as_critic_candidate(
-        candidate, objective=context.ledger.state.objective
+        result.candidate, objective=context.ledger.state.objective
     )
     catalog = build_validation_catalog(critic_candidate)
     deterministic = deterministic_candidate_validation(critic_candidate, context)
-    validation = validate_review(
-        deterministic or result.validation,
-        critic_candidate,
-        context.ledger,
-        catalog=catalog,
-    )
-    context.ledger.add_validation_snapshot(critic_candidate, catalog)
-    validation = persist_validation_result(
-        validation,
-        context.ledger,
-        allow_issue_updates=True,
-    )
-    return result.model_copy(
-        update={"audit": audit, "candidate": candidate, "validation": validation}
-    )
+    try:
+        validation = validate_review(
+            deterministic or result.validation,
+            critic_candidate,
+            context.ledger,
+            catalog=catalog,
+        )
+    except ReviewContractError as error:
+        validation = rejected_review_result(error)
+    if (
+        not context.ledger.validation_candidates
+        or context.ledger.validation_candidates[-1] != critic_candidate
+    ):
+        context.ledger.add_validation_snapshot(critic_candidate, catalog)
+    if validation not in context.ledger.validation_results:
+        validation = persist_validation_result(
+            validation,
+            context.ledger,
+            allow_issue_updates=True,
+        )
+    return result.model_copy(update={"validation": validation})
 
 
 def _as_critic_candidate(result, *, objective: str | None = None):
     """Build the shared validation view without importing orchestration."""
-
-    from schemas.validation import CriticCandidate
 
     return CriticCandidate(
         objective=objective or result.objective,
@@ -210,6 +255,10 @@ def _as_critic_candidate(result, *, objective: str | None = None):
                 for reference in item.evidence_refs
             )
         ),
+        structured_metrics_required=structured_metrics_required(result),
+        visualization_requested=objective_requests_visualization(
+            objective or result.objective
+        ),
     )
 
 
@@ -217,15 +266,30 @@ def _generalist_input(
     objective: str,
     *,
     business_context: str | None = None,
+    validation_objective: str | None = None,
 ) -> str:
     """Build only model-visible user context for one generalist request."""
 
+    review_objective = validation_objective or objective
+    boundary = build_validation_catalog(
+        CriticCandidate(
+            objective=review_objective,
+            answer="Pending candidate answer.",
+        )
+    )
     sections = [f"OBJECTIVE:\n{objective}"]
     if business_context:
         sections.append(f"BUSINESS_CONTEXT:\n{business_context}")
     sections.append(
         "Complete the audit, analysis, self-critique, and synthesis in this one "
         "bounded run. Return the typed GeneralistResult only."
+    )
+    sections.append("SELF_REVIEW_CATALOG_JSON:\n" + boundary.model_dump_json(indent=2))
+    sections.append(
+        "The self-critique uses only these requirement IDs. Use target:answer, "
+        "target:objective, or the listed missing-requirement targets; a finding "
+        "target is target:finding:<candidate finding id>. The application assigns "
+        "stable blocker IDs and validates every evidence pointer and retained value."
     )
     return "\n\n".join(sections)
 
@@ -237,6 +301,9 @@ async def run_generalist(
     business_context: str | None = None,
     agent: Agent[AgentRunContext] | None = None,
     max_turns: int | None = None,
+    prior_result: GeneralistResult | None = None,
+    repair_validation: ValidationResult | None = None,
+    validation_objective: str | None = None,
 ) -> GeneralistResult:
     """Run and persist one generalist request without specialist invocations."""
 
@@ -248,7 +315,11 @@ async def run_generalist(
         raise ValueError("no Generalist turns remain")
     result = await run_agent_with_usage(
         selected_agent,
-        _generalist_input(objective, business_context=business_context),
+        _generalist_input(
+            objective,
+            business_context=business_context,
+            validation_objective=validation_objective,
+        ),
         context=context,
         max_turns=turn_limit,
     )
@@ -258,7 +329,12 @@ async def run_generalist(
         agent_name=selected_agent.name,
     )
     try:
-        return persist_generalist_result(output, context)
+        return persist_generalist_result(
+            output,
+            context,
+            prior_result=prior_result,
+            repair_validation=repair_validation,
+        )
     except (AuditEvidenceError, LeadEvidenceError) as error:
         # The single-agent baseline gets the same bounded correction the Lead
         # gets, for the same failure. Giving it to only one architecture would
@@ -271,7 +347,12 @@ async def run_generalist(
             output,
             error,
             output_type=GeneralistResult,
-            persist=lambda corrected: persist_generalist_result(corrected, context),
+            persist=lambda corrected: persist_generalist_result(
+                corrected,
+                context,
+                prior_result=prior_result,
+                repair_validation=repair_validation,
+            ),
             agent_name=selected_agent.name,
             model=str(selected_agent.model)
             if selected_agent.model is not None
@@ -286,5 +367,6 @@ __all__ = [
     "build_generalist_agent",
     "create_generalist_agent",
     "persist_generalist_result",
+    "persist_generalist_validation",
     "run_generalist",
 ]

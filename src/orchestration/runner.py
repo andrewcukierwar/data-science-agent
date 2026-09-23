@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -23,7 +22,12 @@ from agents.critic import (
 from agents.finalization import (
     build_validation_catalog,
     is_essential_impossible,
+    metric_definition_change_targets,
+    objective_requests_visualization,
+    preserve_unrelated_candidate,
+    rejected_review_result,
     repair_class_for,
+    structured_metrics_required,
     validate_review,
 )
 from agents.generalist import build_generalist_agent
@@ -82,14 +86,7 @@ def _critic_allows_metric_definition_change(
 ) -> bool:
     """Return whether Critic explicitly requested an estimand correction."""
 
-    return any(
-        blocker.category.value in {"wrong_grain", "wrong_denominator"}
-        for blocker in validation.blockers
-    ) or any(
-        (issue.category or "").startswith("metric_definition")
-        or issue.category == "definition_error"
-        for issue in validation.issues
-    )
+    return bool(metric_definition_change_targets(validation))
 
 
 @dataclass(slots=True)
@@ -275,7 +272,8 @@ class AnalysisRunner:
                 *,
                 allow_follow_up: bool = True,
                 prior_result: LeadResult | None = None,
-                allow_definition_change: bool = False,
+                allowed_definition_change_targets: frozenset[str] = frozenset(),
+                repair_validation: ValidationResult | None = None,
             ) -> tuple[LeadResult, str | None]:
                 """Run Lead and optionally exhaust objective-critical follow-up."""
 
@@ -295,13 +293,21 @@ class AnalysisRunner:
                 lead_context.assert_base_role(AgentRole.LEAD)
                 if not isinstance(candidate, LeadResult):
                     candidate = LeadResult.model_validate(candidate)
+                if prior_result is not None and repair_validation is not None:
+                    candidate = preserve_unrelated_candidate(
+                        prior_result,
+                        candidate,
+                        repair_validation,
+                    )
                 self._record_agent_success(ledger, active_agent, LeadResult)
                 active_agent_recorded = True
                 candidate = persist_lead_result(
                     candidate,
                     lead_context,
                     prior_result=prior_result,
-                    allow_definition_change=allow_definition_change,
+                    allowed_definition_change_targets=(
+                        allowed_definition_change_targets
+                    ),
                 )
 
                 if not allow_follow_up:
@@ -400,6 +406,16 @@ class AnalysisRunner:
                 )
                 preflight = deterministic_candidate_validation(candidate, lead_context)
                 if preflight is not None:
+                    catalog = build_validation_catalog(candidate)
+                    if (
+                        not ledger.validation_candidates
+                        or ledger.validation_candidates[-1] != candidate
+                    ):
+                        ledger.add_validation_snapshot(candidate, catalog)
+                    if preflight not in ledger.validation_results:
+                        persist_validation_result(
+                            preflight, ledger, allow_issue_updates=True
+                        )
                     if (
                         completion_allowed
                         and finalization_repairs < MAX_FINALIZATION_REPAIRS
@@ -434,6 +450,7 @@ class AnalysisRunner:
                                 ),
                                 allow_follow_up=False,
                                 prior_result=lead_result,
+                                repair_validation=preflight,
                             )
                             if completion_constraint is not None:
                                 constrained = True
@@ -481,19 +498,15 @@ class AnalysisRunner:
                         finally:
                             lead_context.end_finalization_repair()
                     validation_result = preflight
-                    catalog = build_validation_catalog(candidate)
-                    ledger.add_validation_snapshot(candidate, catalog)
-                    if validation_result not in ledger.validation_results:
-                        persist_validation_result(
-                            validation_result, ledger, allow_issue_updates=True
-                        )
                     constrained = True
-                    constraint = RunConstraint(
-                        reason=RunBlockReason.VALIDATION_REVISION,
-                        detail=(
-                            "Deterministic finalization checks still require revision."
-                        ),
-                    )
+                    if constraint is None:
+                        constraint = RunConstraint(
+                            reason=RunBlockReason.VALIDATION_REVISION,
+                            detail=(
+                                "Deterministic finalization checks still require "
+                                "revision."
+                            ),
+                        )
                     break
                 active_agent = (critic_agent.name, AgentRole.CRITIC, objective)
                 active_agent_recorded = False
@@ -530,14 +543,72 @@ class AnalysisRunner:
                         )
                         active_agent_recorded = True
                     break
-                if not isinstance(validation_result, ValidationResult):
-                    validation_result = ValidationResult.model_validate(
-                        validation_result
+                except Exception as error:
+                    validation_result = rejected_review_result(error)
+                    catalog = build_validation_catalog(candidate)
+                    ledger.add_validation_snapshot(candidate, catalog)
+                    persist_validation_result(
+                        validation_result,
+                        critic_context.ledger,
+                        allow_issue_updates=True,
                     )
-                catalog = build_validation_catalog(candidate)
-                validation_result = validate_review(
-                    validation_result, candidate, ledger, catalog=catalog
-                )
+                    constrained = True
+                    constraint = RunConstraint(
+                        reason=RunBlockReason.VALIDATION_REVISION,
+                        detail=validation_result.summary
+                        or "The runtime review failed validation.",
+                    )
+                    if active_agent is not None and not active_agent_recorded:
+                        agent_name, role, agent_objective = active_agent
+                        ledger.record_agent_event(
+                            agent_name=agent_name,
+                            agent_role=role.value,
+                            status=AgentEventStatus.FAILED,
+                            model=self.model,
+                            objective=agent_objective,
+                            error=constraint.detail,
+                        )
+                        active_agent_recorded = True
+                    break
+                try:
+                    if not isinstance(validation_result, ValidationResult):
+                        validation_result = ValidationResult.model_validate(
+                            validation_result
+                        )
+                    catalog = build_validation_catalog(candidate)
+                    validation_result = validate_review(
+                        validation_result, candidate, ledger, catalog=catalog
+                    )
+                except Exception as error:
+                    # A malformed or ungrounded review is not a candidate
+                    # defect and cannot trigger a repair. Preserve the valid
+                    # candidate, record the rejected boundary, and stop closed.
+                    validation_result = rejected_review_result(error)
+                    catalog = build_validation_catalog(candidate)
+                    ledger.add_validation_snapshot(candidate, catalog)
+                    persist_validation_result(
+                        validation_result,
+                        critic_context.ledger,
+                        allow_issue_updates=True,
+                    )
+                    constrained = True
+                    constraint = RunConstraint(
+                        reason=RunBlockReason.VALIDATION_REVISION,
+                        detail=validation_result.summary
+                        or "The runtime review failed validation.",
+                    )
+                    if active_agent is not None and not active_agent_recorded:
+                        agent_name, role, agent_objective = active_agent
+                        ledger.record_agent_event(
+                            agent_name=agent_name,
+                            agent_role=role.value,
+                            status=AgentEventStatus.FAILED,
+                            model=self.model,
+                            objective=agent_objective,
+                            error=constraint.detail,
+                        )
+                        active_agent_recorded = True
+                    break
                 if (
                     not ledger.validation_candidates
                     or ledger.validation_candidates[-1] != candidate
@@ -608,9 +679,10 @@ class AnalysisRunner:
                         remediation_prompt,
                         allow_follow_up=False,
                         prior_result=lead_result,
-                        allow_definition_change=(
-                            _critic_allows_metric_definition_change(validation_result)
+                        allowed_definition_change_targets=(
+                            metric_definition_change_targets(validation_result)
                         ),
+                        repair_validation=validation_result,
                     )
                     lead_result = remediated_lead_result
                     ledger.add_finalization_repair(
@@ -960,13 +1032,6 @@ class AnalysisRunner:
             evidence_refs.extend(hypothesis.evidence_refs)
         for comparison in [*result.metric_comparisons, *result.statistical_assessments]:
             evidence_refs.extend(comparison.evidence_refs)
-        structured_metrics_required = bool(
-            result.metric_comparisons
-            or any(
-                finding.metric is not None or finding.value is not None
-                for finding in result.findings
-            )
-        )
         return CriticCandidate(
             objective=objective,
             answer=result.answer,
@@ -982,7 +1047,7 @@ class AnalysisRunner:
             follow_up_rationale=result.follow_up_rationale,
             artifacts=result.artifacts,
             evidence_refs=list(dict.fromkeys(evidence_refs)),
-            structured_metrics_required=structured_metrics_required,
+            structured_metrics_required=structured_metrics_required(result),
             visualization_requested=require_visualization,
         )
 
@@ -990,13 +1055,7 @@ class AnalysisRunner:
     def _objective_requests_visualization(objective: str) -> bool:
         """Return whether the user explicitly requested a visual deliverable."""
 
-        return bool(
-            re.search(
-                r"\b(?:charts?|graphs?|plots?|visuali[sz](?:e|ation|ations|ing))\b",
-                objective,
-                flags=re.IGNORECASE,
-            )
-        )
+        return objective_requests_visualization(objective)
 
     @staticmethod
     def _follow_up_prompt(
@@ -1044,13 +1103,17 @@ class AnalysisRunner:
             for item in result.metric_comparisons
         ]
         return (
-            "Remediate the candidate analysis for the original objective. Review "
-            "each Critic issue, delegate bounded follow-up analysis when it is "
-            "materially useful, update hypotheses and evidence, and return a "
-            "complete replacement LeadResult. Do not merely describe a fix. "
+            "Remediate only the named blockers for the immutable original "
+            "objective. Delegate computation only when a named blocker has "
+            "repair_class=computation, and give the specialist a defect-specific "
+            "task naming that blocker and target. Do not rerun the audit, reopen "
+            "the broader investigation, or pursue unrelated decomposition, causal, "
+            "segmentation, or validation work. Return a complete replacement "
+            "LeadResult; do not merely describe a fix. "
             "Preserve every existing metric population, date basis, observation "
             "window, numerator, denominator, and definition reference unless the "
-            "Critic explicitly identifies the metric definition as incorrect. If "
+            "Critic names that exact metric target in a wrong_grain or "
+            "wrong_denominator blocker. Every other metric definition is immutable. If "
             "you compute a different valid estimand, retain it as a distinct "
             "comparison with its own definition_context. Reuse exact specialist "
             "MetricComparison objects rather than reconstructing values from prose. "
@@ -1079,7 +1142,9 @@ class AnalysisRunner:
 
         return (
             "Complete the candidate before it is sent to the Critic. Address the "
-            "specific completeness issues below using bounded specialist tasks. "
+            "specific completeness blockers below using only defect-specific "
+            "bounded specialist tasks. Do not rerun the audit or perform unrelated "
+            "analysis. "
             "Carry forward the exact structured MetricComparison objects and their "
             "definition_context; do not reconstruct values from prose. If a chart "
             "is requested, ask the Analyst to create and save one useful chart, "
