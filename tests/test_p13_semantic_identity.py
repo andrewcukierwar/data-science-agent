@@ -3,6 +3,7 @@
 import pytest
 
 from evaluation.primitives import (
+    _statistical_assessment_matches,
     _statistical_assessments,
     evaluate_statistics,
     numeric_ground_truth_failures,
@@ -102,6 +103,34 @@ def test_population_window_numerator_or_denominator_changes_split_estimand(
     assert any("missing numeric" in failure for failure in failures)
 
 
+@pytest.mark.parametrize(
+    "context_update",
+    (
+        {"population": "experiment participants who converted"},
+        {"denominator": "randomly assigned participants with complete outcomes"},
+        {"observation_window": "experiment enrollment and follow-up window"},
+        {"date_basis": "assignment date and session date"},
+    ),
+)
+def test_qualified_population_denominator_window_or_date_is_not_equivalent(
+    context_update: dict[str, str],
+) -> None:
+    original = _comparison()
+    changed = original.model_copy(
+        update={
+            "definition_context": original.definition_context.model_copy(
+                update=context_update
+            )
+        }
+    )
+    assert numeric_ground_truth_failures([changed], [_expected_metric()])
+
+
+def test_unrelated_rate_difference_is_not_conversion_effect() -> None:
+    changed = _comparison(metric_key="click_rate_difference")
+    assert numeric_ground_truth_failures([changed], [_expected_metric()])
+
+
 def test_dimension_date_and_treatment_control_orientation_remain_distinct() -> None:
     expected = _expected_metric().model_copy(
         update={
@@ -164,6 +193,17 @@ def _current_statistical_fixture():
         generated.dataset, generated.definition
     )
     return registration, assessment
+
+
+def test_legacy_statistical_metric_keys_keep_historical_identity() -> None:
+    registration, assessment = _current_statistical_fixture()
+    expectation = registration.evaluation_spec.statistical_expectation.model_copy(
+        update={"metric_key": "conversion_rate_difference"}
+    )
+    unrelated = assessment.model_copy(update={"metric_key": "click_rate_difference"})
+    assert not _statistical_assessment_matches(
+        unrelated, expectation, legacy_contract=True
+    )
 
 
 def _statistical_report() -> str:

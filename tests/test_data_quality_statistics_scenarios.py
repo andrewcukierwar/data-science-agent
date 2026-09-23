@@ -215,6 +215,15 @@ def test_data_quality_identity_ignores_id_but_requires_type_scope_and_proof() ->
         wrong = supported.model_copy(update={"scope": wrong_scope})
         assert any(item.status.value == "fail" for item in check(wrong))
 
+    contradictory_relation = supported.model_copy(
+        update={"table_name": "unrelated_orders_table"}
+    )
+    assert any(
+        item.check_id.startswith("data_quality:required_type_scope:")
+        and item.status.value == "fail"
+        for item in check(contradictory_relation)
+    )
+
     unsupported = supported.model_copy(update={"evidence_refs": ["unexecuted-ref"]})
     unsupported_checks = check(unsupported, evidence={"evidence:table-profile"})
     assert any(

@@ -290,9 +290,31 @@ def normalize_metric_key(
             normalized_key = normalized_key[len(marker) :]
             break
     key_terms = set(normalized_key.split("_"))
+    rate_difference_terms = {
+        "binary",
+        "outcome",
+        "conversion",
+        "rate",
+        "proportion",
+        "difference",
+    }
+    conversion_effect_terms = {
+        "experiment",
+        "binary",
+        "outcome",
+        "conversion",
+        "effect",
+    }
     if not legacy_contract and (
-        ("difference" in key_terms and key_terms & {"rate", "proportion"})
-        or ("effect" in key_terms and "conversion" in key_terms)
+        (
+            {"difference"} <= key_terms
+            and bool(key_terms & {"rate", "proportion"})
+            and key_terms <= rate_difference_terms
+        )
+        or (
+            {"conversion", "effect"} <= key_terms
+            and key_terms <= conversion_effect_terms
+        )
     ):
         return "rate_difference"
     return _METRIC_ALIASES.get(normalized_key, normalized_key)
@@ -531,13 +553,16 @@ def _normalize_context_value(field_name: str, value: str) -> str:
     normalized = re.sub(r"\s+", " ", normalized)
     tokens = set(normalized.split())
     if field_name == "population":
-        if tokens & {"acquisition", "acquired"} and "cohort" in tokens:
+        if normalized in {"acquired customer cohort", "acquisition customer cohort"}:
             return "acquired customer cohort"
-        if "experiment" in tokens and tokens & {"participant", "participants"}:
-            return "randomized experiment participants"
-        if {"randomized", "participants"} <= tokens:
+        if normalized in {
+            "randomized experiment participants",
+            "participants randomized to the experiment",
+        }:
             return "randomized experiment participants"
     if field_name == "date_basis":
+        if normalized in {"assignment", "random assignment date"}:
+            return "assignment"
         bases = []
         if "assignment" in tokens:
             bases.append("assignment")
@@ -549,17 +574,35 @@ def _normalize_context_value(field_name: str, value: str) -> str:
             bases.append("session_date")
         if "marketing" in tokens or "spend" in tokens:
             bases.append("marketing_date")
-        if bases:
+        if bases and not (
+            tokens
+            - {
+                "acquisition",
+                "date",
+                "cohort",
+                "and",
+                "order",
+                "observation",
+                "session",
+                "marketing",
+                "spend",
+            }
+        ):
             return ",".join(sorted(set(bases)))
     if field_name == "observation_window":
-        if "90d" in tokens or ("90" in tokens and "day" in tokens):
+        if normalized in {"90 day", "90 days", "90d"}:
             return "90_day"
-        if "experiment" in tokens and "enrollment" in tokens:
+        if normalized in {"experiment enrollment", "experiment enrollment window"}:
             return "experiment_enrollment"
-        if "quarter" in tokens or "period" in tokens:
+        if normalized in {"calendar quarter", "calendar period"}:
             return "calendar_period"
-        if "lifetime" in tokens or "history" in tokens:
+        if normalized in {"lifetime", "history"}:
             return "lifetime"
+    if field_name == "denominator" and normalized in {
+        "assigned participants",
+        "all randomly assigned participants",
+    }:
+        return "assigned participants"
     aliases = {
         "numerator": (
             ({"marketing", "spend"}, "marketing spend"),
@@ -589,7 +632,7 @@ def _normalize_context_value(field_name: str, value: str) -> str:
         ),
     }
     for required_tokens, canonical in aliases.get(field_name, ()):
-        if required_tokens <= tokens:
+        if required_tokens == tokens:
             return canonical
     return normalized
 

@@ -155,6 +155,7 @@ def test_semantic_primitives_reject_speculation_and_unsupported_claims() -> None
         ("The data do not prove X caused Y.", "pass"),
         ("This is an observed association, not causal proof.", "pass"),
         ("It is not only associated; it proves causality.", "fail"),
+        ("This is not just correlation: it proves causality.", "fail"),
         ("The data do not fail to prove X caused Y.", "fail"),
         ("The data do not not prove X caused Y.", "fail"),
         ("It is not impossible to prove X caused Y.", "fail"),

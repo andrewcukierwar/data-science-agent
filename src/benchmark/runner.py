@@ -862,6 +862,15 @@ class BenchmarkRunner:
             self.catalog.resolve(scenario_id, versions.get(scenario_id))
             for scenario_id in selected_ids
         )
+        if any(
+            registration.scenario_version != "1.1"
+            or registration.metadata.evaluator_version != "1.3"
+            for registration in registrations
+        ):
+            raise BenchmarkError(
+                "new benchmark declarations require scenario 1.1 and evaluator "
+                "1.3; legacy registrations are for offline evaluation only"
+            )
         if len({registration.key for registration in registrations}) != len(
             registrations
         ):

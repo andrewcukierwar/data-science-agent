@@ -240,6 +240,23 @@ def test_context_versions_and_public_task_are_shared_across_architectures(
     assert all("chart" in task.lower() for task in captured)
 
 
+def test_new_manifest_cannot_mix_legacy_task_with_current_contract_versions(
+    tmp_path: Path,
+) -> None:
+    runner = BenchmarkRunner(tmp_path / "workspaces", source_preparer=_sources)
+    with pytest.raises(BenchmarkError, match="legacy registrations are for offline"):
+        runner.build_manifest(
+            manifest_id="mixed-contract-fixture",
+            scenario_ids=[SCENARIO_ID],
+            scenario_versions={SCENARIO_ID: "1.0"},
+            architectures=("single-agent",),
+            repetitions=1,
+            model="fixture-model",
+            execution_mode=ExecutionMode.DETERMINISTIC,
+            repetition_justification="Version-boundary regression fixture.",
+        )
+
+
 def test_plan_freezes_agent_run_wall_clock_timeout(tmp_path) -> None:
     runner = _runner(tmp_path, _completed)
     manifest_path = _plan(runner, tmp_path)

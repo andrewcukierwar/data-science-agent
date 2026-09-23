@@ -739,6 +739,14 @@ def _data_quality_issue_matches(issue, requirement: DataQualityRequirement) -> b
         != expected_scope.relation.strip().casefold()
     ):
         return False
+    if (
+        actual_scope is not None
+        and actual_scope.relation is not None
+        and issue.table_name is not None
+        and actual_scope.relation.strip().casefold()
+        != issue.table_name.strip().casefold()
+    ):
+        return False
     if expected_scope.date is not None and (
         actual_scope is None or actual_scope.date != expected_scope.date
     ):
@@ -929,8 +937,16 @@ def _statistical_assessment_matches(
     """Match a typed assessment to an expected estimand without using prose."""
 
     return (
-        normalize_metric_key(assessment.metric_key, assessment.dimensions)
-        == normalize_metric_key(expectation.metric_key, expectation.dimensions)
+        normalize_metric_key(
+            assessment.metric_key,
+            assessment.dimensions,
+            legacy_contract=legacy_contract,
+        )
+        == normalize_metric_key(
+            expectation.metric_key,
+            expectation.dimensions,
+            legacy_contract=legacy_contract,
+        )
         and normalize_metric_dimensions(assessment.dimensions)
         == normalize_metric_dimensions(expectation.dimensions)
         and metric_definition_contexts_match(
@@ -1601,7 +1617,7 @@ def evaluate_unsupported_assertions(
     """Reject affirmative overclaims while allowing explicit scoped caveats."""
 
     clauses = re.split(
-        r"[,;\n]|(?<!\d)[.!?]+(?!\d)|"
+        r"[,;:\n]|(?<!\d)[.!?]+(?!\d)|"
         r"\b(?:but|however|yet|and|because|although|though|whereas)\b",
         text.lower()
         .replace("’", "'")
