@@ -151,7 +151,7 @@ def test_critic_persists_validation_result_and_issues(
     validation = ValidationResult(
         status=ValidationStatus.REVISE,
         issues=[issue],
-        checked_finding_ids=["F001"],
+        checked_finding_ids=[],
         summary="The denominator must be corrected.",
     )
 
@@ -168,8 +168,10 @@ def test_critic_persists_validation_result_and_issues(
     returned = asyncio.run(run_critic(context, candidate))
     reloaded = AnalysisLedger(context.ledger.state_path)
 
-    assert returned == validation
-    assert reloaded.validation_results == [validation]
+    assert returned.status is validation.status
+    assert returned.contract_version == "1.0"
+    assert returned.blockers
+    assert reloaded.validation_results == [returned]
     assert reloaded.validation_issues == [issue]
     assert reloaded.budget.specialist_invocations == 0
     assert reloaded.budget.critic_loops == 1
@@ -258,8 +260,8 @@ def test_critic_revises_structured_metric_inconsistent_with_evidence(
     result = asyncio.run(run_critic(context, candidate))
 
     assert result.status is ValidationStatus.REVISE
-    assert result.issues[0].category == "structured_metric"
-    assert "inconsistent" in result.issues[0].message
+    assert result.issues[0].category == "evidence_provenance"
+    assert "unbound numerical result" in result.issues[0].message
 
 
 def test_critic_requires_cogs_or_margin_when_profitability_data_has_cogs(

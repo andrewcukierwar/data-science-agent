@@ -12,6 +12,10 @@ from agents.evidence import (
     material_claims,
     resolve_material_claims,
 )
+from agents.finalization import (
+    build_validation_catalog,
+    validate_review,
+)
 from agents.model_usage import run_agent_with_usage
 from agents.output_contract import require_strict_output, strict_output_type
 from agents.runtime import AgentRole, AgentRunConfig, AgentRunContext
@@ -852,13 +856,20 @@ create_validator_agent = build_critic_agent
 def _candidate_prompt(candidate: CriticCandidate) -> str:
     """Serialize the typed candidate without exposing local context internals."""
 
+    catalog = build_validation_catalog(candidate)
     return (
         "Validate this candidate analysis. The listed evidence references are "
         "workspace-relative paths, tool-event IDs, or registered artifact IDs. "
         "Use the approved tools to inspect or reproduce them. Check the "
         "candidate completeness fields as well as its evidence.\n\n"
         "CANDIDATE_ANALYSIS_JSON:\n"
-        f"{candidate.model_dump_json(indent=2)}"
+        f"{candidate.model_dump_json(indent=2)}\n\n"
+        "VALIDATION_CATALOG_JSON:\n"
+        f"{catalog.model_dump_json(indent=2)}\n\n"
+        "Use only catalog requirement_id and target_id values. Supply exact "
+        "candidate or successful tool-event JSON-pointer evidence for every "
+        "blocker. Blocker IDs are application-assigned. Put non-blocking "
+        "boundaries in limitations."
     )
 
 
@@ -891,6 +902,33 @@ def persist_validation_result(
     return result
 
 
+def deterministic_candidate_validation(
+    candidate: CriticCandidate,
+    context: AgentRunContext,
+) -> ValidationResult | None:
+    """Run ordered shared preflight without spending model-review capacity."""
+
+    checks = (
+        validate_candidate_evidence_provenance,
+        validate_candidate_citations,
+        lambda item, ledger: validate_metric_compilation_conflicts(item),
+        validate_structured_metric_comparisons,
+        lambda item, ledger: candidate_completeness_validation(item, context=context),
+    )
+    for check in checks:
+        failed = check(candidate, context.ledger)
+        if failed is None:
+            continue
+        catalog = build_validation_catalog(candidate)
+        return validate_review(
+            failed,
+            candidate,
+            context.ledger,
+            catalog=catalog,
+        )
+    return None
+
+
 async def run_critic(
     context: AgentRunContext,
     candidate: CriticCandidate,
@@ -902,51 +940,16 @@ async def run_critic(
     if context.agent_role is not AgentRole.CRITIC:
         raise ValueError("run_critic requires a Critic context")
 
-    # Critic is mandatory lifecycle validation, not Lead-delegated analytical
-    # specialist work. Its hard limit is the separate critic-loop budget.
-    context.consume_budget(BudgetResource.CRITIC_LOOPS)
+    catalog = build_validation_catalog(candidate)
+    failed = deterministic_candidate_validation(candidate, context)
+    if failed is not None:
+        context.ledger.add_validation_snapshot(candidate, catalog)
+        return persist_validation_result(
+            failed, context.ledger, allow_issue_updates=True
+        )
 
-    conflicts = validate_metric_compilation_conflicts(candidate)
-    if conflicts is not None:
-        return persist_validation_result(
-            conflicts,
-            context.ledger,
-            allow_issue_updates=True,
-        )
-    completeness = candidate_completeness_validation(candidate, context=context)
-    if completeness is not None:
-        return persist_validation_result(
-            completeness,
-            context.ledger,
-            allow_issue_updates=True,
-        )
-    metric_validation = validate_structured_metric_comparisons(
-        candidate,
-        context.ledger,
-    )
-    if metric_validation is not None:
-        return persist_validation_result(
-            metric_validation,
-            context.ledger,
-            allow_issue_updates=True,
-        )
-    citation_validation = validate_candidate_citations(candidate, context.ledger)
-    if citation_validation is not None:
-        return persist_validation_result(
-            citation_validation,
-            context.ledger,
-            allow_issue_updates=True,
-        )
-    provenance_validation = validate_candidate_evidence_provenance(
-        candidate,
-        context.ledger,
-    )
-    if provenance_validation is not None:
-        return persist_validation_result(
-            provenance_validation,
-            context.ledger,
-            allow_issue_updates=True,
-        )
+    # Only an actual model review consumes the separately bounded Critic budget.
+    context.consume_budget(BudgetResource.CRITIC_LOOPS)
 
     selected_agent = agent or build_critic_agent(context.run_config)
     result = await run_agent_with_usage(
@@ -960,6 +963,8 @@ async def run_critic(
         ValidationResult,
         agent_name=selected_agent.name,
     )
+    output = validate_review(output, candidate, context.ledger, catalog=catalog)
+    context.ledger.add_validation_snapshot(candidate, catalog)
     return persist_validation_result(
         output,
         context.ledger,
@@ -975,6 +980,7 @@ __all__ = [
     "CRITIC_OBJECTIVE",
     "CriticPersistenceError",
     "candidate_completeness_validation",
+    "deterministic_candidate_validation",
     "validate_candidate_citations",
     "validate_structured_metric_comparisons",
     "VALIDATOR_INSTRUCTIONS",

@@ -69,6 +69,7 @@ from schemas.metrics import (
     normalize_metric_key,
 )
 from schemas.run_state import Hypothesis, hypothesis_requires_evidence
+from schemas.validation import RepairClass
 
 LEAD_OBJECTIVE = (
     "Own the analytical objective, coordinate bounded specialist investigations, "
@@ -292,6 +293,8 @@ class _NestedSpecialistHooks(ModelUsageHooks):
 
     async def on_agent_start(self, context: Any, agent: Agent[Any]) -> None:
         runtime_context = context.context
+        if runtime_context.finalization_repair_class is RepairClass.SYNTHESIS_SELECTION:
+            raise PermissionDeniedError(AgentRole.LEAD, f"delegate_{self.role.value}")
         runtime_context.record_specialist_invocation()
         runtime_context.enter_nested_role(self.role)
 
@@ -906,6 +909,8 @@ async def run_lead(
         # Strict output succeeded and only the citations are wrong, so this is a
         # semantic contract failure the model can repair from evidence that
         # already exists. Exactly one bounded attempt, with no new execution.
+        if context.finalization_repair_class is not None:
+            raise
         return await run_bounded_evidence_correction(
             context,
             output,

@@ -25,7 +25,7 @@ import asyncio
 from typing import Any
 
 from agents import RunHooks, Runner
-from agents.runtime import AgentRunContext
+from agents.runtime import AgentRole, AgentRunContext
 from schemas.run_state import (
     ModelUsage,
     add_model_usage,
@@ -94,6 +94,13 @@ class ModelUsageHooks(RunHooks[AgentRunContext]):
         recorder = _active_recorder(context)
         if recorder is not None:
             recorder.record_response(getattr(response, "usage", None))
+        run_context = getattr(context, "context", None)
+        if (
+            run_context is not None
+            and run_context.agent_role is AgentRole.GENERALIST
+            and run_context.primary_responses is not None
+        ):
+            run_context.primary_responses += 1
 
 
 def _active_recorder(context: Any) -> ModelUsageRecorder | None:

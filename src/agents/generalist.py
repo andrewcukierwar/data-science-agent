@@ -16,7 +16,8 @@ from agents.audit_evidence import (
     persist_audit_result,
 )
 from agents.correction import run_bounded_evidence_correction
-from agents.critic import persist_validation_result
+from agents.critic import deterministic_candidate_validation, persist_validation_result
+from agents.finalization import build_validation_catalog, validate_review
 from agents.lead import (
     LeadEvidenceError,
     persist_lead_result,
@@ -157,13 +158,58 @@ def persist_generalist_result(
         raise ValueError("persist_generalist_result requires a Generalist context")
     audit = persist_audit_result(result.audit, context)
     candidate = persist_lead_result(result.candidate, context)
+    critic_candidate = _as_critic_candidate(
+        candidate, objective=context.ledger.state.objective
+    )
+    catalog = build_validation_catalog(critic_candidate)
+    deterministic = deterministic_candidate_validation(critic_candidate, context)
+    validation = validate_review(
+        deterministic or result.validation,
+        critic_candidate,
+        context.ledger,
+        catalog=catalog,
+    )
+    context.ledger.add_validation_snapshot(critic_candidate, catalog)
     validation = persist_validation_result(
-        result.validation,
+        validation,
         context.ledger,
         allow_issue_updates=True,
     )
     return result.model_copy(
         update={"audit": audit, "candidate": candidate, "validation": validation}
+    )
+
+
+def _as_critic_candidate(result, *, objective: str | None = None):
+    """Build the shared validation view without importing orchestration."""
+
+    from schemas.validation import CriticCandidate
+
+    return CriticCandidate(
+        objective=objective or result.objective,
+        answer=result.answer,
+        findings=result.findings,
+        metric_comparisons=result.metric_comparisons,
+        statistical_assessments=result.statistical_assessments,
+        caveats=result.caveats,
+        metric_conflicts=result.metric_conflicts,
+        recommendations=[item.statement for item in result.recommendations],
+        hypotheses=result.hypotheses,
+        open_questions=result.open_questions,
+        follow_up_analysis=result.follow_up_analysis,
+        follow_up_rationale=result.follow_up_rationale,
+        artifacts=result.artifacts,
+        evidence_refs=list(
+            dict.fromkeys(
+                reference
+                for item in [
+                    *result.findings,
+                    *result.metric_comparisons,
+                    *result.statistical_assessments,
+                ]
+                for reference in item.evidence_refs
+            )
+        ),
     )
 
 
@@ -190,17 +236,21 @@ async def run_generalist(
     *,
     business_context: str | None = None,
     agent: Agent[AgentRunContext] | None = None,
+    max_turns: int | None = None,
 ) -> GeneralistResult:
     """Run and persist one generalist request without specialist invocations."""
 
     if context.agent_role is not AgentRole.GENERALIST:
         raise ValueError("run_generalist requires a Generalist AgentRunContext")
     selected_agent = agent or build_generalist_agent(context.run_config)
+    turn_limit = max_turns if max_turns is not None else context.run_config.turn_limit
+    if turn_limit < 1:
+        raise ValueError("no Generalist turns remain")
     result = await run_agent_with_usage(
         selected_agent,
         _generalist_input(objective, business_context=business_context),
         context=context,
-        max_turns=context.run_config.turn_limit,
+        max_turns=turn_limit,
     )
     output = require_strict_output(
         result.final_output,
@@ -214,6 +264,8 @@ async def run_generalist(
         # gets, for the same failure. Giving it to only one architecture would
         # hand that architecture an extra attempt at valid provenance and make
         # the comparison unfair.
+        if context.finalization_repair_class is not None:
+            raise
         return await run_bounded_evidence_correction(
             context,
             output,

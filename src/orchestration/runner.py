@@ -7,6 +7,7 @@ import re
 import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,9 +16,15 @@ from agents.audit_evidence import persist_audit_result
 from agents.auditor import build_data_auditor_agent, run_data_auditor
 from agents.critic import (
     build_critic_agent,
-    candidate_completeness_validation,
+    deterministic_candidate_validation,
     persist_validation_result,
     run_critic,
+)
+from agents.finalization import (
+    build_validation_catalog,
+    is_essential_impossible,
+    repair_class_for,
+    validate_review,
 )
 from agents.generalist import build_generalist_agent
 from agents.lead import build_lead_agent, persist_lead_result, run_lead
@@ -48,7 +55,13 @@ from schemas.run_state import (
     RunBudget,
     RunStatus,
 )
-from schemas.validation import CriticCandidate, ValidationResult, ValidationStatus
+from schemas.validation import (
+    CriticCandidate,
+    FinalizationRepairRecord,
+    RepairStatus,
+    ValidationResult,
+    ValidationStatus,
+)
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService
@@ -59,7 +72,9 @@ AuditorRunner = Callable[..., Awaitable[AuditResult]]
 LeadRunner = Callable[..., Awaitable[LeadResult]]
 CriticRunner = Callable[..., Awaitable[ValidationResult]]
 MAX_LEAD_FOLLOW_UP_CYCLES = 2
-MAX_LEAD_COMPLETION_PASSES = 2
+MAX_FINALIZATION_REPAIRS = 1
+# Compatibility name for callers that asserted the former completion-pass bound.
+MAX_LEAD_COMPLETION_PASSES = MAX_FINALIZATION_REPAIRS
 
 
 def _critic_allows_metric_definition_change(
@@ -68,6 +83,9 @@ def _critic_allows_metric_definition_change(
     """Return whether Critic explicitly requested an estimand correction."""
 
     return any(
+        blocker.category.value in {"wrong_grain", "wrong_denominator"}
+        for blocker in validation.blockers
+    ) or any(
         (issue.category or "").startswith("metric_definition")
         or issue.category == "definition_error"
         for issue in validation.issues
@@ -368,11 +386,10 @@ class AnalysisRunner:
                 AgentRole.CRITIC,
             )
             critic_attempts = 0
-            completion_passes = 0
+            finalization_repairs = 0
             available_critic_loops = (
                 ledger.budget.max_critic_loops - ledger.budget.critic_loops
             )
-            critic_context.check_budget("critic_loops")
             while True:
                 candidate = self._candidate(
                     objective,
@@ -381,22 +398,30 @@ class AnalysisRunner:
                         objective
                     ),
                 )
-                # Deterministic completeness costs nothing to evaluate, but
-                # ``run_critic`` consumes a critic loop before short-circuiting
-                # on it. Remediation runs without follow-up continuation, so a
-                # candidate that re-raises one of these gates would otherwise
-                # spend the whole Critic budget without ever obtaining a model
-                # review. Resolve it with a bounded completion pass instead.
-                if (
-                    completion_allowed
-                    and completion_passes < MAX_LEAD_COMPLETION_PASSES
-                ):
-                    completion_validation = candidate_completeness_validation(
-                        candidate,
-                        context=lead_context,
-                    )
-                    if completion_validation is not None:
-                        completion_passes += 1
+                preflight = deterministic_candidate_validation(candidate, lead_context)
+                if preflight is not None:
+                    if (
+                        completion_allowed
+                        and finalization_repairs < MAX_FINALIZATION_REPAIRS
+                        and not is_essential_impossible(preflight)
+                    ):
+                        finalization_repairs += 1
+                        prior_selected_ids = list(lead_result.selected_result_ids)
+                        preserved_selection = {
+                            name: deepcopy(getattr(ledger.state, name))
+                            for name in (
+                                "findings",
+                                "metric_comparisons",
+                                "statistical_assessments",
+                                "statistical_assessment_history",
+                                "hypotheses",
+                                "hypothesis_history",
+                                "open_questions",
+                            )
+                        }
+                        lead_context.begin_finalization_repair(
+                            repair_class_for(preflight)
+                        )
                         try:
                             (
                                 lead_result,
@@ -405,7 +430,7 @@ class AnalysisRunner:
                                 self._completion_prompt(
                                     objective,
                                     lead_result,
-                                    completion_validation,
+                                    preflight,
                                 ),
                                 allow_follow_up=False,
                                 prior_result=lead_result,
@@ -413,13 +438,63 @@ class AnalysisRunner:
                             if completion_constraint is not None:
                                 constrained = True
                                 constraint = completion_constraint
+                            ledger.add_finalization_repair(
+                                FinalizationRepairRecord(
+                                    attempt_id=(
+                                        f"{ledger.state.attempt_id}:finalization-repair-1"
+                                    ),
+                                    blocker_ids=[
+                                        item.id or "unassigned"
+                                        for item in preflight.blockers
+                                    ],
+                                    status=RepairStatus.SUCCEEDED,
+                                    prior_selected_result_ids=prior_selected_ids,
+                                    repaired_selected_result_ids=list(
+                                        lead_result.selected_result_ids
+                                    ),
+                                )
+                            )
                             continue
                         except Exception as error:
+                            for name, value in preserved_selection.items():
+                                setattr(ledger.state, name, value)
+                            ledger.save()
                             constrained = True
                             constraint = constraint_from_exception(
                                 error,
                                 context="Lead completion pass",
                             )
+                            ledger.add_finalization_repair(
+                                FinalizationRepairRecord(
+                                    attempt_id=(
+                                        f"{ledger.state.attempt_id}:finalization-repair-1"
+                                    ),
+                                    blocker_ids=[
+                                        item.id or "unassigned"
+                                        for item in preflight.blockers
+                                    ],
+                                    status=RepairStatus.FAILED,
+                                    prior_selected_result_ids=prior_selected_ids,
+                                    stop_reason=constraint.detail,
+                                )
+                            )
+                        finally:
+                            lead_context.end_finalization_repair()
+                    validation_result = preflight
+                    catalog = build_validation_catalog(candidate)
+                    ledger.add_validation_snapshot(candidate, catalog)
+                    if validation_result not in ledger.validation_results:
+                        persist_validation_result(
+                            validation_result, ledger, allow_issue_updates=True
+                        )
+                    constrained = True
+                    constraint = RunConstraint(
+                        reason=RunBlockReason.VALIDATION_REVISION,
+                        detail=(
+                            "Deterministic finalization checks still require revision."
+                        ),
+                    )
+                    break
                 active_agent = (critic_agent.name, AgentRole.CRITIC, objective)
                 active_agent_recorded = False
                 try:
@@ -441,8 +516,6 @@ class AnalysisRunner:
                     # a bounded re-review cannot start or finish, preserve it
                     # and render a constrained report instead of converting a
                     # recoverable remediation stop into a failed run.
-                    if validation_result is None:
-                        raise
                     constrained = True
                     constraint = self._critic_failure_reason(error)
                     if active_agent is not None and not active_agent_recorded:
@@ -461,6 +534,15 @@ class AnalysisRunner:
                     validation_result = ValidationResult.model_validate(
                         validation_result
                     )
+                catalog = build_validation_catalog(candidate)
+                validation_result = validate_review(
+                    validation_result, candidate, ledger, catalog=catalog
+                )
+                if (
+                    not ledger.validation_candidates
+                    or ledger.validation_candidates[-1] != candidate
+                ):
+                    ledger.add_validation_snapshot(candidate, catalog)
                 self._record_agent_success(ledger, active_agent, ValidationResult)
                 active_agent_recorded = True
                 if validation_result not in critic_context.ledger.validation_results:
@@ -471,6 +553,16 @@ class AnalysisRunner:
                     )
                 critic_attempts += 1
                 if validation_result.status is ValidationStatus.PASS:
+                    break
+
+                if finalization_repairs >= MAX_FINALIZATION_REPAIRS:
+                    constrained = True
+                    constraint = RunConstraint(
+                        reason=RunBlockReason.VALIDATION_REVISION,
+                        detail=(
+                            "The single finalization repair allowance was exhausted."
+                        ),
+                    )
                     break
 
                 if critic_attempts >= available_critic_loops:
@@ -492,6 +584,23 @@ class AnalysisRunner:
                     business_context=business_context,
                 )
                 try:
+                    finalization_repairs += 1
+                    prior_selected_ids = list(lead_result.selected_result_ids)
+                    preserved_selection = {
+                        name: deepcopy(getattr(ledger.state, name))
+                        for name in (
+                            "findings",
+                            "metric_comparisons",
+                            "statistical_assessments",
+                            "statistical_assessment_history",
+                            "hypotheses",
+                            "hypothesis_history",
+                            "open_questions",
+                        )
+                    }
+                    lead_context.begin_finalization_repair(
+                        repair_class_for(validation_result)
+                    )
                     (
                         remediated_lead_result,
                         follow_up_constraint,
@@ -504,15 +613,48 @@ class AnalysisRunner:
                         ),
                     )
                     lead_result = remediated_lead_result
+                    ledger.add_finalization_repair(
+                        FinalizationRepairRecord(
+                            attempt_id=(
+                                f"{ledger.state.attempt_id}:finalization-repair-1"
+                            ),
+                            blocker_ids=[
+                                item.id or "unassigned"
+                                for item in validation_result.blockers
+                            ],
+                            status=RepairStatus.SUCCEEDED,
+                            prior_selected_result_ids=prior_selected_ids,
+                            repaired_selected_result_ids=list(
+                                lead_result.selected_result_ids
+                            ),
+                        )
+                    )
                     if follow_up_constraint is not None:
                         constrained = True
                         constraint = follow_up_constraint
                 except Exception as error:
+                    for name, value in preserved_selection.items():
+                        setattr(ledger.state, name, value)
+                    ledger.save()
                     # A usable candidate and Critic result already exist. Keep
                     # them and produce a constrained report when bounded
                     # remediation cannot complete, including its stop reason.
                     constrained = True
                     constraint = self._remediation_failure_reason(error)
+                    ledger.add_finalization_repair(
+                        FinalizationRepairRecord(
+                            attempt_id=(
+                                f"{ledger.state.attempt_id}:finalization-repair-1"
+                            ),
+                            blocker_ids=[
+                                item.id or "unassigned"
+                                for item in validation_result.blockers
+                            ],
+                            status=RepairStatus.FAILED,
+                            prior_selected_result_ids=prior_selected_ids,
+                            stop_reason=constraint.detail,
+                        )
+                    )
                     if active_agent is not None and not active_agent_recorded:
                         agent_name, role, agent_objective = active_agent
                         ledger.record_agent_event(
@@ -525,6 +667,8 @@ class AnalysisRunner:
                         )
                         active_agent_recorded = True
                     break
+                finally:
+                    lead_context.end_finalization_repair()
 
             self._finalize_runtime_metadata(ledger, started)
             runtime_metadata_finalized = True
@@ -1161,6 +1305,18 @@ class AnalysisRunner:
                 lines.append(f"- Status: **{validation.status.value}**")
             if validation.summary:
                 lines.append(f"- Summary: {validation.summary}")
+            if validation.blockers:
+                lines.append("- Active blockers:")
+                lines.extend(
+                    f"  - **{blocker.category.value} {blocker.id}:** {blocker.message}"
+                    for blocker in validation.blockers
+                )
+            if validation.limitations:
+                lines.append("- Limitations:")
+                lines.extend(
+                    f"  - **{item.category.value}:** {item.message}"
+                    for item in validation.limitations
+                )
             if validation.issues:
                 lines.extend(
                     f"- **{issue.severity.value.upper()} {issue.id}:** {issue.message}"

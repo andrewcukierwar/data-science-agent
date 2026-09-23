@@ -42,7 +42,13 @@ from schemas.run_state import (
     model_usage_snapshot,
 )
 from schemas.statistics import StatisticalAssessment
-from schemas.validation import ValidationIssue, ValidationResult
+from schemas.validation import (
+    CriticCandidate,
+    FinalizationRepairRecord,
+    ValidationCatalog,
+    ValidationIssue,
+    ValidationResult,
+)
 
 _LEDGER_FILENAME = "analysis_ledger.json"
 _USAGE_FIELDS = frozenset(
@@ -181,6 +187,18 @@ class AnalysisLedger(ToolEventLedger):
         """Recorded typed Critic validation results."""
 
         return self._state.validation_results
+
+    @property
+    def validation_candidates(self) -> list[CriticCandidate]:
+        return self._state.validation_candidates
+
+    @property
+    def validation_catalogs(self) -> list[ValidationCatalog]:
+        return self._state.validation_catalogs
+
+    @property
+    def finalization_repairs(self) -> list[FinalizationRepairRecord]:
+        return self._state.finalization_repairs
 
     @property
     def specialist_results(self) -> list[SpecialistResultRecord]:
@@ -1052,6 +1070,24 @@ class AnalysisLedger(ToolEventLedger):
         self._state.validation_results.append(result)
         self.save()
         return result
+
+    def add_validation_snapshot(
+        self,
+        candidate: CriticCandidate,
+        catalog: ValidationCatalog,
+    ) -> None:
+        """Append the exact candidate and catalog interpreted by one review."""
+
+        self._state.validation_candidates.append(candidate)
+        self._state.validation_catalogs.append(catalog)
+        self.save()
+
+    def add_finalization_repair(
+        self, record: FinalizationRepairRecord
+    ) -> FinalizationRepairRecord:
+        self._state.finalization_repairs.append(record)
+        self.save()
+        return record
 
     def record_specialist_result(
         self,

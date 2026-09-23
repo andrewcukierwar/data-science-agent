@@ -15,6 +15,7 @@ from orchestration.budgets import (
     RunBudgetManager,
 )
 from orchestration.ledger import AnalysisLedger
+from schemas.validation import RepairClass
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
 from tools.sql import DuckDBExecutionService
@@ -324,6 +325,7 @@ class AgentRunContext:
     # Set for the duration of one agent run so response-boundary hooks can
     # persist provider usage as it arrives. See ``agents.model_usage``.
     usage_recorder: Any | None = field(default=None, init=False, repr=False)
+    primary_responses: int | None = field(default=0, init=False)
     budget_manager: RunBudgetManager = field(init=False, repr=False)
     _role_stack: ContextVar[tuple[AgentRole, ...]] = field(
         default_factory=lambda: ContextVar("agent_role_stack", default=()),
@@ -332,6 +334,11 @@ class AgentRunContext:
     )
     _tool_role: ContextVar[AgentRole | None] = field(
         default_factory=lambda: ContextVar("agent_tool_role", default=None),
+        init=False,
+        repr=False,
+    )
+    _finalization_repair: ContextVar[RepairClass | None] = field(
+        default_factory=lambda: ContextVar("finalization_repair", default=None),
         init=False,
         repr=False,
     )
@@ -427,8 +434,27 @@ class AgentRunContext:
     def require_permission(self, tool_name: str) -> None:
         """Raise if the current role cannot call ``tool_name``."""
 
+        if (
+            self._finalization_repair.get() is RepairClass.SYNTHESIS_SELECTION
+            and tool_name in {"run_sql", "run_python", "run_analytical"}
+        ):
+            raise PermissionDeniedError(self.agent_role, tool_name)
         if tool_name not in self.allowed_tools():
             raise PermissionDeniedError(self.agent_role, tool_name)
+
+    def begin_finalization_repair(self, repair_class: RepairClass) -> None:
+        """Enter the non-nestable scoped repair permission boundary."""
+
+        if self._finalization_repair.get() is not None:
+            raise RuntimeError("nested finalization repair is not permitted")
+        self._finalization_repair.set(repair_class)
+
+    def end_finalization_repair(self) -> None:
+        self._finalization_repair.set(None)
+
+    @property
+    def finalization_repair_class(self) -> RepairClass | None:
+        return self._finalization_repair.get()
 
     def require_analytical_operation(self, operation: str) -> None:
         """Enforce the operation-level boundary behind ``run_analytical``."""

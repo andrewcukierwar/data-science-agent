@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import sys
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
 from agents.critic import persist_validation_result
+from agents.finalization import is_essential_impossible, repair_class_for
 from agents.generalist import persist_generalist_result, run_generalist
 from agents.runtime import AgentRole
 from orchestration.block_reasons import (
@@ -28,7 +30,12 @@ from schemas.run_state import (
     RunBlockReason,
     RunStatus,
 )
-from schemas.validation import ValidationResult, ValidationStatus
+from schemas.validation import (
+    FinalizationRepairRecord,
+    RepairStatus,
+    ValidationResult,
+    ValidationStatus,
+)
 from tools.workspace import Workspace
 
 
@@ -174,6 +181,101 @@ class GeneralistRunner(AnalysisRunner):
             self._record_agent_success(ledger, active_agent, GeneralistResult)
             active_agent_recorded = True
 
+            if validation_result.status is ValidationStatus.REVISE:
+                consumed = context.primary_responses
+                if consumed == 0:
+                    # An injected boundary supplied no response accounting.
+                    consumed = None
+                    context.primary_responses = None
+                remaining = (
+                    context.run_config.turn_limit - consumed
+                    if consumed is not None
+                    else 0
+                )
+                if remaining > 0 and not is_essential_impossible(validation_result):
+                    prior_selected_ids = list(
+                        generalist_result.candidate.selected_result_ids
+                    )
+                    preserved_selection = {
+                        name: deepcopy(getattr(ledger.state, name))
+                        for name in (
+                            "audit",
+                            "findings",
+                            "metric_comparisons",
+                            "statistical_assessments",
+                            "statistical_assessment_history",
+                            "hypotheses",
+                            "hypothesis_history",
+                            "open_questions",
+                            "validation_results",
+                            "validation_issues",
+                            "validation_candidates",
+                            "validation_catalogs",
+                        )
+                    }
+                    repair_prompt = self._generalist_repair_prompt(
+                        objective,
+                        generalist_result,
+                        validation_result,
+                    )
+                    context.begin_finalization_repair(
+                        repair_class_for(validation_result)
+                    )
+                    repaired: GeneralistResult | None = None
+                    try:
+                        repaired = await run_generalist(
+                            context,
+                            repair_prompt,
+                            business_context=business_context,
+                            agent=agent,
+                            max_turns=remaining,
+                        )
+                    except Exception as error:
+                        for name, value in preserved_selection.items():
+                            setattr(ledger.state, name, value)
+                        ledger.save()
+                        ledger.add_finalization_repair(
+                            FinalizationRepairRecord(
+                                attempt_id=(
+                                    f"{ledger.state.attempt_id}:finalization-repair-1"
+                                ),
+                                blocker_ids=[
+                                    item.id or "unassigned"
+                                    for item in validation_result.blockers
+                                ],
+                                status=RepairStatus.FAILED,
+                                prior_selected_result_ids=prior_selected_ids,
+                                stop_reason=str(error),
+                            )
+                        )
+                        constraint = constraint_from_exception(
+                            error, context="Generalist finalization repair"
+                        )
+                        constrained = True
+                    finally:
+                        context.end_finalization_repair()
+                    if repaired is not None:
+                        ledger.add_finalization_repair(
+                            FinalizationRepairRecord(
+                                attempt_id=(
+                                    f"{ledger.state.attempt_id}:finalization-repair-1"
+                                ),
+                                blocker_ids=[
+                                    item.id or "unassigned"
+                                    for item in validation_result.blockers
+                                ],
+                                status=RepairStatus.SUCCEEDED,
+                                prior_selected_result_ids=prior_selected_ids,
+                                repaired_selected_result_ids=list(
+                                    repaired.candidate.selected_result_ids
+                                ),
+                            )
+                        )
+                        generalist_result = repaired
+                        audit = repaired.audit
+                        lead_result = repaired.candidate
+                        validation_result = repaired.validation
+
             if audit.status is AuditStatus.BLOCKED:
                 raise BlockedAuditError("generalist data audit was blocked")
             # Name the originating condition rather than defaulting every
@@ -311,6 +413,24 @@ class GeneralistRunner(AnalysisRunner):
             model=self.model,
             objective=objective,
             output_type=output_type.__name__,
+        )
+
+    @staticmethod
+    def _generalist_repair_prompt(
+        objective: str,
+        result: GeneralistResult,
+        validation: ValidationResult,
+    ) -> str:
+        return (
+            "FINALIZATION_REPAIR\n"
+            "Repair only the named blockers for the immutable original objective. "
+            "Preserve unrelated correct findings, selected results, caveats, and "
+            "the original audit. Do not rerun the audit or pursue optional causal "
+            "or segmentation work. Return one complete GeneralistResult with a "
+            "fresh self-critique.\n\n"
+            f"ORIGINAL_OBJECTIVE:\n{objective}\n\n"
+            f"BLOCKERS_JSON:\n{validation.model_dump_json(indent=2)}\n\n"
+            f"CURRENT_RESULT_JSON:\n{result.model_dump_json(indent=2)}"
         )
 
     def run_sync(self, *args: object, **kwargs: object) -> GeneralistRunResult:

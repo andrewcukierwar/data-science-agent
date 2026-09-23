@@ -295,11 +295,11 @@ def test_three_critic_calls_allow_two_bounded_remediation_cycles(
 
     result = asyncio.run(runner.run("run-two-remediations", "Explain profitability."))
 
-    assert result.status is RunStatus.COMPLETED
-    assert lead_calls == 3
-    assert critic_calls == 3
+    assert result.status is RunStatus.BLOCKED
+    assert lead_calls == 2
+    assert critic_calls == 2
     assert result.ledger is not None
-    assert result.ledger.budget.critic_loops == 3
+    assert result.ledger.budget.critic_loops == 2
 
 
 def test_runner_mandatory_audit_does_not_consume_analytical_specialist_budget(
@@ -555,8 +555,8 @@ def test_runner_constrains_when_lead_follow_up_reaches_continuation_limit(
     assert result.lead_result is not None
     assert result.lead_result.follow_up_analysis is True
     report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
-    assert "maximum of 1 critic loop" in report_text
-    assert "V-FOLLOW-UP" in report_text
+    assert "Deterministic finalization checks" in report_text
+    assert "V-COMPLETENESS-FOLLOW-UP" in report_text
 
 
 def test_runner_returns_constrained_report_after_critic_limit(
@@ -755,6 +755,9 @@ def test_runner_preserves_candidate_when_lead_turns_stop_remediation(
         nonlocal lead_calls
         lead_calls += 1
         if lead_calls == 2:
+            context.ledger.add_open_question(
+                "repair-only mutation that must be rolled back"
+            )
             raise MaxTurnsExceeded("Lead exceeded its 16-turn limit during remediation")
         return LeadResult(
             objective="Explain profitability.",
@@ -781,6 +784,10 @@ def test_runner_preserves_candidate_when_lead_turns_stop_remediation(
     assert result.validation_result.status is ValidationStatus.REVISE
     assert result.ledger is not None
     assert result.ledger.state.error is None
+    assert "repair-only mutation that must be rolled back" not in (
+        result.ledger.state.open_questions
+    )
+    assert result.ledger.finalization_repairs[-1].status.value == "failed"
     report_text = (result.workspace.outputs / "report.md").read_text(encoding="utf-8")
     assert "Remediation stopped by the agent turn limit" in report_text
     # R18: a turn-limit stop is an agent bound, not the configured budget.
@@ -935,12 +942,12 @@ def test_runner_completes_a_remediated_candidate_before_spending_a_critic_loop(
     )
     result = asyncio.run(runner.run("run-direct-review", "Explain profitability."))
 
-    assert result.status is RunStatus.COMPLETED
-    assert events == ["audit", "lead", "critic", "lead", "lead", "critic"]
-    assert lead_calls == 3
-    assert critic_calls == 2
+    assert result.status is RunStatus.BLOCKED
+    assert events == ["audit", "lead", "critic", "lead"]
+    assert lead_calls == 2
+    assert critic_calls == 1
     assert result.lead_result is not None
-    assert result.lead_result.follow_up_analysis is False
+    assert result.lead_result.follow_up_analysis is True
 
 
 def test_runner_bounds_completion_passes_and_still_reaches_the_critic(
@@ -1002,12 +1009,11 @@ def test_runner_bounds_completion_passes_and_still_reaches_the_critic(
     )
     result = asyncio.run(runner.run("run-bounded-completion", "Explain profitability."))
 
-    assert result.status is RunStatus.COMPLETED
-    # One initial Lead call, one remediation, then at most
-    # MAX_LEAD_COMPLETION_PASSES completion passes before the Critic runs again.
-    assert lead_calls == 2 + MAX_LEAD_COMPLETION_PASSES
-    assert critic_calls == 2
-    assert reviewed_follow_up == [False, True]
+    assert result.status is RunStatus.BLOCKED
+    # One initial Lead call and the single shared finalization repair allowance.
+    assert lead_calls == 1 + MAX_LEAD_COMPLETION_PASSES
+    assert critic_calls == 1
+    assert reviewed_follow_up == [False]
 
 
 def test_runner_observes_lead_turn_limit_failure_and_marks_run_failed(

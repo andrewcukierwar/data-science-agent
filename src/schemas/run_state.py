@@ -17,7 +17,13 @@ from schemas.hypotheses import (  # noqa: F401
 )
 from schemas.metrics import MetricComparison
 from schemas.statistics import StatisticalAssessment
-from schemas.validation import ValidationIssue, ValidationResult
+from schemas.validation import (
+    CriticCandidate,
+    FinalizationRepairRecord,
+    ValidationCatalog,
+    ValidationIssue,
+    ValidationResult,
+)
 
 
 class SpecialistResultRecord(BaseModel):
@@ -441,6 +447,9 @@ class AnalysisRunState(BaseModel):
     artifacts: list[Artifact] = Field(default_factory=list)
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
     validation_results: list[ValidationResult] = Field(default_factory=list)
+    validation_candidates: list[CriticCandidate] = Field(default_factory=list)
+    validation_catalogs: list[ValidationCatalog] = Field(default_factory=list)
+    finalization_repairs: list[FinalizationRepairRecord] = Field(default_factory=list)
     specialist_results: list[SpecialistResultRecord] = Field(default_factory=list)
     tool_events: list[ToolEvent] = Field(default_factory=list)
     agent_events: list[AgentEvent] = Field(default_factory=list)

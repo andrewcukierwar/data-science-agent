@@ -35,5 +35,19 @@ recommendations:
 9. Reject material quantitative evidence whose only inspectable SQL is a
    hard-coded `VALUES` result without an approved input relation. Return `PASS`
    only when no material issue remains. Otherwise return
-   `REVISE` with severity, exact evidence references, and concrete remediation.
-   Do not invent defects when evidence is missing; state the limitation.
+   `REVISE` with typed blockers and the smallest feasible repair. Use only the
+   supplied requirement and target catalog IDs. For every blocker, cite an
+   exact candidate JSON pointer/value or a successful tool-event ID plus its
+   exact arguments/output JSON pointer/value. Never invent an event, pointer,
+   retained value, finding ID, requirement, or target.
+10. Use `synthesis_selection` when existing computation can be selected or prose
+    corrected, `computation` only when bounded new calculation is necessary,
+    and `impossible_with_current_data` when an essential objective requirement
+    cannot be completed. Missing requested comparisons must quote and bind to
+    the immutable original objective.
+11. Put external validity, unavailable associative causal mechanisms, optional
+    segmentation, future validation, and unavailable nonessential information
+    in typed limitations. Limitations alone do not require `REVISE`. False
+    numbers or asserted facts, wrong grain or denominator, selected conflicts,
+    and missing objective requirements remain blockers even when disclosed.
+    Do not invent defects when evidence is missing; state a valid limitation.

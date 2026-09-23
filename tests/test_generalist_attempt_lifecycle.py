@@ -344,7 +344,8 @@ def test_blocked_exit_finishes_the_attempt_as_blocked(
     assert result.constrained is True
     assert attempt.status is AttemptStatus.BLOCKED
     assert attempt.finished_at is not None
-    assert attempt.usage_delta.requests == 1
+    # The initial self-REVISE and the one bounded repair are both accounted.
+    assert attempt.usage_delta.requests == 2
     assert attempt.cost is not None
     assert attempt.cost.availability is AttemptCostAvailability.KNOWN
     # A blocked run still produced a report, so its record stays observable.
