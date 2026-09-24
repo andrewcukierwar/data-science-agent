@@ -18,6 +18,7 @@ from agents.exceptions import (
     ModelRefusalError,
     UserError,
 )
+from openai import APIError, BadRequestError
 
 from agents.evidence import EvidenceProvenanceError
 from agents.output_contract import AgentOutputContractError
@@ -68,6 +69,13 @@ def classify_exception(error: BaseException) -> RunBlockReason:
         return RunBlockReason.PROVIDER_FAILURE
     if isinstance(error, ModelBehaviorError):
         return RunBlockReason.SCHEMA_FAILURE
+    if isinstance(error, BadRequestError) and (
+        error.code == "invalid_json_schema"
+        or error.param in {"text.format.schema", "response_format.json_schema.schema"}
+    ):
+        return RunBlockReason.SCHEMA_FAILURE
+    if isinstance(error, APIError):
+        return RunBlockReason.PROVIDER_FAILURE
     if isinstance(error, UserError):
         return RunBlockReason.WORKSPACE_FAILURE
     if isinstance(error, KeyboardInterrupt | asyncio.CancelledError):

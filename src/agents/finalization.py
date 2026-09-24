@@ -10,6 +10,7 @@ from typing import Any
 
 from agents.evidence import evidence_events
 from orchestration.ledger import AnalysisLedger
+from schemas.json_evidence import decode_json_evidence
 from schemas.lead import LeadResult
 from schemas.metrics import normalize_metric_comparison
 from schemas.run_state import ToolEventStatus
@@ -246,7 +247,8 @@ def _validate_anchor(
             )
         document = {"arguments": event.arguments, "output": event.output}
     retained = _pointer(document, anchor.pointer)
-    if type(retained) is not type(anchor.value) or retained != anchor.value:
+    submitted = decode_json_evidence(anchor.value)
+    if type(retained) is not type(submitted) or retained != submitted:
         raise ReviewContractError(
             f"evidence value does not match retained value at {anchor.pointer}"
         )

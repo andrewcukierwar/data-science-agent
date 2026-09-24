@@ -15,9 +15,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pandas as pd
 import pytest
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
+from openai import APIConnectionError, BadRequestError, RateLimitError
 
 from agents.output_contract import AgentOutputContractError
 from benchmark import BenchmarkCellResult, BenchmarkRunner
@@ -330,6 +332,37 @@ def test_exception_classification_separates_budget_from_other_stops() -> None:
     assert classify_exception(KeyboardInterrupt()) is RunBlockReason.INTERRUPTED
     assert classify_exception(TimeoutError()) is RunBlockReason.TIMEOUT
     assert classify_exception(RuntimeError("boom")) is RunBlockReason.OTHER
+
+
+def test_provider_schema_rejection_uses_typed_error_metadata() -> None:
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    response = httpx.Response(400, request=request)
+    schema_error = BadRequestError(
+        "Invalid schema",
+        response=response,
+        body={"code": "invalid_json_schema", "param": "text.format.schema"},
+    )
+    schema_param_error = BadRequestError(
+        "Invalid schema",
+        response=response,
+        body={"code": "invalid_request_error", "param": "text.format.schema"},
+    )
+    unrelated_bad_request = BadRequestError(
+        "Invalid request", response=response, body={"code": "invalid_request_error"}
+    )
+    rate_response = httpx.Response(429, request=request)
+    rate_limit = RateLimitError(
+        "Rate limit", response=rate_response, body={"code": "rate_limit_exceeded"}
+    )
+
+    assert classify_exception(schema_error) is RunBlockReason.SCHEMA_FAILURE
+    assert classify_exception(schema_param_error) is RunBlockReason.SCHEMA_FAILURE
+    assert classify_exception(unrelated_bad_request) is RunBlockReason.PROVIDER_FAILURE
+    assert classify_exception(rate_limit) is RunBlockReason.PROVIDER_FAILURE
+    assert (
+        classify_exception(APIConnectionError(request=request))
+        is RunBlockReason.PROVIDER_FAILURE
+    )
 
 
 def test_every_block_reason_maps_to_a_distinct_benchmark_category() -> None:

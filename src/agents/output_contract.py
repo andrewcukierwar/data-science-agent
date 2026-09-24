@@ -97,6 +97,27 @@ class AgentOutputContractError(ModelBehaviorError):
         )
 
 
+def _validate_provider_schema_node(node: object, path: str) -> None:
+    """Reject untyped positions that the SDK strict converter leaves intact."""
+
+    if not isinstance(node, dict) or not any(
+        key in node for key in ("type", "$ref", "anyOf", "enum", "const", "allOf")
+    ):
+        raise ValueError(f"untyped provider output schema at {path}")
+    for name, definition in node.get("$defs", {}).items():
+        _validate_provider_schema_node(definition, f"{path}/$defs/{name}")
+    for name, prop in node.get("properties", {}).items():
+        _validate_provider_schema_node(prop, f"{path}/properties/{name}")
+    if "items" in node:
+        _validate_provider_schema_node(node["items"], f"{path}/items")
+    for keyword in ("anyOf", "allOf"):
+        for index, branch in enumerate(node.get(keyword, [])):
+            _validate_provider_schema_node(branch, f"{path}/{keyword}/{index}")
+    additional = node.get("additionalProperties", False)
+    if isinstance(additional, dict):
+        _validate_provider_schema_node(additional, f"{path}/additionalProperties")
+
+
 def strict_output_type[OutputT: BaseModel](
     output_type: type[OutputT],
 ) -> AgentOutputSchema:
@@ -108,7 +129,7 @@ def strict_output_type[OutputT: BaseModel](
     """
 
     schema = AgentOutputSchema(output_type)
-    schema.json_schema()
+    _validate_provider_schema_node(schema.json_schema(), output_type.__name__)
     if not schema.is_strict_json_schema():
         raise ValueError(f"{output_type.__name__} must use a strict JSON schema")
     return schema

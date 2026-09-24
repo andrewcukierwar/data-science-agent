@@ -1,12 +1,23 @@
 """Typed validation, objection-evidence, and finalization repair contracts."""
 
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    model_validator,
+)
 
 from schemas.findings import Finding
 from schemas.hypotheses import Hypothesis
+from schemas.json_evidence import (
+    JsonEvidenceNode,
+    decode_json_evidence,
+    encode_json_evidence,
+)
 from schemas.metrics import MetricComparison, MetricConflict
 from schemas.statistics import StatisticalAssessment
 
@@ -70,8 +81,22 @@ class ObjectionEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source: EvidenceAnchorSource
     pointer: NonEmptyString
-    value: Any
+    # Present in provider output so a native retained object that resembles a
+    # tagged node remains unambiguous when an old workspace is loaded.
+    wire_format: Literal["typed_json"] = Field(default="typed_json", exclude=True)
+    value: JsonEvidenceNode
     event_id: NonEmptyString | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def encode_value(cls, data: object) -> object:
+        if isinstance(data, dict) and "value" in data and "wire_format" not in data:
+            return {**data, "value": encode_json_evidence(data["value"])}
+        return data
+
+    @field_serializer("value")
+    def serialize_value(self, value: JsonEvidenceNode) -> object:
+        return decode_json_evidence(value)
 
     @model_validator(mode="after")
     def event_identity_matches_source(self) -> "ObjectionEvidence":

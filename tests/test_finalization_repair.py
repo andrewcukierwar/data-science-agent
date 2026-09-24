@@ -143,6 +143,39 @@ def test_real_event_id_cannot_launder_a_fabricated_value(tmp_path: Path) -> None
         validate_review(review, candidate, context.ledger)
 
 
+def test_anchor_rejects_a_different_nested_retained_value(tmp_path: Path) -> None:
+    from agents.finalization import _validate_anchor
+
+    context = _context(tmp_path)
+    now = datetime.now(UTC)
+    context.ledger.append_tool_event(
+        ToolEvent(
+            id="tool-nested",
+            tool_name="run_sql",
+            status=ToolEventStatus.SUCCEEDED,
+            started_at=now,
+            completed_at=now,
+            output={"rows": [{"value": [None, True, 17]}]},
+        )
+    )
+    candidate = CriticCandidate(
+        objective="Compare North and South revenue.", answer="North was higher."
+    )
+    matching = ObjectionEvidence(
+        source=EvidenceAnchorSource.TOOL_EVENT,
+        event_id="tool-nested",
+        pointer="/output/rows/0",
+        value={"value": [None, True, 17]},
+    )
+    _validate_anchor(matching, candidate, context.ledger)
+
+    changed = ObjectionEvidence.model_validate(
+        {**matching.model_dump(mode="json"), "value": {"value": [None, True, 18]}}
+    )
+    with pytest.raises(ReviewContractError, match="does not match retained"):
+        _validate_anchor(changed, candidate, context.ledger)
+
+
 def test_legacy_issue_cannot_launder_a_fabricated_evidence_reference(
     tmp_path: Path,
 ) -> None:

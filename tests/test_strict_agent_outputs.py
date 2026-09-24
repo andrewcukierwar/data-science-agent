@@ -13,12 +13,13 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pandas as pd
 import pytest
 from agents.exceptions import ModelBehaviorError, UserError
 from agents.strict_schema import ensure_strict_json_schema
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from agents import (
     AgentRole,
@@ -47,6 +48,7 @@ from scenarios.definitions.models import GroundTruthMetric
 from schemas.audit import AuditResult, AuditStatus
 from schemas.findings import ConfidenceLevel, Finding, SpecialistResult
 from schemas.generalist import GeneralistResult
+from schemas.json_evidence import decode_json_evidence
 from schemas.lead import LeadResult
 from schemas.metrics import (
     MetricComparison,
@@ -58,7 +60,12 @@ from schemas.metrics import (
 )
 from schemas.run_state import ToolEvent, ToolEventStatus
 from schemas.statistics import StatisticalAssessment
-from schemas.validation import ValidationResult, ValidationStatus
+from schemas.validation import (
+    EvidenceAnchorSource,
+    ObjectionEvidence,
+    ValidationResult,
+    ValidationStatus,
+)
 from tests.legacy_numerical_fixture import legacy_ledger as AnalysisLedger
 from tools.artifacts import ArtifactManager
 from tools.python import PythonExecutionService
@@ -210,8 +217,6 @@ def test_strict_schema_requires_a_reference_for_every_audit_claim(
 
 
 def test_strict_output_type_rejects_an_open_ended_output() -> None:
-    from pydantic import BaseModel, ConfigDict
-
     class OpenEnded(BaseModel):
         model_config = ConfigDict(extra="forbid")
 
@@ -219,6 +224,124 @@ def test_strict_output_type_rejects_an_open_ended_output() -> None:
 
     with pytest.raises(UserError, match="not valid"):
         strict_output_type(OpenEnded)
+
+
+def test_preflight_reproduces_and_rejects_the_pilot_untyped_value() -> None:
+    class PreFixEvidence(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        value: Any
+
+    # The SDK normalizer accepted this exact invalid provider-facing fragment.
+    assert ensure_strict_json_schema(PreFixEvidence.model_json_schema())["properties"][
+        "value"
+    ] == {"title": "Value"}
+    with pytest.raises(ValueError, match="untyped provider output schema"):
+        strict_output_type(PreFixEvidence)
+
+
+@pytest.mark.parametrize("output_type", [GeneralistResult, ValidationResult])
+def test_review_outputs_have_typed_recursive_evidence_value(
+    output_type: type[BaseModel],
+) -> None:
+    schema = strict_output_type(output_type).json_schema()
+    value = schema["$defs"]["ObjectionEvidence"]["properties"]["value"]
+
+    assert value == {"$ref": "#/$defs/JsonEvidenceNode"}
+    variants = schema["$defs"]["JsonEvidenceNode"]["anyOf"]
+    assert len(variants) == 7
+    assert schema["$defs"]["JsonObject"]["properties"]["entries"]["type"] == "array"
+    assert schema["$defs"]["JsonArray"]["properties"]["items"]["type"] == "array"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        True,
+        17,
+        1.25,
+        "observed",
+        [None, False, 3, 2.5, "x"],
+        {"nested": {"kind": "ordinary", "items": [1, None, {"ok": True}]}},
+        {"kind": "integer", "value": 42},
+    ],
+)
+def test_objection_evidence_value_round_trips_without_stringification(
+    value: object,
+) -> None:
+    anchor = ObjectionEvidence(
+        source=EvidenceAnchorSource.CANDIDATE, pointer="/answer", value=value
+    )
+    retained = anchor.model_dump(mode="json")["value"]
+    restored = ObjectionEvidence.model_validate_json(anchor.model_dump_json())
+
+    assert retained == value
+    assert type(retained) is type(value)
+    assert decode_json_evidence(restored.value) == value
+    assert type(decode_json_evidence(restored.value)) is type(value)
+    assert restored.model_dump(mode="json")["value"] == value
+
+
+def test_critic_schema_parses_provider_encoded_evidence_locally() -> None:
+    anchor = ObjectionEvidence(
+        source=EvidenceAnchorSource.CANDIDATE,
+        pointer="/answer",
+        value={"nested": [None, True, 42, 1.5]},
+    )
+    provider_value = anchor.value.model_dump(mode="json")
+    payload = {
+        "status": "revise",
+        "blockers": [
+            {
+                "category": "objective_not_answered",
+                "requirement_id": "requirement:objective",
+                "target_id": "target:answer",
+                "evidence": [
+                    {
+                        "source": "candidate",
+                        "pointer": "/answer",
+                        "value": provider_value,
+                    }
+                ],
+                "message": "The objective is unanswered.",
+                "smallest_feasible_repair": "Answer the objective.",
+                "repair_class": "synthesis_selection",
+            }
+        ],
+    }
+    # The production SDK parser requires every field in strict output, including
+    # fields with defaults. Supply those fields through the model's own dump.
+    review = ValidationResult.model_validate(payload)
+    provider_payload = review.model_dump(mode="json")
+    provider_payload["blockers"][0]["evidence"][0].update(
+        {"wire_format": "typed_json", "value": provider_value}
+    )
+
+    parsed = strict_output_type(ValidationResult).validate_json(
+        json.dumps(provider_payload)
+    )
+    assert parsed.blockers[0].evidence[0].model_dump(mode="json")["value"] == {
+        "nested": [None, True, 42, 1.5]
+    }
+
+
+def test_provider_encoded_object_cannot_launder_duplicate_evidence_keys() -> None:
+    with pytest.raises(ValidationError, match="duplicate keys"):
+        ObjectionEvidence.model_validate(
+            {
+                "source": "candidate",
+                "pointer": "/answer",
+                "wire_format": "typed_json",
+                "value": {
+                    "kind": "object",
+                    "entries": [
+                        {"key": "count", "value": {"kind": "integer", "value": 1}},
+                        {"key": "count", "value": {"kind": "integer", "value": 2}},
+                    ],
+                },
+            }
+        )
 
 
 # --- dimension round-trip determinism --------------------------------------
