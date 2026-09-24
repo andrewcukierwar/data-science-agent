@@ -9,13 +9,16 @@ manifest, and the estimate is a stratified sum with an explicit range.
 
 import json
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from agents.runtime import DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
 from benchmark import BenchmarkCellResult, BenchmarkError, BenchmarkRunner
 from benchmark.runner import (
+    BENCHMARK_RUNNER_VERSION,
+    TOOL_CONTRACT_VERSION,
     canonical_manifest_declaration_digest,
     canonical_run_record_digest,
     default_pilot_set,
@@ -37,7 +40,15 @@ from evaluation.contracts import (
     ScoreBreakdown,
 )
 from evaluation.engine import load_manifest
-from schemas.run_state import CostBreakdown, ModelUsage
+from schemas.run_state import (
+    AttemptCost,
+    AttemptCostAvailability,
+    AttemptRecord,
+    AttemptStatus,
+    CostBreakdown,
+    ModelUsage,
+    RunBlockReason,
+)
 
 FIXED_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 SCENARIO_IDS = ("meaningful-ab-treatment-effect", "no-effect-ab-experiment")
@@ -134,6 +145,51 @@ def _architecture_cost(cell):
     if cell.architecture == "single-agent":
         return _completed(cell, cost_usd=0.001, elapsed=2.0)
     return _completed(cell, cost_usd=0.004, elapsed=8.0)
+
+
+def _bounded_timeout(cell):
+    """A failed agent-bound timeout with lower-bound usage and no priced cost."""
+
+    elapsed = 300.03875158308074
+    result = _completed(
+        cell,
+        cost_usd=None,
+        elapsed=elapsed,
+        usage_complete=False,
+    )
+    finished = FIXED_TIME + timedelta(seconds=elapsed)
+    result.state.updated_at = finished
+    result.state.cost_estimation_note = (
+        "Provider usage is incomplete; cost cannot be estimated."
+    )
+    result.state.attempt_history = (
+        AttemptRecord(
+            attempt_number=1,
+            attempt_id=f"{cell.run_id}-attempt-1",
+            status=AttemptStatus.FAILED,
+            started_at=FIXED_TIME,
+            finished_at=finished,
+            usage_delta=result.state.usage,
+            usage_complete=False,
+            cost=AttemptCost(
+                availability=AttemptCostAvailability.UNAVAILABLE,
+                note="Provider usage is incomplete; cost cannot be estimated.",
+            ),
+            elapsed_seconds=elapsed,
+            error="TimeoutError: agent invocation timed out",
+            block_reason=RunBlockReason.TIMEOUT,
+        ),
+    )
+    return replace(
+        result,
+        lifecycle=LifecycleOutcome(
+            status=LifecycleStatus.FAILED,
+            failure_category=FailureCategory.TIMEOUT,
+            failure_message="agent invocation exceeded its declared timeout",
+        ),
+        evaluator_result=None,
+        finished_at=finished,
+    )
 
 
 def _runner(tmp_path: Path, executor=None) -> BenchmarkRunner:
@@ -339,6 +395,48 @@ def test_estimate_is_stratified_and_retains_per_pilot_observations(
     assert report.methodology
 
 
+def test_runner_and_report_versions_preserve_existing_analysis_contracts(
+    tmp_path: Path,
+) -> None:
+    runner = _runner(tmp_path)
+    manifest_path = _plan(runner, tmp_path)
+    manifest = load_manifest(manifest_path)
+    parameters = manifest.run_configuration.parameters
+
+    assert parameters["benchmark_runner_version"] == BENCHMARK_RUNNER_VERSION == "1.2"
+    assert (
+        parameters["agent_run_timeout_seconds"]
+        == DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
+        == 300.0
+    )
+    assert parameters["evaluator_contract_version"] == "1.3"
+    assert manifest.run_configuration.tool_contract_version == TOOL_CONTRACT_VERSION
+
+
+def test_historical_2_0_pilot_reports_remain_readable(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    manifest_path = _plan(runner, tmp_path)
+    pilot_path = tmp_path / "pilot.json"
+    runner.run_pilot(manifest_path, pilot_path=pilot_path)
+
+    payload = json.loads(pilot_path.read_text(encoding="utf-8"))
+    payload["report_version"] = "2.0"
+    for stratum in payload["strata"]:
+        for observation in stratum["observations"]:
+            observation.pop("usage_completeness")
+    pilot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    summary = runner.execute(
+        manifest_path,
+        resume=True,
+        require_pilot=True,
+        pilot_path=pilot_path,
+        max_cells=0,
+    )
+
+    assert summary.executed_run_ids == ()
+
+
 def test_estimate_states_an_explicit_range(tmp_path: Path) -> None:
     runner = _runner(tmp_path)
     manifest_path = _plan(runner, tmp_path)
@@ -386,6 +484,217 @@ def test_incomplete_usage_cannot_be_used_as_pilot_evidence(tmp_path: Path) -> No
     manifest_path = _plan(runner, tmp_path)
 
     with pytest.raises(BenchmarkError, match="pilot usage is incomplete"):
+        runner.run_pilot(manifest_path, pilot_path=tmp_path / "pilot.json")
+
+
+def test_bounded_incomplete_timeout_is_retained_without_replacement(
+    tmp_path: Path,
+) -> None:
+    calls = []
+
+    def execute(cell, _workspace):
+        calls.append(cell)
+        return _bounded_timeout(cell) if len(calls) == 1 else _architecture_cost(cell)
+
+    runner = _runner(tmp_path, execute)
+    manifest_path = _plan(runner, tmp_path)
+    manifest = load_manifest(manifest_path)
+    assert manifest.pilot_set is not None
+    declared_architectures = [item.architecture for item in manifest.pilot_set.strata]
+    pilot_path = tmp_path / "pilot.json"
+
+    summary, report = runner.run_pilot(manifest_path, pilot_path=pilot_path)
+
+    assert len(calls) == len(manifest.pilot_set.strata)
+    assert [cell.architecture for cell in calls] == declared_architectures
+    assert report.report_version == "2.1"
+    assert report.output_schema_fingerprint == output_schema_fingerprint()
+    assert len(report.observations) == len(manifest.pilot_set.strata)
+    timed_out_call = calls[0]
+    timeout_record = next(
+        record
+        for record in summary.manifest.run_records
+        if record.run_id == timed_out_call.run_id
+    )
+    timeout_observation = next(
+        observation
+        for observation in report.observations
+        if observation.run_id == timed_out_call.run_id
+    )
+
+    assert timeout_record.lifecycle.status is LifecycleStatus.FAILED
+    assert timeout_record.lifecycle.failure_category is FailureCategory.TIMEOUT
+    assert timeout_record.evaluator_result.status is EvaluatorStatus.NOT_EVALUATED
+    assert timeout_record.score_breakdown is None
+    assert timeout_record.usage.complete is False
+    assert timeout_record.usage.requests == 1
+    assert timeout_record.usage.input_tokens == 1_000
+    assert timeout_record.usage.output_tokens == 200
+    assert timeout_record.usage.total_tokens == 1_200
+    assert timeout_record.cost.availability is CostAvailability.UNAVAILABLE
+    assert timeout_record.cost.estimated_cost_usd is None
+
+    assert timeout_observation.usage_completeness == "lower_bound"
+    assert timeout_observation.observed_requests == timeout_record.usage.requests
+    assert (
+        timeout_observation.observed_input_tokens == timeout_record.usage.input_tokens
+    )
+    assert (
+        timeout_observation.observed_output_tokens == timeout_record.usage.output_tokens
+    )
+    assert (
+        timeout_observation.observed_total_tokens == timeout_record.usage.total_tokens
+    )
+    assert (
+        timeout_observation.observed_cost.availability is CostAvailability.UNAVAILABLE
+    )
+    assert timeout_observation.observed_cost_usd is None
+    assert timeout_observation.observed_elapsed_seconds == pytest.approx(
+        300.03875158308074
+    )
+    timeout_digest = canonical_run_record_digest(timeout_record)
+    assert timeout_observation.record_digest == timeout_digest
+    assert report.unknown_cost_record_digests == (timeout_digest,)
+
+    timeout_stratum = next(
+        item
+        for item in report.strata
+        if item.architecture == timed_out_call.architecture
+    )
+    assert timeout_stratum.cost_availability is CostAvailability.UNAVAILABLE
+    assert timeout_stratum.estimated_cost_usd is None
+    assert report.cost_availability is CostAvailability.UNAVAILABLE
+    assert report.estimated_full_matrix_cost_usd is None
+    assert report.estimated_full_matrix_cost_low_usd is None
+    assert report.estimated_full_matrix_cost_high_usd is None
+    assert report.estimated_full_matrix_elapsed_seconds >= 300.0
+    assert report.estimated_full_matrix_elapsed_low_seconds >= 300.0
+    assert report.estimated_full_matrix_elapsed_high_seconds >= 300.0
+
+    timeout_aggregate = next(
+        aggregate
+        for aggregate in summary.manifest.aggregates
+        if aggregate.scenario_id == timeout_record.scenario_id
+        and aggregate.architecture == timeout_record.architecture
+    )
+    assert timeout_aggregate.denominator is not None
+    assert timeout_aggregate.denominator.failed_runs == 1
+    assert timeout_aggregate.denominator.completed_runs == 0
+    assert timeout_aggregate.denominator.evaluated_runs == 0
+    assert timeout_aggregate.failure_taxonomy == {
+        "evaluator:not_evaluated": 1,
+        "lifecycle:timeout": 1,
+    }
+
+    # Re-running publication reuses the exact timeout record instead of
+    # advancing to another cell in that stratum.
+    _, republished = runner.run_pilot(
+        manifest_path,
+        pilot_path=tmp_path / "pilot-republished.json",
+    )
+    assert len(calls) == len(manifest.pilot_set.strata)
+    assert {observation.run_id for observation in republished.observations} == {
+        observation.run_id for observation in report.observations
+    }
+    assert (
+        next(
+            item
+            for item in republished.observations
+            if item.run_id == timed_out_call.run_id
+        ).record_digest
+        == timeout_digest
+    )
+
+    with pytest.raises(BenchmarkError, match="unknown-cost"):
+        runner.execute(
+            manifest_path,
+            resume=True,
+            require_pilot=True,
+            pilot_path=pilot_path,
+        )
+
+    acknowledged = runner.execute(
+        manifest_path,
+        resume=True,
+        require_pilot=True,
+        pilot_path=pilot_path,
+        unknown_cost=True,
+        max_cells=0,
+    )
+    assert acknowledged.manifest.unknown_cost_acknowledged is True
+    assert acknowledged.manifest.unknown_cost_pilot_id == report.pilot_id
+    assert acknowledged.manifest.unknown_cost_pilot_record_digests == (timeout_digest,)
+    assert acknowledged.manifest.unknown_cost_pilot_record_digest == timeout_digest
+
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    forged_digest = "f" * 64
+    manifest_payload["unknown_cost_pilot_record_digest"] = forged_digest
+    manifest_payload["unknown_cost_pilot_record_digests"] = [forged_digest]
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+    with pytest.raises(BenchmarkError, match="not bound to every unknown-cost"):
+        runner.execute(
+            manifest_path,
+            resume=True,
+            require_pilot=True,
+            pilot_path=pilot_path,
+            max_cells=0,
+        )
+
+
+@pytest.mark.parametrize(
+    "category",
+    (
+        FailureCategory.OTHER,
+        FailureCategory.AGENT,
+        FailureCategory.SCHEMA,
+        FailureCategory.PROVIDER,
+        FailureCategory.TOOL,
+        FailureCategory.WORKSPACE,
+    ),
+)
+def test_non_timeout_failed_cells_remain_ineligible_pilot_observations(
+    tmp_path: Path,
+    category: FailureCategory,
+) -> None:
+    def execute(cell, _workspace):
+        return replace(
+            _completed(cell),
+            lifecycle=LifecycleOutcome(
+                status=LifecycleStatus.FAILED,
+                failure_category=category,
+                failure_message=f"fixture {category.value} failure",
+            ),
+            evaluator_result=None,
+        )
+
+    runner = _runner(tmp_path / category.value, execute)
+    manifest_path = _plan(runner, tmp_path / category.value)
+    pilot_path = tmp_path / category.value / "pilot.json"
+
+    with pytest.raises(BenchmarkError, match="ended as failed"):
+        runner.run_pilot(manifest_path, pilot_path=pilot_path)
+
+    assert not pilot_path.exists()
+    failed = next(
+        record
+        for record in load_manifest(manifest_path).run_records
+        if record.lifecycle.status is LifecycleStatus.FAILED
+    )
+    assert failed.lifecycle.failure_category is category
+
+
+def test_timeout_category_without_agent_bound_elapsed_is_ineligible(
+    tmp_path: Path,
+) -> None:
+    def execute(cell, _workspace):
+        result = _bounded_timeout(cell)
+        result.state.elapsed_seconds = 30.0
+        return result
+
+    runner = _runner(tmp_path, execute)
+    manifest_path = _plan(runner, tmp_path)
+
+    with pytest.raises(BenchmarkError, match="ended as failed"):
         runner.run_pilot(manifest_path, pilot_path=tmp_path / "pilot.json")
 
 

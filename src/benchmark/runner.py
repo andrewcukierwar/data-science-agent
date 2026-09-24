@@ -19,6 +19,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from hashlib import sha256
+from math import isfinite
 from pathlib import Path
 from typing import Any, Literal
 
@@ -79,11 +80,11 @@ from evaluation.workspace_identity import (
 from orchestration.ledger import AnalysisLedger
 from scenarios import discover_scenarios
 from scenarios.catalog import ScenarioCatalog, ScenarioRegistration
-from schemas.run_state import RunBlockReason, RunBudget
+from schemas.run_state import AttemptStatus, RunBlockReason, RunBudget
 from tools.sql_deadline import DEFAULT_SQL_TIMEOUT_SECONDS, validate_sql_timeout
 from tools.workspace import Workspace, WorkspaceManager
 
-BENCHMARK_RUNNER_VERSION = "1.1"
+BENCHMARK_RUNNER_VERSION = "1.2"
 TOOL_CONTRACT_VERSION = "1.2"
 PUBLIC_TASK_CONTRACT_VERSION = "1.1"
 PUBLIC_CHART_DELIVERABLE = (
@@ -200,6 +201,7 @@ class PilotObservation(BaseModel):
     observed_output_tokens: int = Field(ge=0)
     observed_reasoning_tokens: int = Field(ge=0)
     observed_total_tokens: int = Field(ge=0)
+    usage_completeness: Literal["complete", "lower_bound"] = "complete"
     observed_cost: CostSummary
     observed_cost_usd: float | None = Field(default=None, ge=0)
     observed_elapsed_seconds: float = Field(ge=0)
@@ -238,7 +240,7 @@ class BenchmarkPilotSetReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    report_version: Literal["2.0"] = "2.0"
+    report_version: Literal["2.0", "2.1"] = "2.1"
     pilot_id: str = Field(min_length=1)
     manifest_id: str = Field(min_length=1)
     manifest_version: str = Field(min_length=1)
@@ -440,6 +442,55 @@ def _matrix_estimate(strata: Sequence[PilotStratumEstimate]) -> dict[str, object
 PILOT_COST_OBSERVABLE_STATUSES = frozenset(
     {LifecycleStatus.COMPLETED, LifecycleStatus.BLOCKED}
 )
+PILOT_TIMEOUT_TOLERANCE_FRACTION = 0.01
+PILOT_TIMEOUT_MIN_TOLERANCE_SECONDS = 1.0
+
+
+def _is_bounded_incomplete_agent_timeout(record: BenchmarkRunRecord) -> bool:
+    """Return whether a failed record is the declared agent-bound timeout.
+
+    The timeout must be typed both on the benchmark lifecycle and the final
+    orchestration attempt, and elapsed time must land at the frozen agent
+    timeout within a small scheduling/finalization tolerance. SQL timeouts and
+    other failures do not qualify merely because their prose mentions time.
+    """
+
+    if (
+        record.lifecycle.status is not LifecycleStatus.FAILED
+        or record.lifecycle.failure_category is not FailureCategory.TIMEOUT
+        or record.evaluator_result.status is not EvaluatorStatus.NOT_EVALUATED
+        or record.usage.complete
+        or record.cost.availability is not CostAvailability.UNAVAILABLE
+        or record.cost.estimated_cost_usd is not None
+    ):
+        return False
+
+    timeout = record.run_configuration.parameters.get("agent_run_timeout_seconds")
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, int | float)
+        or not isfinite(timeout)
+        or not 0 < timeout <= 3_600
+    ):
+        return False
+
+    tolerance = max(
+        PILOT_TIMEOUT_MIN_TOLERANCE_SECONDS,
+        float(timeout) * PILOT_TIMEOUT_TOLERANCE_FRACTION,
+    )
+    if abs(record.latency.elapsed_seconds - float(timeout)) > tolerance:
+        return False
+
+    if not record.attempt_history:
+        return False
+    final_attempt = max(
+        record.attempt_history, key=lambda attempt: attempt.attempt_number
+    )
+    return (
+        final_attempt.status is AttemptStatus.FAILED
+        and final_attempt.block_reason is RunBlockReason.TIMEOUT
+        and not final_attempt.usage_complete
+    )
 
 
 def _require_pilot_cost_observation(record: BenchmarkRunRecord) -> None:
@@ -453,20 +504,26 @@ def _require_pilot_cost_observation(record: BenchmarkRunRecord) -> None:
     completion instead made the gate demand the very analytical success the
     benchmark is meant to measure.
 
-    ``failed`` and ``cancelled`` cells are still refused: neither is a bounded
-    measurement of a working cell.
+    A failed cell qualifies only when the typed timeout is the frozen agent
+    invocation bound, usage is explicitly a lower bound, and cost is
+    unavailable. It remains a failed and unevaluated benchmark outcome.
     """
 
+    if record.lifecycle.status in PILOT_COST_OBSERVABLE_STATUSES:
+        if not record.usage.complete:
+            raise BenchmarkError(
+                f"pilot usage is incomplete for {record.run_id}; the cost gate "
+                "requires reconciled provider usage"
+            )
+        return
+    if _is_bounded_incomplete_agent_timeout(record):
+        return
     if record.lifecycle.status not in PILOT_COST_OBSERVABLE_STATUSES:
         raise BenchmarkError(
             f"pilot cell {record.run_id} ended as "
             f"{record.lifecycle.status.value}; the cost gate requires a "
-            "completed or bounded blocked cell"
-        )
-    if not record.usage.complete:
-        raise BenchmarkError(
-            f"pilot usage is incomplete for {record.run_id}; the cost gate "
-            "requires reconciled provider usage"
+            "completed or bounded blocked cell, or a bounded incomplete "
+            "agent timeout"
         )
 
 
@@ -475,12 +532,6 @@ def _require_reconciled_observation(
     record: BenchmarkRunRecord,
 ) -> None:
     """Refuse a pilot observation that no longer matches its run record."""
-
-    if not record.usage.complete:
-        raise BenchmarkError(
-            f"pilot usage is incomplete for {record.run_id}; the cost gate "
-            "requires reconciled provider usage"
-        )
 
     mismatches = [
         name
@@ -527,6 +578,11 @@ def _require_reconciled_observation(
                 record.latency.finished_at,
             ),
             ("cost breakdown", observation.observed_cost, record.cost),
+            (
+                "usage completeness",
+                observation.usage_completeness,
+                "complete" if record.usage.complete else "lower_bound",
+            ),
             (
                 "cost",
                 observation.observed_cost_usd,
@@ -1297,10 +1353,10 @@ class BenchmarkRunner:
     ) -> tuple[BenchmarkCell, bool]:
         """Select one stable pilot cell, refusing success-based replacement.
 
-        A failed or blocked pilot is benchmark evidence, not permission to try
-        the next cell until one succeeds. A cancelled pilot may resume its same
-        immutable cell, and a completed cell may be reused if publication was
-        interrupted after execution.
+        A failed pilot is benchmark evidence, not permission to try the next
+        cell until one succeeds. A cancelled pilot may resume its same
+        immutable cell; completed, bounded blocked, and eligible bounded
+        timeout records can be reused if publication was interrupted.
         """
 
         candidates = [
@@ -1330,15 +1386,17 @@ class BenchmarkRunner:
             )
         if observed:
             cell, record = observed[0]
-            if record.lifecycle.status is LifecycleStatus.COMPLETED:
-                return cell, False
             if record.lifecycle.status is LifecycleStatus.CANCELLED:
                 return cell, True
-            raise BenchmarkError(
-                f"pilot cell {cell.run_id} did not complete "
-                f"({record.lifecycle.status.value}); freeze a new manifest "
-                "instead of replacing failed pilot evidence"
-            )
+            try:
+                _require_pilot_cost_observation(record)
+            except BenchmarkError as error:
+                raise BenchmarkError(
+                    f"pilot cell {cell.run_id} did not complete "
+                    f"({record.lifecycle.status.value}); freeze a new manifest "
+                    "instead of replacing failed pilot evidence"
+                ) from error
+            return cell, False
         return candidates[0], True
 
     def _build_pilot_set_report(
@@ -1382,6 +1440,9 @@ class BenchmarkRunner:
                         observed_output_tokens=record.usage.output_tokens,
                         observed_reasoning_tokens=record.usage.reasoning_tokens,
                         observed_total_tokens=record.usage.total_tokens,
+                        usage_completeness=(
+                            "complete" if record.usage.complete else "lower_bound"
+                        ),
                         observed_cost=record.cost,
                         observed_cost_usd=record.cost.estimated_cost_usd,
                         observed_elapsed_seconds=record.latency.elapsed_seconds,
@@ -1416,8 +1477,9 @@ class BenchmarkRunner:
                 "cell. Full-matrix cost and latency are the sum of per-stratum "
                 "mean-per-cell estimates, with a low/high range from the "
                 "observed per-stratum minimum and maximum. Per-pilot "
-                "observations are retained; no single cell is treated as "
-                "representative of the matrix."
+                "observations are retained; incomplete usage counts are marked "
+                "as lower bounds and never priced as known. No single cell is "
+                "treated as representative of the matrix."
             ),
         )
 
